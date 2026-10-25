@@ -1,0 +1,13 @@
+{
+  "itemGroup.unrealtrainmod": "UnrealTrainMod",
+  "block.unrealtrainmod.example_block": "Example Block",
+  "item.unrealtrainmod.example_item": "Example Item",
+
+  "unrealtrainmod.configuration.title": "UnrealTrainMod-1.0.0 Configs",
+  "unrealtrainmod.configuration.section.unrealtrainmod.common.toml": "UnrealTrainMod-1.0.0 Configs",
+  "unrealtrainmod.configuration.section.unrealtrainmod.common.toml.title": "UnrealTrainMod-1.0.0 Configs",
+  "unrealtrainmod.configuration.items": "Item List",
+  "unrealtrainmod.configuration.logDirtBlock": "Log Dirt Block",
+  "unrealtrainmod.configuration.magicNumberIntroduction": "Magic Number Text",
+  "unrealtrainmod.configuration.magicNumber": "Magic Number"
+}
