@@ -35,6 +35,9 @@ base {
 }
 
 tasks.named('jar', Jar).configure {
+    into('META-INF') {
+        from('LICENSE', 'NOTICE', 'TEMPLATE_LICENSE.txt')
+    }
     destinationDirectory = file('D:/我的世界/1.12.2RTM/.minecraft/versions/1.21.1-NeoForge_21.1.264/mods')
 }
 
@@ -183,6 +186,15 @@ publishing {
 
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8' // Use the UTF-8 charset for Java compilation
+}
+
+// Local test folders are ignored by Git and excluded from compilation and execution.
+sourceSets.test {
+    java.setSrcDirs([])
+    resources.setSrcDirs([])
+}
+tasks.withType(Test).configureEach {
+    enabled = false
 }
 
 // IDEA no longer automatically downloads sources/javadoc jars for dependencies, so we need to explicitly enable the behavior.

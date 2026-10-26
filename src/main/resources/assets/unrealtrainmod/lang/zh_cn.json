@@ -1,0 +1,8 @@
+{
+  "itemGroup.unrealtrainmod": "UnrealTrainMod",
+  "block.unrealtrainmod.example_block": "示例方块",
+  "item.unrealtrainmod.example_item": "YZ25G 模型放置器",
+  "item.unrealtrainmod.example_item.place": "右键方块顶面放置 YZ25G，按玩家朝向对齐，可重复使用。",
+  "item.unrealtrainmod.example_item.remove": "左键模型，或手持放置器潜行右键模型，即可拆除。",
+  "entity.unrealtrainmod.placed_model": "YZ25G 展示模型"
+}

@@ -38,3 +38,14 @@ run/
 **/src/generated/**/.cache/
 repo/
 !**/src/**/repo/
+
+### Local assets and documentation ###
+/AGENTS.md
+/STATUS.md
+/models/
+/textures/
+/docs/
+
+### Local tests ###
+/src/test/
+/src/modelTest/

@@ -1,5 +1,12 @@
+/*
+ * Copyright (c) 2026 HabQi
+ * SPDX-License-Identifier: GPL-3.0-only
+ * Original NeoForge MDK template material: see TEMPLATE_LICENSE.txt.
+ */
 package com.unrealtrainmod;
 
+import com.unrealtrainmod.entity.PlacedModelEntity;
+import com.unrealtrainmod.item.ModelPlacerItem;
 import org.slf4j.Logger;
 
 import com.mojang.logging.LogUtils;
@@ -7,7 +14,8 @@ import com.mojang.logging.LogUtils;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.network.chat.Component;
-import net.minecraft.world.food.FoodProperties;
+import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.MobCategory;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.CreativeModeTab;
 import net.minecraft.world.item.CreativeModeTabs;
@@ -42,6 +50,11 @@ public class UnrealTrainMod {
     public static final DeferredRegister.Blocks BLOCKS = DeferredRegister.createBlocks(MODID);
     // Create a Deferred Register to hold Items which will all be registered under the "unrealtrainmod" namespace
     public static final DeferredRegister.Items ITEMS = DeferredRegister.createItems(MODID);
+    public static final DeferredRegister<EntityType<?>> ENTITY_TYPES = DeferredRegister.create(Registries.ENTITY_TYPE, MODID);
+    public static final DeferredHolder<EntityType<?>, EntityType<PlacedModelEntity>> PLACED_MODEL = ENTITY_TYPES.register(
+            "placed_model", () -> EntityType.Builder.<PlacedModelEntity>of(PlacedModelEntity::new, MobCategory.MISC)
+                    .sized(PlacedModelEntity.WIDTH, PlacedModelEntity.HEIGHT)
+                    .clientTrackingRange(16).updateInterval(20).fireImmune().build(MODID + ":placed_model"));
     // Create a Deferred Register to hold CreativeModeTabs which will all be registered under the "unrealtrainmod" namespace
     public static final DeferredRegister<CreativeModeTab> CREATIVE_MODE_TABS = DeferredRegister.create(Registries.CREATIVE_MODE_TAB, MODID);
 
@@ -50,9 +63,9 @@ public class UnrealTrainMod {
     // Creates a new BlockItem with the id "unrealtrainmod:example_block", combining the namespace and path
     public static final DeferredItem<BlockItem> EXAMPLE_BLOCK_ITEM = ITEMS.registerSimpleBlockItem("example_block", EXAMPLE_BLOCK);
 
-    // Creates a new food item with the id "unrealtrainmod:example_id", nutrition 1 and saturation 2
-    public static final DeferredItem<Item> EXAMPLE_ITEM = ITEMS.registerSimpleItem("example_item", new Item.Properties().food(new FoodProperties.Builder()
-            .alwaysEdible().nutrition(1).saturationModifier(2f).build()));
+    // Preserve the existing registry ID so items already present in worlds become model placers.
+    public static final DeferredItem<ModelPlacerItem> EXAMPLE_ITEM = ITEMS.registerItem(
+            "example_item", ModelPlacerItem::new, new Item.Properties().stacksTo(1));
 
     // Creates a creative tab with the id "unrealtrainmod:example_tab" for the example item, that is placed after the combat tab
     public static final DeferredHolder<CreativeModeTab, CreativeModeTab> EXAMPLE_TAB = CREATIVE_MODE_TABS.register("example_tab", () -> CreativeModeTab.builder()
@@ -73,6 +86,7 @@ public class UnrealTrainMod {
         BLOCKS.register(modEventBus);
         // Register the Deferred Register to the mod event bus so items get registered
         ITEMS.register(modEventBus);
+        ENTITY_TYPES.register(modEventBus);
         // Register the Deferred Register to the mod event bus so tabs get registered
         CREATIVE_MODE_TABS.register(modEventBus);
 

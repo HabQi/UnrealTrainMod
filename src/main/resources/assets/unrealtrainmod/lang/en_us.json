@@ -1,7 +1,10 @@
 {
   "itemGroup.unrealtrainmod": "UnrealTrainMod",
   "block.unrealtrainmod.example_block": "Example Block",
-  "item.unrealtrainmod.example_item": "Example Item",
+  "item.unrealtrainmod.example_item": "YZ25G Model Placer",
+  "item.unrealtrainmod.example_item.place": "Right-click the top of a block to place YZ25G. Reusable.",
+  "item.unrealtrainmod.example_item.remove": "Attack the model, or sneak-right-click it with this tool, to remove it.",
+  "entity.unrealtrainmod.placed_model": "YZ25G Display Model",
 
   "unrealtrainmod.configuration.title": "UnrealTrainMod-1.0.0 Configs",
   "unrealtrainmod.configuration.section.unrealtrainmod.common.toml": "UnrealTrainMod-1.0.0 Configs",
