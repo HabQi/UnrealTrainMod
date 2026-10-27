@@ -5,8 +5,13 @@
 package com.unrealtrainmod.entity;
 
 import com.unrealtrainmod.UnrealTrainMod;
+import com.unrealtrainmod.model.TrainModels;
+import com.unrealtrainmod.model.ModelBounds;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.syncher.SynchedEntityData;
+import net.minecraft.network.syncher.EntityDataAccessor;
+import net.minecraft.network.syncher.EntityDataSerializers;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.damagesource.DamageSource;
@@ -18,10 +23,8 @@ import net.minecraft.world.phys.AABB;
 
 /** A stationary, saved display entity. Physics and driving are intentionally not implemented. */
 public final class PlacedModelEntity extends Entity {
-    // YZ25G's visible bounds at scale 0.01; kept on both sides for selection and culling.
-    public static final float WIDTH = 3.217f;
-    public static final float HEIGHT = 4.388f;
-    public static final float LENGTH = 26.855f;
+    private static final EntityDataAccessor<String> MODEL_ID =
+            SynchedEntityData.defineId(PlacedModelEntity.class, EntityDataSerializers.STRING);
 
     public PlacedModelEntity(EntityType<? extends PlacedModelEntity> type, Level level) {
         super(type, level);
@@ -29,9 +32,39 @@ public final class PlacedModelEntity extends Entity {
         noPhysics = true;
     }
 
-    @Override protected void defineSynchedData(SynchedEntityData.Builder builder) {}
-    @Override protected void readAdditionalSaveData(CompoundTag tag) { setNoGravity(true); }
-    @Override protected void addAdditionalSaveData(CompoundTag tag) {}
+    @Override
+    protected void defineSynchedData(SynchedEntityData.Builder builder) {
+        builder.define(MODEL_ID, "");
+    }
+
+    public ResourceLocation getModelId() {
+        String value = entityData.get(MODEL_ID);
+        return value.isEmpty() ? null : ResourceLocation.tryParse(value);
+    }
+
+    public void setModelId(ResourceLocation id) {
+        entityData.set(MODEL_ID, id.toString());
+    }
+
+    @Override
+    public void onSyncedDataUpdated(EntityDataAccessor<?> key) {
+        super.onSyncedDataUpdated(key);
+        if (MODEL_ID.equals(key)) setBoundingBox(makeBoundingBox());
+    }
+
+    @Override
+    protected void readAdditionalSaveData(CompoundTag tag) {
+        String value = tag.getString("ModelId");
+        var id = value.isEmpty() ? null : ResourceLocation.tryParse(value);
+        // Keep valid IDs even when their package is temporarily absent.
+        entityData.set(MODEL_ID, id == null ? "" : id.toString());
+        setNoGravity(true);
+    }
+
+    @Override
+    protected void addAdditionalSaveData(CompoundTag tag) {
+        tag.putString("ModelId", entityData.get(MODEL_ID));
+    }
 
     @Override
     public void setYRot(float yaw) {
@@ -42,11 +75,21 @@ public final class PlacedModelEntity extends Entity {
 
     @Override
     protected AABB makeBoundingBox() {
+        var model = TrainModels.find(getModelId());
+        var bounds = model == null ? ModelBounds.MISSING : model.bounds();
         double yaw = Math.toRadians(getYRot());
-        double halfX = (Math.abs(Math.cos(yaw)) * WIDTH + Math.abs(Math.sin(yaw)) * LENGTH) / 2;
-        double halfZ = (Math.abs(Math.sin(yaw)) * WIDTH + Math.abs(Math.cos(yaw)) * LENGTH) / 2;
-        return new AABB(getX() - halfX, getY(), getZ() - halfZ,
-                getX() + halfX, getY() + HEIGHT, getZ() + halfZ);
+        double cosine = Math.cos(yaw), sine = Math.sin(yaw);
+        double minX = Double.POSITIVE_INFINITY, minZ = minX;
+        double maxX = Double.NEGATIVE_INFINITY, maxZ = maxX;
+        for (int corner = 0; corner < 4; corner++) {
+            double x = (corner & 1) == 0 ? bounds.minX() : bounds.maxX();
+            double z = (corner & 2) == 0 ? bounds.minZ() : bounds.maxZ();
+            double rotatedX = cosine * x - sine * z, rotatedZ = sine * x + cosine * z;
+            minX = Math.min(minX, rotatedX); maxX = Math.max(maxX, rotatedX);
+            minZ = Math.min(minZ, rotatedZ); maxZ = Math.max(maxZ, rotatedZ);
+        }
+        return new AABB(getX() + minX, getY() + bounds.minY(), getZ() + minZ,
+                getX() + maxX, getY() + bounds.maxY(), getZ() + maxZ);
     }
 
     @Override public boolean isPickable() { return !isRemoved(); }
@@ -54,7 +97,7 @@ public final class PlacedModelEntity extends Entity {
 
     @Override
     public InteractionResult interact(Player player, InteractionHand hand) {
-        if (player.isShiftKeyDown() && player.getItemInHand(hand).is(UnrealTrainMod.EXAMPLE_ITEM.get())
+        if (player.isShiftKeyDown() && player.getItemInHand(hand).is(UnrealTrainMod.VEHICLE_PLACER.get())
                 && player.mayBuild()) {
             if (!level().isClientSide) discard();
             return InteractionResult.sidedSuccess(level().isClientSide);

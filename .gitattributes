@@ -4,5 +4,7 @@
 src/generated/**/.cache/* text eol=lf
 src/generated/**/*.json text eol=lf
 
-# Store model assets in Git LFS and exclude them from GitHub language statistics.
+# Store model and texture assets in Git LFS.
 *.mqo filter=lfs diff=lfs merge=lfs -text linguist-generated=true
+*.obj filter=lfs diff=lfs merge=lfs -text linguist-generated=true
+*.png filter=lfs diff=lfs merge=lfs -text

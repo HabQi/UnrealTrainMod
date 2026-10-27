@@ -7,6 +7,9 @@ package com.unrealtrainmod;
 
 import com.unrealtrainmod.entity.PlacedModelEntity;
 import com.unrealtrainmod.item.ModelPlacerItem;
+import com.unrealtrainmod.model.RtmPackageLoader;
+import com.unrealtrainmod.registry.ModDataComponents;
+import com.unrealtrainmod.registry.ModPayloads;
 import org.slf4j.Logger;
 
 import com.mojang.logging.LogUtils;
@@ -24,12 +27,12 @@ import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockBehaviour;
 import net.minecraft.world.level.material.MapColor;
-import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.Mod;
 import net.neoforged.fml.config.ModConfig;
 import net.neoforged.fml.ModContainer;
+import net.neoforged.fml.loading.FMLPaths;
 import net.neoforged.fml.event.lifecycle.FMLCommonSetupEvent;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.BuildCreativeModeTabContentsEvent;
@@ -53,7 +56,7 @@ public class UnrealTrainMod {
     public static final DeferredRegister<EntityType<?>> ENTITY_TYPES = DeferredRegister.create(Registries.ENTITY_TYPE, MODID);
     public static final DeferredHolder<EntityType<?>, EntityType<PlacedModelEntity>> PLACED_MODEL = ENTITY_TYPES.register(
             "placed_model", () -> EntityType.Builder.<PlacedModelEntity>of(PlacedModelEntity::new, MobCategory.MISC)
-                    .sized(PlacedModelEntity.WIDTH, PlacedModelEntity.HEIGHT)
+                    .sized(1, 1)
                     .clientTrackingRange(16).updateInterval(20).fireImmune().build(MODID + ":placed_model"));
     // Create a Deferred Register to hold CreativeModeTabs which will all be registered under the "unrealtrainmod" namespace
     public static final DeferredRegister<CreativeModeTab> CREATIVE_MODE_TABS = DeferredRegister.create(Registries.CREATIVE_MODE_TAB, MODID);
@@ -63,22 +66,22 @@ public class UnrealTrainMod {
     // Creates a new BlockItem with the id "unrealtrainmod:example_block", combining the namespace and path
     public static final DeferredItem<BlockItem> EXAMPLE_BLOCK_ITEM = ITEMS.registerSimpleBlockItem("example_block", EXAMPLE_BLOCK);
 
-    // Preserve the existing registry ID so items already present in worlds become model placers.
-    public static final DeferredItem<ModelPlacerItem> EXAMPLE_ITEM = ITEMS.registerItem(
-            "example_item", ModelPlacerItem::new, new Item.Properties().stacksTo(1));
+    public static final DeferredItem<ModelPlacerItem> VEHICLE_PLACER = ITEMS.registerItem(
+            "vehicle_placer", ModelPlacerItem::new, new Item.Properties().stacksTo(1));
 
     // Creates a creative tab with the id "unrealtrainmod:example_tab" for the example item, that is placed after the combat tab
     public static final DeferredHolder<CreativeModeTab, CreativeModeTab> EXAMPLE_TAB = CREATIVE_MODE_TABS.register("example_tab", () -> CreativeModeTab.builder()
             .title(Component.translatable("itemGroup.unrealtrainmod")) //The language key for the title of your CreativeModeTab
             .withTabsBefore(CreativeModeTabs.COMBAT)
-            .icon(() -> EXAMPLE_ITEM.get().getDefaultInstance())
+            .icon(() -> VEHICLE_PLACER.get().getDefaultInstance())
             .displayItems((parameters, output) -> {
-                output.accept(EXAMPLE_ITEM.get());// Add the example item to the tab. For your own tabs, this method is preferred over the event
+                output.accept(VEHICLE_PLACER.get());
             }).build());
 
     // The constructor for the mod class is the first code that is run when your mod is loaded.
     // FML will recognize some parameter types like IEventBus or ModContainer and pass them in automatically.
     public UnrealTrainMod(IEventBus modEventBus, ModContainer modContainer) {
+        RtmPackageLoader.load(FMLPaths.MODSDIR.get());
         // Register the commonSetup method for modloading
         modEventBus.addListener(this::commonSetup);
 
@@ -87,6 +90,8 @@ public class UnrealTrainMod {
         // Register the Deferred Register to the mod event bus so items get registered
         ITEMS.register(modEventBus);
         ENTITY_TYPES.register(modEventBus);
+        ModDataComponents.TYPES.register(modEventBus);
+        modEventBus.addListener(ModPayloads::register);
         // Register the Deferred Register to the mod event bus so tabs get registered
         CREATIVE_MODE_TABS.register(modEventBus);
 

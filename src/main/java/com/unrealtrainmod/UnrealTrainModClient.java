@@ -8,6 +8,7 @@ package com.unrealtrainmod;
 import com.unrealtrainmod.client.ClientModelManager;
 import com.unrealtrainmod.client.PlacedModelRenderer;
 import com.unrealtrainmod.client.StaticModelShader;
+import com.unrealtrainmod.client.network.ClientPayloadHandlers;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.GameShuttingDownEvent;
 import net.minecraft.client.Minecraft;
@@ -49,6 +50,8 @@ public class UnrealTrainModClient {
         // Do not forget to add translations for your config options to the en_us.json file.
         container.registerExtensionPoint(IConfigScreenFactory.class, ConfigurationScreen::new);
         NeoForge.EVENT_BUS.addListener(UnrealTrainModClient::onGameShuttingDown);
+        NeoForge.EVENT_BUS.addListener(ClientPayloadHandlers::openModelSelector);
+        NeoForge.EVENT_BUS.addListener(ClientPayloadHandlers::modelSelectionResult);
     }
 
     private static void onGameShuttingDown(GameShuttingDownEvent event) {

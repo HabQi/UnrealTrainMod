@@ -15,19 +15,20 @@ public record ModelMesh(List<Part> parts, int triangleCount) {
     public record Part(String name, List<Batch> batches) {}
     public record Batch(ModelData.Material material, IndexedMesh mesh) {}
 
-    public static ModelMesh prepare(ModelData model, float scale) throws IOException {
+    public static ModelMesh prepare(ModelData model, float scale, boolean smoothing) throws IOException {
         if (!Float.isFinite(scale) || scale <= 0) throw new IOException("Model scale must be positive");
         List<Part> parts = new ArrayList<>();
         int triangles = 0;
         for (var part : model.parts()) {
             if (!part.visible()) continue;
+            boolean smooth = smoothing && part.smooth();
             int faceCount = part.faces().size();
             float[][] normals = new float[faceCount][];
             for (int f = 0; f < faceCount; f++) {
                 normals[f] = normal(part.faces().get(f), part.positions());
             }
             int[] offsets = null, neighbors = null;
-            if (part.smooth()) {
+            if (smooth) {
                 offsets = new int[part.positions().size() + 1];
                 for (var face : part.faces()) for (int v : face.indices()) offsets[v + 1]++;
                 for (int i = 1; i < offsets.length; i++) offsets[i] += offsets[i - 1];
@@ -52,7 +53,7 @@ public record ModelMesh(List<Part> parts, int triangleCount) {
                     int index = face.indices()[corner];
                     var p = part.positions().get(index);
                     float nx = normals[f][0], ny = normals[f][1], nz = normals[f][2];
-                    if (part.smooth()) {
+                    if (smooth) {
                         nx = 0; ny = 0; nz = 0;
                         for (int j = offsets[index]; j < offsets[index + 1]; j++) {
                             float[] n = normals[neighbors[j]];
@@ -94,7 +95,7 @@ public record ModelMesh(List<Part> parts, int triangleCount) {
         return length < 1e-12 ? new float[3] : new float[]{(float)(-x / length), (float)(-y / length), (float)(-z / length)};
     }
 
-    /** Ear clipping on the dominant plane also handles the four pentagons in YZ25G. */
+    /** Ear clipping on the dominant plane handles concave polygons as well as triangles and quads. */
     private static int[] triangulate(ModelData.Face face, List<ModelData.Position> positions, float[] normal) throws IOException {
         int count = face.indices().length;
         if (count == 3) return new int[]{0, 1, 2};
