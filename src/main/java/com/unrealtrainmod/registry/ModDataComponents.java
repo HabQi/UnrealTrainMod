@@ -17,6 +17,9 @@ public final class ModDataComponents {
     public static final DeferredHolder<DataComponentType<?>, DataComponentType<ResourceLocation>> SELECTED_MODEL =
             TYPES.register("selected_model", () -> DataComponentType.<ResourceLocation>builder()
                     .persistent(ResourceLocation.CODEC).networkSynchronized(ResourceLocation.STREAM_CODEC).build());
+    public static final DeferredHolder<DataComponentType<?>, DataComponentType<ResourceLocation>> SELECTED_RAIL_MODEL =
+            TYPES.register("selected_rail_model", () -> DataComponentType.<ResourceLocation>builder()
+                    .persistent(ResourceLocation.CODEC).networkSynchronized(ResourceLocation.STREAM_CODEC).build());
 
     private ModDataComponents() {}
 }

@@ -14,7 +14,7 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /** Private, server-authoritative draft; never inserted into the synchronized track cache. */
-public record TrackConstructionPayload(ResourceLocation dimension, int slot, Phase phase,
+public record TrackConstructionPayload(ResourceLocation dimension, Phase phase,
         TrackPlacementEndpoint start, TrackPlacementEndpoint end, double gauge, Feedback feedback)
         implements CustomPacketPayload {
     public enum Phase { EMPTY, START, READY }
@@ -22,7 +22,7 @@ public record TrackConstructionPayload(ResourceLocation dimension, int slot, Pha
     public enum Feedback {
         START, READY, CANCELLED, CLEARED, CREATED, SELECT_POINT, TOP_FACE, INVALID_POINT,
         INVALID_GEOMETRY, TOO_LONG, SAME_NODE, GAUGE_MISMATCH, STALE_START, STALE_END,
-        STORAGE, NO_PERMISSION, INVALID_ITEM;
+        STORAGE, NO_PERMISSION, INVALID_ITEM, SELECT_MODEL, MISSING_MODEL, LINE_NOT_READY;
 
         public String translationKey() {
             return "item.unrealtrainmod.track_builder.feedback." + name().toLowerCase(Locale.ROOT);
@@ -34,13 +34,12 @@ public record TrackConstructionPayload(ResourceLocation dimension, int slot, Pha
     public static final StreamCodec<RegistryFriendlyByteBuf, TrackConstructionPayload> STREAM_CODEC = StreamCodec.of(
             (buffer, payload) -> {
                 buffer.writeResourceLocation(payload.dimension());
-                buffer.writeVarInt(payload.slot());
                 buffer.writeEnum(payload.phase());
                 writeEndpoint(buffer, payload.start());
                 writeEndpoint(buffer, payload.end());
                 buffer.writeDouble(payload.gauge());
                 buffer.writeEnum(payload.feedback());
-            }, buffer -> new TrackConstructionPayload(buffer.readResourceLocation(), buffer.readVarInt(),
+            }, buffer -> new TrackConstructionPayload(buffer.readResourceLocation(),
                     buffer.readEnum(Phase.class), readEndpoint(buffer), readEndpoint(buffer),
                     buffer.readDouble(), buffer.readEnum(Feedback.class)));
 

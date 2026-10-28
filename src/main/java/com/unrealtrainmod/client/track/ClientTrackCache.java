@@ -73,7 +73,7 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
         for (UUID id : members) {
             Entry entry = entries.get(id);
             entry.chunks.remove(chunk);
-            TrackGpuMesh mesh = entry.meshes.remove(chunk);
+            TrackRenderMesh mesh = entry.meshes.remove(chunk);
             if (mesh != null) mesh.close();
             if (entry.chunks.isEmpty()) {
                 entry.close();
@@ -115,7 +115,11 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
 
     @Override
     public void onResourceManagerReload(ResourceManager manager) {
-        for (Entry entry : entries.values()) for (TrackGpuMesh mesh : entry.meshes.values()) mesh.close();
+        invalidateMeshes();
+    }
+
+    public void invalidateMeshes() {
+        for (Entry entry : entries.values()) entry.close();
     }
 
     @Override
@@ -127,10 +131,11 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
     }
 
     static final class Entry implements AutoCloseable {
-        private TrackSegmentData data;
+        TrackSegmentData data;
         TrackGeometry geometry;
         final Set<Long> chunks = new HashSet<>();
-        final Map<Long, TrackGpuMesh> meshes = new HashMap<>();
+        final Map<Long, TrackRenderMesh> meshes = new HashMap<>();
+        boolean missingReported;
 
         private Entry(TrackSegmentData data) {
             this.data = data;
@@ -142,10 +147,13 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
             close();
             this.data = data;
             geometry = updated;
+            missingReported = false;
         }
 
         AABB broadBounds(int chunkX, int chunkZ) {
             double padding = (data.gauge() + 0.9) / 2 + 0.4;
+            var model = ClientRailModelManager.INSTANCE.model(data.modelId());
+            if (model != null) padding = Math.max(padding, model.padding());
             double x = (double)chunkX * 16, z = (double)chunkZ * 16;
             return new AABB(x - padding, Math.min(data.start().y(), data.end().y()) - 0.4, z - padding,
                     x + 16 + padding, Math.max(data.start().y(), data.end().y()) + 0.4, z + 16 + padding);
@@ -153,7 +161,7 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
 
         @Override
         public void close() {
-            for (TrackGpuMesh mesh : meshes.values()) mesh.close();
+            for (TrackRenderMesh mesh : meshes.values()) mesh.close();
             meshes.clear();
         }
     }

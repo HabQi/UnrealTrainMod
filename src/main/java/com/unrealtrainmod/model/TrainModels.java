@@ -5,10 +5,8 @@
 package com.unrealtrainmod.model;
 
 import com.unrealtrainmod.UnrealTrainMod;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
-import java.util.HexFormat;
+import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import net.minecraft.resources.ResourceLocation;
@@ -16,9 +14,16 @@ import net.minecraft.resources.ResourceLocation;
 /** Startup catalog shared by the logical client and server; contains no rendering objects. */
 public final class TrainModels {
     public static final float MQO_SCALE = 0.01f;
+    public enum Format { MQO, IR_OBJ }
     public record Texture(RtmAsset asset, boolean alphaBlend) {}
     public record Source(RtmAsset model, Map<String, Texture> textures,
-                         Map<String, MaterialRenderMode> materialRenderModes, boolean smoothing, boolean cullFaces) {
+                         Map<String, MaterialRenderMode> materialRenderModes, boolean smoothing, boolean cullFaces,
+                         Format format, float scale) {
+        public Source(RtmAsset model, Map<String, Texture> textures,
+                      Map<String, MaterialRenderMode> materialRenderModes, boolean smoothing, boolean cullFaces) {
+            this(model, textures, materialRenderModes, smoothing, cullFaces, Format.MQO, MQO_SCALE);
+        }
+
         public Source {
             textures = Map.copyOf(textures);
             materialRenderModes = Map.copyOf(materialRenderModes);
@@ -38,6 +43,12 @@ public final class TrainModels {
 
     private TrainModels() {}
 
+    public static void load(Path modsDirectory) {
+        var definitions = new ArrayList<>(RtmPackageLoader.load(modsDirectory));
+        definitions.addAll(IrPackageLoader.load(modsDirectory));
+        register(definitions);
+    }
+
     static void register(List<Definition> definitions) {
         models = List.copyOf(definitions);
         byId = models.stream().collect(java.util.stream.Collectors.toUnmodifiableMap(Definition::id, model -> model));
@@ -51,10 +62,6 @@ public final class TrainModels {
     }
 
     public static String hash(String value) {
-        try {
-            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8)));
-        } catch (NoSuchAlgorithmException e) {
-            throw new IllegalStateException("Java runtime has no SHA-256", e);
-        }
+        return RtmResources.hash(value);
     }
 }

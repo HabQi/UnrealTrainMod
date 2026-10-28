@@ -4,6 +4,8 @@
  */
 package com.unrealtrainmod.model;
 
+import static com.unrealtrainmod.model.RtmResources.requireAsset;
+
 import com.google.gson.JsonObject;
 import com.unrealtrainmod.UnrealTrainMod;
 import java.io.IOException;
@@ -30,12 +32,12 @@ public final class RtmPackageLoader {
 
     private RtmPackageLoader() {}
 
-    public static void load(Path modsDirectory) {
+    public static List<TrainModels.Definition> load(Path modsDirectory) {
         var definitions = new LinkedHashMap<ResourceLocation, TrainModels.Definition>();
         var boundsCache = new HashMap<RtmAsset, ModelBounds>();
+        var rails = new RtmRailLoader();
         Path directory = modsDirectory.resolve("Packages_RTM");
         try {
-            Files.createDirectories(modsDirectory.resolve("Packages_IR"));
             Files.createDirectories(directory);
             List<Path> archives;
             try (var files = Files.list(directory)) {
@@ -43,16 +45,17 @@ public final class RtmPackageLoader {
                         .filter(path -> path.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".zip"))
                         .sorted(Comparator.comparing(path -> path.getFileName().toString())).toList();
             }
-            for (var archive : archives) loadArchive(archive, definitions, boundsCache);
+            for (var archive : archives) loadArchive(archive, definitions, boundsCache, rails);
         } catch (IOException e) {
             UnrealTrainMod.LOGGER.error("Unable to initialize package directories under {}", modsDirectory, e);
         }
-        TrainModels.register(new ArrayList<>(definitions.values()));
         UnrealTrainMod.LOGGER.info("Registered {} RTM vehicles from {}", definitions.size(), directory);
+        rails.register(directory);
+        return List.copyOf(definitions.values());
     }
 
     private static void loadArchive(Path archive, Map<ResourceLocation, TrainModels.Definition> definitions,
-                                    Map<RtmAsset, ModelBounds> boundsCache) {
+                                    Map<RtmAsset, ModelBounds> boundsCache, RtmRailLoader rails) {
         try (var zip = new ZipFile(archive.toFile())) {
             var configs = zip.stream().filter(entry -> !entry.isDirectory() && CONFIG.matcher(entry.getName()).matches())
                     .sorted(Comparator.comparing(java.util.zip.ZipEntry::getName)).toList();
@@ -109,7 +112,9 @@ public final class RtmPackageLoader {
                     UnrealTrainMod.LOGGER.error("Unable to register RTM vehicle {}!{}", archive, entry.getName(), e);
                 }
             }
+            rails.loadArchive(archive, zip);
         } catch (IOException | RuntimeException e) {
+            rails.archiveFailed();
             UnrealTrainMod.LOGGER.error("Unable to read RTM package {}", archive, e);
         }
     }
@@ -154,20 +159,5 @@ public final class RtmPackageLoader {
             }
         }
         return modes;
-    }
-
-    private static RtmAsset requireAsset(Path archive, ZipFile zip, String prefix, String reference) throws IOException {
-        String normalized = reference.replace('\\', '/');
-        int colon = normalized.indexOf(':');
-        String namespace = colon < 0 ? "minecraft" : normalized.substring(0, colon);
-        String path = colon < 0 ? normalized : normalized.substring(colon + 1);
-        if (!namespace.matches("[a-z0-9_.-]+") || path.isEmpty() || path.startsWith("/") || path.indexOf(':') >= 0
-                || List.of(path.split("/", -1)).stream().anyMatch(segment -> segment.isEmpty() || segment.equals("..") || segment.equals("."))) {
-            throw new IOException("Invalid package resource path: " + reference);
-        }
-        String entry = prefix + "assets/" + namespace + "/" + path;
-        var file = zip.getEntry(entry);
-        if (file == null || file.isDirectory()) throw new IOException("Missing resource: " + entry);
-        return new RtmAsset(archive, entry);
     }
 }

@@ -10,12 +10,13 @@ import com.mojang.blaze3d.vertex.DefaultVertexFormat;
 import com.mojang.blaze3d.vertex.VertexBuffer;
 import com.mojang.blaze3d.vertex.VertexFormat;
 import com.unrealtrainmod.track.mesh.TrackMeshData;
-import net.minecraft.client.renderer.ShaderInstance;
+import com.mojang.blaze3d.systems.RenderSystem;
+import com.unrealtrainmod.track.geometry.TrackVector;
 import net.minecraft.world.phys.AABB;
 import org.joml.Matrix4f;
 
 /** GPU lifetime is separate from the CPU geometry, so resource reloads need no server resync. */
-final class TrackGpuMesh implements AutoCloseable {
+final class TrackGpuMesh implements TrackRenderMesh {
     final TrackMeshData data;
     final AABB bounds;
     private VertexBuffer buffer;
@@ -26,7 +27,17 @@ final class TrackGpuMesh implements AutoCloseable {
         bounds = new AABB(box.minX(), box.minY(), box.minZ(), box.maxX(), box.maxY(), box.maxZ()).inflate(0.001);
     }
 
-    boolean isUploaded() { return buffer != null; }
+    @Override public boolean isUploaded() { return buffer != null; }
+    @Override public boolean isEmpty() { return data.vertexCount() == 0; }
+    @Override public AABB bounds() { return bounds; }
+    @Override public TrackVector origin() { return data.origin(); }
+
+    @Override
+    public int upload(int budget) {
+        if (isUploaded() || budget == 0) return 0;
+        upload();
+        return 1;
+    }
 
     void upload() {
         buffer = new VertexBuffer(VertexBuffer.Usage.STATIC);
@@ -46,9 +57,13 @@ final class TrackGpuMesh implements AutoCloseable {
         }
     }
 
-    void draw(Matrix4f modelView, Matrix4f projection, ShaderInstance shader) {
-        buffer.bind();
-        buffer.drawWithShader(modelView, projection, shader);
+    @Override
+    public void draw(Matrix4f modelView, Matrix4f projection) {
+        TrackRenderTypes.OPAQUE.setupRenderState();
+        try {
+            buffer.bind();
+            buffer.drawWithShader(modelView, projection, RenderSystem.getShader());
+        } finally { TrackRenderTypes.OPAQUE.clearRenderState(); }
     }
 
     @Override

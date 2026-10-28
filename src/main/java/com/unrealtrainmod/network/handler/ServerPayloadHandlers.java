@@ -6,6 +6,9 @@ package com.unrealtrainmod.network.handler;
 
 import com.unrealtrainmod.UnrealTrainMod;
 import com.unrealtrainmod.model.TrainModels;
+import com.unrealtrainmod.model.RailModels;
+import com.unrealtrainmod.network.payload.SelectRailModelPayload;
+import com.unrealtrainmod.network.payload.RailModelSelectionResultPayload;
 import com.unrealtrainmod.network.payload.ModelSelectionResultPayload;
 import com.unrealtrainmod.network.payload.SelectTrainModelPayload;
 import com.unrealtrainmod.registry.ModDataComponents;
@@ -14,6 +17,24 @@ import net.neoforged.neoforge.network.handling.IPayloadContext;
 
 public final class ServerPayloadHandlers {
     private ServerPayloadHandlers() {}
+
+    public static void selectRailModel(SelectRailModelPayload payload, IPayloadContext context) {
+        var player = context.player();
+        var stack = player.getMainHandItem();
+        var result = ModelSelectionResultPayload.Result.SUCCESS;
+        if (!player.isAlive() || !player.hasPermissions(2)) {
+            result = ModelSelectionResultPayload.Result.NO_PERMISSION;
+        } else if (payload.hotbarSlot() < 0 || payload.hotbarSlot() > 8
+                || player.getInventory().selected != payload.hotbarSlot() || !stack.is(UnrealTrainMod.RAIL_PLACER.get())) {
+            result = ModelSelectionResultPayload.Result.INVALID_ITEM;
+        } else if (RailModels.find(payload.modelId()) == null) {
+            result = ModelSelectionResultPayload.Result.UNKNOWN_MODEL;
+        } else {
+            stack.set(ModDataComponents.SELECTED_RAIL_MODEL.get(), payload.modelId());
+            player.inventoryMenu.broadcastChanges();
+        }
+        context.reply(new RailModelSelectionResultPayload(payload.requestId(), result));
+    }
 
     public static void selectTrainModel(SelectTrainModelPayload payload, IPayloadContext context) {
         var player = context.player();

@@ -37,8 +37,7 @@ public final class ClientTrackConstruction {
                 || !minecraft.level.dimension().location().equals(payload.dimension())) return;
         clear();
         if (payload.phase() != Phase.EMPTY) {
-            if (!player.isAlive() || player.getInventory().selected != payload.slot()
-                    || !player.getMainHandItem().is(UnrealTrainMod.TRACK_BUILDER.get())) return;
+            if (!player.isAlive()) return;
             world = minecraft.level;
             draft = payload;
             if (payload.phase() == Phase.READY) {
@@ -62,15 +61,16 @@ public final class ClientTrackConstruction {
     }
 
     public void onTick(ClientTickEvent.Post event) {
-        if (!isActive()) clear();
+        var minecraft = Minecraft.getInstance();
+        if (minecraft.level != world || minecraft.player == null || !minecraft.player.isAlive()) clear();
     }
 
     boolean isActive() {
         var minecraft = Minecraft.getInstance();
         var player = minecraft.player;
         return draft != null && minecraft.level == world && player != null && player.isAlive()
-                && player.getInventory().selected == draft.slot()
-                && player.getMainHandItem().is(UnrealTrainMod.TRACK_BUILDER.get());
+                && (player.getMainHandItem().is(UnrealTrainMod.TRACK_BUILDER.get())
+                || player.getMainHandItem().is(UnrealTrainMod.RAIL_PLACER.get()));
     }
 
     TrackConstructionPayload draft() { return draft; }

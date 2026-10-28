@@ -9,6 +9,8 @@ import com.unrealtrainmod.network.TrackSyncEvent;
 import com.unrealtrainmod.network.handler.ServerPayloadHandlers;
 import com.unrealtrainmod.network.payload.ModelSelectionResultPayload;
 import com.unrealtrainmod.network.payload.SelectTrainModelPayload;
+import com.unrealtrainmod.network.payload.SelectRailModelPayload;
+import com.unrealtrainmod.network.payload.RailModelSelectionResultPayload;
 import com.unrealtrainmod.network.payload.TrackChunkPayload;
 import com.unrealtrainmod.network.payload.TrackChunkUnloadPayload;
 import com.unrealtrainmod.network.payload.TrackConstructionPayload;
@@ -20,7 +22,11 @@ public final class ModPayloads {
     private ModPayloads() {}
 
     public static void register(RegisterPayloadHandlersEvent event) {
-        var registrar = event.registrar("1");
+        var registrar = event.registrar("2");
+        registrar.playToServer(SelectRailModelPayload.TYPE, SelectRailModelPayload.STREAM_CODEC,
+                ServerPayloadHandlers::selectRailModel);
+        registrar.playToClient(RailModelSelectionResultPayload.TYPE, RailModelSelectionResultPayload.STREAM_CODEC,
+                (payload, context) -> NeoForge.EVENT_BUS.post(new TrackSyncEvent(payload)));
         registrar.playToServer(SelectTrainModelPayload.TYPE, SelectTrainModelPayload.STREAM_CODEC,
                 ServerPayloadHandlers::selectTrainModel);
         registrar.playToClient(ModelSelectionResultPayload.TYPE, ModelSelectionResultPayload.STREAM_CODEC,

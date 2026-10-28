@@ -7,10 +7,27 @@ package com.unrealtrainmod.client.track;
 import com.mojang.blaze3d.vertex.DefaultVertexFormat;
 import com.mojang.blaze3d.vertex.VertexFormat;
 import java.util.OptionalDouble;
+import java.util.HashMap;
+import java.util.Map;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.client.renderer.RenderStateShard;
 import net.minecraft.client.renderer.RenderType;
 
 final class TrackRenderTypes extends RenderStateShard {
+    private record TextureKey(ResourceLocation texture, boolean doubleSided) {}
+    private static final Map<TextureKey, RenderType> TEXTURED = new HashMap<>();
+
+    static RenderType textured(ResourceLocation texture, boolean doubleSided) {
+        return TEXTURED.computeIfAbsent(new TextureKey(texture, doubleSided), key -> RenderType.create(
+                "utm_rail_model", DefaultVertexFormat.NEW_ENTITY, VertexFormat.Mode.TRIANGLES, 1536, false, false,
+                RenderType.CompositeState.builder().setShaderState(RENDERTYPE_ENTITY_CUTOUT_SHADER)
+                        .setTextureState(new TextureStateShard(texture, false, false))
+                        .setTransparencyState(NO_TRANSPARENCY).setDepthTestState(LEQUAL_DEPTH_TEST)
+                        .setWriteMaskState(COLOR_DEPTH_WRITE).setCullState(doubleSided ? NO_CULL : CULL)
+                        .setLightmapState(LIGHTMAP).setOverlayState(OVERLAY).createCompositeState(false)));
+    }
+
+    static void clearTextures() { TEXTURED.clear(); }
     static final RenderType OPAQUE = RenderType.create("utm_track", DefaultVertexFormat.POSITION_COLOR,
             VertexFormat.Mode.QUADS, 1536, false, false, RenderType.CompositeState.builder()
                     .setShaderState(POSITION_COLOR_SHADER)

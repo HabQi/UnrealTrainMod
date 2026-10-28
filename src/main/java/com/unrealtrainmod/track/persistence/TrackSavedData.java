@@ -18,6 +18,7 @@ import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.Tag;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.level.dimension.DimensionType;
 import net.minecraft.world.level.saveddata.SavedData;
 import net.minecraft.world.level.storage.LevelResource;
@@ -25,7 +26,7 @@ import net.minecraft.world.level.storage.LevelResource;
 /** Each ServerLevel owns one instance; derived geometry and indices are rebuilt on load. */
 public final class TrackSavedData extends SavedData {
     private static final String NAME = "unrealtrainmod_tracks";
-    private static final int FORMAT_VERSION = 1;
+    private static final int FORMAT_VERSION = 2;
     private static final Factory<TrackSavedData> FACTORY =
             new Factory<>(TrackSavedData::new, (tag, registries) -> load(tag));
     private final TrackGraph graph = new TrackGraph(this::setDirty);
@@ -51,7 +52,7 @@ public final class TrackSavedData extends SavedData {
     }
 
     private static TrackSavedData load(CompoundTag tag) {
-        if (!tag.contains("Version", Tag.TAG_INT) || tag.getInt("Version") != FORMAT_VERSION) {
+        if (!tag.contains("Version", Tag.TAG_INT) || (tag.getInt("Version") != 1 && tag.getInt("Version") != FORMAT_VERSION)) {
             throw new IllegalArgumentException("Missing or unsupported track data version");
         }
         ListTag nodes = readList(tag, "Nodes"), segments = readList(tag, "Segments");
@@ -66,10 +67,16 @@ public final class TrackSavedData extends SavedData {
             CompoundTag segment = segments.getCompound(i);
             UUID id = readUuid(segment, "Id"), start = readUuid(segment, "StartNode"), end = readUuid(segment, "EndNode");
             if (!segment.contains("Type", Tag.TAG_STRING)) throw new IllegalArgumentException("Missing segment type");
+            String modelId = null;
+            if (tag.getInt("Version") >= 2 && segment.contains("ModelId")) {
+                if (!segment.contains("ModelId", Tag.TAG_STRING)) throw new IllegalArgumentException("Invalid track model ID");
+                if (segment.getString("ModelId").isBlank()) throw new IllegalArgumentException("Blank track model ID");
+                modelId = ResourceLocation.parse(segment.getString("ModelId")).toString();
+            }
             switch (segment.getString("Type")) {
-                case "straight" -> data.graph.addStraight(id, start, end);
+                case "straight" -> data.graph.addStraight(id, start, end, modelId);
                 case "bezier" -> data.graph.addBezier(id, start, end,
-                        readPoint(segment, "Control1"), readPoint(segment, "Control2"));
+                        readPoint(segment, "Control1"), readPoint(segment, "Control2"), modelId);
                 default -> throw new IllegalArgumentException("Unknown segment type: " + segment.getString("Type"));
             }
         }
@@ -98,6 +105,7 @@ public final class TrackSavedData extends SavedData {
             entry.putUUID("Id", segment.id());
             entry.putUUID("StartNode", segment.startNodeId());
             entry.putUUID("EndNode", segment.endNodeId());
+            if (segment.modelId() != null) entry.putString("ModelId", segment.modelId());
             if (segment.geometry() instanceof BezierTrackGeometry bezier) {
                 entry.putString("Type", "bezier");
                 entry.put("Control1", writePoint(bezier.control1()));

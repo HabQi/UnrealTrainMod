@@ -4,6 +4,9 @@
  */
 package com.unrealtrainmod.command;
 
+import com.unrealtrainmod.model.RailModels;
+import net.minecraft.resources.ResourceLocation;
+
 import com.mojang.brigadier.builder.RequiredArgumentBuilder;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
@@ -124,6 +127,13 @@ public final class TrackCommands {
             context.getSource().sendSuccess(() -> Component.translatable(PREFIX + "segment_info", id(segment.id()),
                     type(segment), id(segment.startNodeId()), id(segment.endNodeId()), length(segment),
                     graph.node(segment.startNodeId()).gauge()), false);
+            if (segment.modelId() == null) {
+                context.getSource().sendSuccess(() -> Component.translatable(PREFIX + "model_native"), false);
+            } else {
+                var model = RailModels.find(ResourceLocation.parse(segment.modelId()));
+                context.getSource().sendSuccess(() -> Component.translatable(PREFIX + "model_info", segment.modelId(),
+                        Component.translatable(PREFIX + (model == null ? "model_missing" : "model_present"))), false);
+            }
             if (segment.geometry() instanceof BezierTrackGeometry bezier) {
                 context.getSource().sendSuccess(() -> Component.translatable(PREFIX + "controls", bezier.control1().x(),
                         bezier.control1().z(), bezier.control2().x(), bezier.control2().z()), false);

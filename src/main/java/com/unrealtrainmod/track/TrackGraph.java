@@ -52,17 +52,25 @@ public final class TrackGraph {
     }
 
     public TrackSegment addStraight(UUID id, UUID startNodeId, UUID endNodeId) {
-        return addSegment(id, startNodeId, endNodeId, null, null);
+        return addStraight(id, startNodeId, endNodeId, null);
+    }
+
+    public TrackSegment addStraight(UUID id, UUID startNodeId, UUID endNodeId, String modelId) {
+        return insertSegment(prepareSegment(id, node(startNodeId), node(endNodeId), null, null, modelId));
     }
 
     /** Validates the entire placement before publishing any new node, index entry, or notification. */
     public TrackSegment addStraight(UUID id, TrackPlacementEndpoint start, TrackPlacementEndpoint end, double gauge) {
+        return addStraight(id, start, end, gauge, null);
+    }
+
+    public TrackSegment addStraight(UUID id, TrackPlacementEndpoint start, TrackPlacementEndpoint end, double gauge, String modelId) {
         TrackNode a = placementNode(start, gauge), b = placementNode(end, gauge);
         if ((start.nodeId() == null && nodes.containsKey(a.id()))
                 || (end.nodeId() == null && nodes.containsKey(b.id()))) {
             throw new TrackGraphException(TrackGraphException.Reason.DUPLICATE_ID);
         }
-        TrackSegment segment = prepareSegment(id, a, b, null, null);
+        TrackSegment segment = prepareSegment(id, a, b, null, null, modelId);
         if (start.nodeId() == null) insertNode(a);
         if (end.nodeId() == null) insertNode(b);
         return insertSegment(segment);
@@ -77,18 +85,19 @@ public final class TrackGraph {
 
     public TrackSegment addBezier(UUID id, UUID startNodeId, UUID endNodeId,
                                   TrackPoint control1, TrackPoint control2) {
-        return addSegment(id, startNodeId, endNodeId,
-                Objects.requireNonNull(control1), Objects.requireNonNull(control2));
+        return addBezier(id, startNodeId, endNodeId, control1, control2, null);
     }
 
-    private TrackSegment addSegment(UUID id, UUID startNodeId, UUID endNodeId,
-                                    TrackPoint control1, TrackPoint control2) {
-        return insertSegment(prepareSegment(id, node(startNodeId), node(endNodeId), control1, control2));
+    public TrackSegment addBezier(UUID id, UUID startNodeId, UUID endNodeId,
+                                  TrackPoint control1, TrackPoint control2, String modelId) {
+        return insertSegment(prepareSegment(id, node(startNodeId), node(endNodeId),
+                Objects.requireNonNull(control1), Objects.requireNonNull(control2), modelId));
     }
 
     private TrackSegment prepareSegment(UUID id, TrackNode start, TrackNode end,
-                                        TrackPoint control1, TrackPoint control2) {
+                                        TrackPoint control1, TrackPoint control2, String modelId) {
         Objects.requireNonNull(id);
+        if (modelId != null && modelId.isBlank()) throw new IllegalArgumentException("Blank track model ID");
         if (segments.containsKey(id)) throw new TrackGraphException(TrackGraphException.Reason.DUPLICATE_ID);
         if (start.id().equals(end.id())) throw new TrackGraphException(TrackGraphException.Reason.SAME_NODE);
         if (start.gauge() != end.gauge()) throw new TrackGraphException(TrackGraphException.Reason.GAUGE_MISMATCH);
@@ -99,7 +108,7 @@ public final class TrackGraph {
                 : TrackChunkBounds.of(a, control1, control2, b);
         TrackGeometry geometry = control1 == null ? new StraightTrackGeometry(a, b, grade, start.gauge())
                 : new BezierTrackGeometry(a, control1, control2, b, grade, start.gauge());
-        return new TrackSegment(id, start.id(), end.id(), geometry, bounds);
+        return new TrackSegment(id, start.id(), end.id(), geometry, bounds, modelId);
     }
 
     private TrackSegment insertSegment(TrackSegment segment) {

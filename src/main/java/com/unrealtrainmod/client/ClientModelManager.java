@@ -9,6 +9,7 @@ import com.mojang.blaze3d.systems.RenderSystem;
 import com.unrealtrainmod.UnrealTrainMod;
 import com.unrealtrainmod.client.renderer.TrainModelRenderer;
 import com.unrealtrainmod.model.IndexedMesh;
+import com.unrealtrainmod.model.IrModelLoader;
 import com.unrealtrainmod.model.MaterialRenderMode;
 import com.unrealtrainmod.model.ModelBounds;
 import com.unrealtrainmod.model.ModelData;
@@ -133,7 +134,7 @@ public final class ClientModelManager extends SimplePreparableReloadListener<Cli
                             prepared.put(source, prepareSource(source, images, alpha));
                         } catch (IOException | RuntimeException e) {
                             failed.add(source);
-                            UnrealTrainMod.LOGGER.error("Unable to load RTM model {}", source.model(), e);
+                            UnrealTrainMod.LOGGER.error("Unable to load vehicle model {}", source.model(), e);
                         }
                     }
                     if (failed.contains(source)) complete = false;
@@ -149,16 +150,27 @@ public final class ClientModelManager extends SimplePreparableReloadListener<Cli
 
     private PreparedSource prepareSource(TrainModels.Source source, Map<RtmAsset, NativeImage> images,
                                          Map<RtmAsset, TextureAlpha> alphaCache) throws IOException {
-        ModelMesh mesh;
-        try (var input = source.model().open()) {
-            var model = MqoParser.parse(input, StandardCharsets.UTF_8);
-            var unmatched = new HashSet<>(source.materialRenderModes().keySet());
-            unmatched.remove("default");
-            for (var material : model.materials()) unmatched.remove(material.name());
-            for (var name : unmatched) {
-                UnrealTrainMod.LOGGER.warn("RTM {}: materialRenderModes['{}'] matches no MQO material", source.model(), name);
+        ModelData model;
+        var bindings = source.textures();
+        if (source.format() == TrainModels.Format.IR_OBJ) {
+            var imported = IrModelLoader.load(source.model());
+            model = imported.model();
+            bindings = imported.textures();
+        } else {
+            try (var input = source.model().open()) {
+                model = MqoParser.parse(input, StandardCharsets.UTF_8);
             }
-            mesh = ModelMesh.prepare(model, TrainModels.MQO_SCALE, source.smoothing());
+        }
+        var unmatched = new HashSet<>(source.materialRenderModes().keySet());
+        unmatched.remove("default");
+        for (var material : model.materials()) unmatched.remove(material.name());
+        for (var name : unmatched) {
+            UnrealTrainMod.LOGGER.warn("Model {}: materialRenderModes['{}'] matches no material", source.model(), name);
+        }
+        var mesh = ModelMesh.prepare(model, source.scale(), source.smoothing(), source.format() == TrainModels.Format.IR_OBJ);
+        if (mesh.fanFallbackCount() > 0) {
+            UnrealTrainMod.LOGGER.warn("IR {}: used OBJ corner-order triangle fans for {} polygon faces that could not be ear-clipped",
+                    source.model(), mesh.fanFallbackCount());
         }
         var parts = new ArrayList<LoadedPart>();
         var visible = new ArrayList<LoadedPart>();
@@ -177,8 +189,9 @@ public final class ClientModelManager extends SimplePreparableReloadListener<Cli
                 var summary = summaries.computeIfAbsent(material.name(), name -> new MaterialSummary(mode,
                         modes.containsKey(name) ? "materialRenderModes exact match"
                                 : mode != null ? "materialRenderModes default" : "legacy RTM alpha rules"));
-                var binding = source.textures().get(material.name());
-                if (binding == null) binding = source.textures().get("default");
+                var binding = source.format() == TrainModels.Format.IR_OBJ && material.texture() == null
+                        ? null : bindings.get(material.name());
+                if (binding == null && source.format() == TrainModels.Format.MQO) binding = bindings.get("default");
                 ResourceLocation texture = WHITE;
                 TextureAlpha alpha = TextureAlpha.WHITE;
                 if (binding != null) {
@@ -190,7 +203,7 @@ public final class ClientModelManager extends SimplePreparableReloadListener<Cli
                     }
                     texture = textureId(asset);
                     alpha = alphaCache.computeIfAbsent(asset, ignored -> new TextureAlpha(images.get(asset)));
-                } else if (warned.add(material.name())) {
+                } else if (source.format() == TrainModels.Format.MQO && warned.add(material.name())) {
                     UnrealTrainMod.LOGGER.warn("RTM {}: no texture for material '{}'; using white", source.model(), material.name());
                 }
                 boolean alphaBlend = material.alpha() < 1 || (binding != null && binding.alphaBlend());
@@ -234,11 +247,11 @@ public final class ClientModelManager extends SimplePreparableReloadListener<Cli
         var partsByName = new HashMap<String, PartSelection>();
         named.forEach((name, matching) -> partsByName.put(name, new PartSelection(matching)));
         summaries.forEach((name, summary) -> UnrealTrainMod.LOGGER.info(
-                "RTM {} material '{}': mode={} ({}); AlphaBlend={}, bakedAlphaBelowOne={}; CUTOUT={}, BLEND={}, MIXED={}, skipped={}",
+                "Model {} material '{}': mode={} ({}); AlphaBlend={}, bakedAlphaBelowOne={}; CUTOUT={}, BLEND={}, MIXED={}, skipped={}",
                 source.model(), name, summary.mode == null ? "LEGACY" : summary.mode, summary.reason,
                 summary.alphaBlend, summary.reducedAlpha, summary.counts[0], summary.counts[1], summary.counts[2], summary.skipped));
-        UnrealTrainMod.LOGGER.info("Prepared RTM MQO {}: {} parts, {} triangles; CUTOUT={}, BLEND={}, MIXED={}",
-                source.model(), mesh.parts().size(), mesh.triangleCount(), counts[0], counts[1], counts[2]);
+        UnrealTrainMod.LOGGER.info("Prepared {} {}: {} parts, {} triangles; CUTOUT={}, BLEND={}, MIXED={}",
+                source.format(), source.model(), mesh.parts().size(), mesh.triangleCount(), counts[0], counts[1], counts[2]);
         return new PreparedSource(List.copyOf(parts), new PartSelection(visible), Map.copyOf(partsByName), List.copyOf(allBatches));
     }
 
@@ -268,7 +281,7 @@ public final class ClientModelManager extends SimplePreparableReloadListener<Cli
                     try {
                         gpu = GpuModel.upload(source.batches());
                     } catch (RuntimeException e) {
-                        UnrealTrainMod.LOGGER.error("Unable to upload RTM model {}; using buffered rendering", entry.getKey().model(), e);
+                        UnrealTrainMod.LOGGER.error("Unable to upload vehicle model {}; using buffered rendering", entry.getKey().model(), e);
                     }
                 }
                 uploaded.put(entry.getKey(), new LoadedSource(source.parts(), source.visibleParts(), source.partsByName(), gpu));
@@ -313,7 +326,7 @@ public final class ClientModelManager extends SimplePreparableReloadListener<Cli
     }
 
     private static ResourceLocation textureId(RtmAsset asset) {
-        return id("textures/rtm/" + TrainModels.hash(asset.archive().getFileName() + "\0" + asset.entry()));
+        return id("textures/package/" + TrainModels.hash(asset.archive().toAbsolutePath().normalize() + "\0" + asset.entry()));
     }
 
     public static ResourceLocation id(String path) { return ResourceLocation.fromNamespaceAndPath(UnrealTrainMod.MODID, path); }

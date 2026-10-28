@@ -6,19 +6,29 @@ package com.unrealtrainmod.model;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 /** Prepared once on resource reload. Source coordinates are scaled to blocks without changing the origin. */
-public record ModelMesh(List<Part> parts, int triangleCount) {
+public record ModelMesh(List<Part> parts, int triangleCount, int fanFallbackCount) {
     public record Part(String name, boolean visible, List<Batch> batches) {}
     public record Batch(ModelData.Material material, IndexedMesh mesh) {}
 
+    public ModelMesh(List<Part> parts, int triangleCount) {
+        this(parts, triangleCount, 0);
+    }
+
     public static ModelMesh prepare(ModelData model, float scale, boolean smoothing) throws IOException {
+        return prepare(model, scale, smoothing, false);
+    }
+
+    /** IR exports with crossed or collapsed polygons may use an original-corner fan if ear clipping fails. */
+    public static ModelMesh prepare(ModelData model, float scale, boolean smoothing, boolean allowFanFallback) throws IOException {
         if (!Float.isFinite(scale) || scale <= 0) throw new IOException("Model scale must be positive");
         List<Part> parts = new ArrayList<>();
-        int triangles = 0;
+        int triangles = 0, fanFallbacks = 0;
         for (var part : model.parts()) {
             boolean smooth = smoothing && part.smooth();
             int faceCount = part.faces().size();
@@ -43,7 +53,17 @@ public record ModelMesh(List<Part> parts, int triangleCount) {
             for (int f = 0; f < faceCount; f++) {
                 var face = part.faces().get(f);
                 if (face.indices().length < 3 || isZero(normals[f])) continue;
-                int[] corners = triangulate(face, part.positions(), normals[f]);
+                int[] corners;
+                try {
+                    corners = triangulate(face, part.positions(), normals[f]);
+                } catch (IOException e) {
+                    if (!allowFanFallback) {
+                        throw new IOException("Object '" + part.name() + "' face " + (f + 1) + ": " + e.getMessage(), e);
+                    }
+                    corners = triangleFan(face, part.positions());
+                    fanFallbacks++;
+                }
+                if (corners.length == 0) continue;
                 var material = face.material() < 0 ? ModelData.Material.DEFAULT : model.materials().get(face.material());
                 BatchBuilder batch = batches.computeIfAbsent(face.material(), ignored -> new BatchBuilder(material));
                 if (vertexIndices.length < face.indices().length) vertexIndices = new int[face.indices().length];
@@ -52,7 +72,11 @@ public record ModelMesh(List<Part> parts, int triangleCount) {
                     int index = face.indices()[corner];
                     var p = part.positions().get(index);
                     float nx = normals[f][0], ny = normals[f][1], nz = normals[f][2];
-                    if (smooth) {
+                    if (face.normals() != null) {
+                        nx = face.normals()[corner * 3];
+                        ny = face.normals()[corner * 3 + 1];
+                        nz = face.normals()[corner * 3 + 2];
+                    } else if (smooth) {
                         nx = 0; ny = 0; nz = 0;
                         for (int j = offsets[index]; j < offsets[index + 1]; j++) {
                             float[] n = normals[neighbors[j]];
@@ -67,7 +91,7 @@ public record ModelMesh(List<Part> parts, int triangleCount) {
                             tint(face.colors()[corner], material));
                 }
                 for (int t = 0; t < corners.length; t += 3) {
-                    // MQO front faces are clockwise; emit the opposite winding for Minecraft.
+                    // Importers supply clockwise faces; emit the opposite winding for Minecraft.
                     batch.mesh.triangle(vertexIndices[corners[t + 2]], vertexIndices[corners[t + 1]], vertexIndices[corners[t]]);
                 }
                 triangles += corners.length / 3;
@@ -75,20 +99,21 @@ public record ModelMesh(List<Part> parts, int triangleCount) {
             parts.add(new Part(part.name(), part.visible(), batches.values().stream().map(BatchBuilder::build).toList()));
         }
         if (triangles == 0) throw new IOException("Model contains no renderable faces");
-        return new ModelMesh(List.copyOf(parts), triangles);
+        return new ModelMesh(List.copyOf(parts), triangles, fanFallbacks);
     }
 
     private static float dot(float[] a, float[] b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
     private static boolean isZero(float[] n) { return n[0] == 0 && n[1] == 0 && n[2] == 0; }
 
-    private static float[] normal(ModelData.Face face, List<ModelData.Position> positions) {
+    /** Newell normal pointing out of a clockwise source face. Shared with OBJ normal generation. */
+    static float[] normal(ModelData.Face face, List<ModelData.Position> positions) {
         double x = 0, y = 0, z = 0;
         int[] v = face.indices();
         for (int i = 0; i < v.length; i++) {
             var a = positions.get(v[i]); var b = positions.get(v[(i + 1) % v.length]);
-            x += ((double)a.y() - b.y()) * (a.z() + b.z());
-            y += ((double)a.z() - b.z()) * (a.x() + b.x());
-            z += ((double)a.x() - b.x()) * (a.y() + b.y());
+            x += ((double)a.y() - b.y()) * ((double)a.z() + b.z());
+            y += ((double)a.z() - b.z()) * ((double)a.x() + b.x());
+            z += ((double)a.x() - b.x()) * ((double)a.y() + b.y());
         }
         double length = Math.sqrt(x * x + y * y + z * z);
         return length < 1e-12 ? new float[3] : new float[]{(float)(-x / length), (float)(-y / length), (float)(-z / length)};
@@ -120,6 +145,7 @@ public record ModelMesh(List<Part> parts, int triangleCount) {
                 if (cross(x, y, a, b, c) * sign <= 1e-12) continue;
                 boolean contains = false;
                 for (int p : remaining) if (p != a && p != b && p != c
+                        && !samePoint(x, y, p, a) && !samePoint(x, y, p, b) && !samePoint(x, y, p, c)
                         && cross(x, y, a, b, p) * sign >= -1e-12
                         && cross(x, y, b, c, p) * sign >= -1e-12
                         && cross(x, y, c, a, p) * sign >= -1e-12) { contains = true; break; }
@@ -127,10 +153,39 @@ public record ModelMesh(List<Part> parts, int triangleCount) {
                 result[output++] = a; result[output++] = b; result[output++] = c;
                 remaining.remove(i); clipped = true; break;
             }
-            if (!clipped) throw new IOException("Cannot triangulate degenerate or self-intersecting MQO polygon");
+            if (!clipped) throw new IOException("Cannot triangulate degenerate or self-intersecting model polygon");
         }
-        for (int corner : remaining) result[output++] = corner;
-        return result;
+        if (hasArea(face, positions, remaining.get(0), remaining.get(1), remaining.get(2))) {
+            for (int corner : remaining) result[output++] = corner;
+        }
+        return output == result.length ? result : Arrays.copyOf(result, output);
+    }
+
+    private static boolean samePoint(double[] x, double[] y, int a, int b) {
+        return x[a] == x[b] && y[a] == y[b];
+    }
+
+    private static int[] triangleFan(ModelData.Face face, List<ModelData.Position> positions) {
+        int count = face.indices().length, output = 0;
+        int[] result = new int[(count - 2) * 3];
+        // ObjParser reverses corners, so the last corner is the OBJ's authored first vertex.
+        // Keeping original corner indices also preserves each corner's UV, normal and color.
+        for (int i = 0; i < count - 2; i++) {
+            if (!hasArea(face, positions, count - 1, i, i + 1)) continue;
+            result[output++] = count - 1;
+            result[output++] = i;
+            result[output++] = i + 1;
+        }
+        return output == result.length ? result : Arrays.copyOf(result, output);
+    }
+
+    private static boolean hasArea(ModelData.Face face, List<ModelData.Position> positions, int a, int b, int c) {
+        var origin = positions.get(face.indices()[a]);
+        var p = positions.get(face.indices()[b]);
+        var q = positions.get(face.indices()[c]);
+        double px = (double)p.x() - origin.x(), py = (double)p.y() - origin.y(), pz = (double)p.z() - origin.z();
+        double qx = (double)q.x() - origin.x(), qy = (double)q.y() - origin.y(), qz = (double)q.z() - origin.z();
+        return py * qz - pz * qy != 0 || pz * qx - px * qz != 0 || px * qy - py * qx != 0;
     }
 
     private static double cross(double[] x, double[] y, int a, int b, int c) {

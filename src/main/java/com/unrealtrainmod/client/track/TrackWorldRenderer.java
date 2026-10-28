@@ -9,6 +9,7 @@ import com.mojang.blaze3d.vertex.VertexBuffer;
 import com.unrealtrainmod.UnrealTrainMod;
 import com.unrealtrainmod.track.mesh.TrackMeshBuilder;
 import com.unrealtrainmod.track.mesh.TrackMeshData;
+import com.unrealtrainmod.track.mesh.RailTrackMeshBuilder;
 import java.util.UUID;
 import net.minecraft.client.Minecraft;
 import net.minecraft.world.level.ChunkPos;
@@ -33,7 +34,6 @@ public final class TrackWorldRenderer {
         int builds = BUILDS_PER_FRAME, uploads = UPLOADS_PER_FRAME;
         var camera = event.getCamera().getPosition();
         Matrix4f modelView = new Matrix4f();
-        TrackRenderTypes.OPAQUE.setupRenderState();
         try {
             RenderSystem.setShaderColor(1, 1, 1, 1);
             for (var chunkEntry : cache.chunks.entrySet()) {
@@ -42,34 +42,49 @@ public final class TrackWorldRenderer {
                 if (!level.hasChunk(x, z)) continue;
                 for (UUID id : chunkEntry.getValue()) {
                     var entry = cache.entries.get(id);
-                    TrackGpuMesh mesh = entry.meshes.get(chunk);
+                    TrackRenderMesh mesh = entry.meshes.get(chunk);
                     if (mesh == null) {
                         if (builds == 0 || !event.getFrustum().isVisible(entry.broadBounds(x, z))) continue;
                         mesh = build(entry, id, x, z);
                         entry.meshes.put(chunk, mesh);
                         builds--;
                     }
-                    if (mesh.data.vertexCount() == 0 || !event.getFrustum().isVisible(mesh.bounds)) continue;
+                    if (mesh.isEmpty() || !event.getFrustum().isVisible(mesh.bounds())) continue;
                     if (!mesh.isUploaded()) {
                         if (uploads == 0) continue;
-                        mesh.upload();
-                        uploads--;
+                        uploads -= mesh.upload(uploads);
+                        if (!mesh.isUploaded()) continue;
                     }
-                    var origin = mesh.data.origin();
+                    var origin = mesh.origin();
                     modelView.set(event.getModelViewMatrix()).translate((float)(origin.x() - camera.x),
                             (float)(origin.y() - camera.y), (float)(origin.z() - camera.z));
-                    mesh.draw(modelView, event.getProjectionMatrix(), RenderSystem.getShader());
+                    mesh.draw(modelView, event.getProjectionMatrix());
                 }
             }
         } finally {
             VertexBuffer.unbind();
-            TrackRenderTypes.OPAQUE.clearRenderState();
             RenderSystem.setShader(() -> previousShader);
             RenderSystem.setShaderColor(previousColor[0], previousColor[1], previousColor[2], previousColor[3]);
         }
     }
 
-    private static TrackGpuMesh build(ClientTrackCache.Entry entry, UUID id, int x, int z) {
+    private static TrackRenderMesh build(ClientTrackCache.Entry entry, UUID id, int x, int z) {
+        String modelId = entry.data.modelId();
+        if (modelId != null) {
+            var model = ClientRailModelManager.INSTANCE.model(modelId);
+            if (model != null) {
+                try {
+                    return new RailTrackGpuMesh(RailTrackMeshBuilder.build(entry.geometry,
+                            model.batches().stream().map(ClientRailModelManager.Batch::mesh).toList(), x, z), model);
+                } catch (IllegalArgumentException exception) {
+                    UnrealTrainMod.LOGGER.warn("Cannot build RTM rail {} using {} in chunk {}, {}: {}; using native appearance",
+                            id, modelId, x, z, exception.getMessage());
+                }
+            } else if (!entry.missingReported) {
+                entry.missingReported = true;
+                UnrealTrainMod.LOGGER.warn("RTM rail model {} is missing or unavailable for track {}; using native appearance", modelId, id);
+            }
+        }
         try {
             return new TrackGpuMesh(TrackMeshBuilder.build(entry.geometry, x, z));
         } catch (IllegalArgumentException exception) {

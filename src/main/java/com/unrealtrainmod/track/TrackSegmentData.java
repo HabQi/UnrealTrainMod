@@ -16,7 +16,7 @@ import java.util.UUID;
 
 /** Rendering definition only; the client does not own or reconstruct the server's topology. */
 public record TrackSegmentData(UUID id, TrackSegment.Type type, TrackVector start, TrackVector end,
-                               double gauge, List<TrackPoint> controls) {
+                               double gauge, List<TrackPoint> controls, String modelId) {
     public TrackSegmentData {
         Objects.requireNonNull(id);
         Objects.requireNonNull(type);
@@ -36,7 +36,7 @@ public record TrackSegmentData(UUID id, TrackSegment.Type type, TrackVector star
         List<TrackPoint> controls = segment.geometry() instanceof BezierTrackGeometry bezier
                 ? List.of(bezier.control1(), bezier.control2()) : List.of();
         TrackNode start = graph.node(segment.startNodeId()), end = graph.node(segment.endNodeId());
-        return new TrackSegmentData(segment.id(), segment.type(), start.position(), end.position(), start.gauge(), controls);
+        return new TrackSegmentData(segment.id(), segment.type(), start.position(), end.position(), start.gauge(), controls, segment.modelId());
     }
 
     public TrackGeometry createGeometry() {

@@ -17,19 +17,22 @@ public final class TrackSegment {
     private final UUID endNodeId;
     private final TrackGeometry geometry;
     private final TrackChunkBounds chunkBounds;
+    private final String modelId;
 
-    TrackSegment(UUID id, UUID startNodeId, UUID endNodeId, TrackGeometry geometry, TrackChunkBounds chunkBounds) {
+    TrackSegment(UUID id, UUID startNodeId, UUID endNodeId, TrackGeometry geometry, TrackChunkBounds chunkBounds, String modelId) {
         this.id = id;
         this.startNodeId = startNodeId;
         this.endNodeId = endNodeId;
         this.geometry = geometry;
         this.chunkBounds = chunkBounds;
+        this.modelId = modelId;
     }
 
     public UUID id() { return id; }
     public UUID startNodeId() { return startNodeId; }
     public UUID endNodeId() { return endNodeId; }
     public TrackGeometry geometry() { return geometry; }
+    public String modelId() { return modelId; }
     public Type type() { return geometry instanceof BezierTrackGeometry ? Type.BEZIER : Type.STRAIGHT; }
     /** Conservative coverage, including control-bounds false positives. */
     public boolean coversChunk(int x, int z) {

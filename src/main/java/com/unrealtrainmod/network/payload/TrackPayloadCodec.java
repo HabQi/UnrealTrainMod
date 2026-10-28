@@ -24,6 +24,8 @@ final class TrackPayloadCodec {
             buffer.writeDouble(control.x());
             buffer.writeDouble(control.z());
         }
+        buffer.writeBoolean(data.modelId() != null);
+        if (data.modelId() != null) buffer.writeResourceLocation(net.minecraft.resources.ResourceLocation.parse(data.modelId()));
     }
 
     static TrackSegmentData read(RegistryFriendlyByteBuf buffer) {
@@ -34,7 +36,8 @@ final class TrackPayloadCodec {
         List<TrackPoint> controls = type == TrackSegment.Type.BEZIER
                 ? List.of(new TrackPoint(buffer.readDouble(), buffer.readDouble()),
                         new TrackPoint(buffer.readDouble(), buffer.readDouble())) : List.of();
-        return new TrackSegmentData(id, type, start, end, gauge, controls);
+        String modelId = buffer.readBoolean() ? buffer.readResourceLocation().toString() : null;
+        return new TrackSegmentData(id, type, start, end, gauge, controls, modelId);
     }
 
     private static void writeVector(RegistryFriendlyByteBuf buffer, TrackVector vector) {

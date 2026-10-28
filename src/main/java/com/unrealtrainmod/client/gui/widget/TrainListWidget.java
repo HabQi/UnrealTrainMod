@@ -23,11 +23,18 @@ public final class TrainListWidget<T> extends ObjectSelectionList<TrainListWidge
     private final Function<T, Component> label;
     private final Function<T, String> detail;
     private final Consumer<T> onSelect;
+    private final Component emptyMessage;
     private T selectedValue;
 
     public TrainListWidget(Minecraft minecraft, int width, int height, List<T> items,
                            Function<T, Component> label, Function<T, String> detail, Consumer<T> onSelect) {
+        this(minecraft, width, height, items, label, detail, onSelect, Component.translatable("gui.unrealtrainmod.models.empty"));
+    }
+
+    public TrainListWidget(Minecraft minecraft, int width, int height, List<T> items,
+                           Function<T, Component> label, Function<T, String> detail, Consumer<T> onSelect, Component emptyMessage) {
         super(minecraft, width, height, 0, 34);
+        this.emptyMessage = emptyMessage;
         this.items = List.copyOf(items);
         this.label = label;
         this.detail = detail;
@@ -85,7 +92,7 @@ public final class TrainListWidget<T> extends ObjectSelectionList<TrainListWidge
     @Override
     protected void renderDecorations(GuiGraphics graphics, int mouseX, int mouseY) {
         if (children().isEmpty()) {
-            graphics.drawWordWrap(minecraft.font, Component.translatable("gui.unrealtrainmod.models.empty"),
+            graphics.drawWordWrap(minecraft.font, emptyMessage,
                     getX() + 6, getY() + 8, width - 12, GuiTheme.MUTED);
         }
     }

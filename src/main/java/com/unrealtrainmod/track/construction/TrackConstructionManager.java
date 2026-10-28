@@ -5,6 +5,8 @@
 package com.unrealtrainmod.track.construction;
 
 import com.unrealtrainmod.UnrealTrainMod;
+import com.unrealtrainmod.item.RailPlacerItem;
+import com.unrealtrainmod.model.RailModels;
 import com.unrealtrainmod.network.payload.TrackConstructionPayload;
 import com.unrealtrainmod.network.payload.TrackConstructionPayload.Feedback;
 import com.unrealtrainmod.network.payload.TrackConstructionPayload.Phase;
@@ -26,7 +28,6 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionHand;
-import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.context.UseOnContext;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.neoforge.common.util.TriState;
@@ -58,7 +59,8 @@ public final class TrackConstructionManager {
 
     private static void rightClickBlock(PlayerInteractEvent.RightClickBlock event) {
         if (event.getHand() == InteractionHand.MAIN_HAND
-                && event.getItemStack().is(UnrealTrainMod.TRACK_BUILDER.get())) {
+                && (event.getItemStack().is(UnrealTrainMod.TRACK_BUILDER.get())
+                || event.getItemStack().is(UnrealTrainMod.RAIL_PLACER.get()))) {
             event.setUseBlock(TriState.FALSE);
         }
     }
@@ -79,10 +81,6 @@ public final class TrackConstructionManager {
         }
         if (player.isShiftKeyDown()) {
             clear(player, Feedback.CANCELLED);
-            return;
-        }
-        if (session != null && session.ready) {
-            confirm(player, session);
             return;
         }
         if (context == null) {
@@ -121,6 +119,36 @@ public final class TrackConstructionManager {
             session.ready = result == Feedback.READY;
             publish(player, session, result);
         }
+    }
+
+    public static void place(ServerPlayer player) {
+        if (!player.isAlive() || !player.getMainHandItem().is(UnrealTrainMod.RAIL_PLACER.get())) {
+            publish(player, SESSIONS.get(player.getUUID()), Feedback.INVALID_ITEM);
+            return;
+        }
+        if (!player.hasPermissions(2)) {
+            clear(player, Feedback.NO_PERMISSION);
+            return;
+        }
+        if (player.isShiftKeyDown()) {
+            clear(player, Feedback.CANCELLED);
+            return;
+        }
+        Session session = SESSIONS.get(player.getUUID());
+        if (session != null && !session.matches(player)) {
+            clear(player, Feedback.CLEARED);
+            session = null;
+        }
+        if (session == null || !session.ready) {
+            publish(player, session, Feedback.LINE_NOT_READY);
+            return;
+        }
+        var modelId = RailPlacerItem.selectedModel(player.getMainHandItem());
+        if (modelId == null || RailModels.find(modelId) == null) {
+            publish(player, session, modelId == null ? Feedback.SELECT_MODEL : Feedback.MISSING_MODEL);
+            return;
+        }
+        confirm(player, session, modelId.toString());
     }
 
     private static TrackGraph graph(ServerPlayer player) {
@@ -194,7 +222,7 @@ public final class TrackConstructionManager {
         }
     }
 
-    private static void confirm(ServerPlayer player, Session session) {
+    private static void confirm(ServerPlayer player, Session session, String modelId) {
         TrackGraph graph = graph(player);
         if (graph == null || !refreshStart(player, graph, session)) return;
         try {
@@ -215,7 +243,7 @@ public final class TrackConstructionManager {
         // All input validation precedes the graph's atomic commit; sync sees both endpoint nodes.
         UUID id = UUID.randomUUID();
         try {
-            graph.addStraight(id, session.start, session.end, session.gauge);
+            graph.addStraight(id, session.start, session.end, session.gauge, modelId);
         } catch (TrackGraphException exception) {
             rejectEnd(player, session, Feedback.INVALID_GEOMETRY);
             return;
@@ -232,7 +260,7 @@ public final class TrackConstructionManager {
 
     private static void publish(ServerPlayer player, Session session, Feedback feedback) {
         PacketDistributor.sendToPlayer(player, new TrackConstructionPayload(player.serverLevel().dimension().location(),
-                player.getInventory().selected, session == null ? Phase.EMPTY : session.ready ? Phase.READY : Phase.START,
+                session == null ? Phase.EMPTY : session.ready ? Phase.READY : Phase.START,
                 session == null ? null : session.start, session == null ? null : session.end,
                 session == null ? DEFAULT_GAUGE : session.gauge, feedback));
     }
@@ -272,8 +300,6 @@ public final class TrackConstructionManager {
     private static final class Session {
         final ServerPlayer player;
         final ServerLevel level;
-        final int slot;
-        final ItemStack tool;
         TrackPlacementEndpoint start;
         TrackPlacementEndpoint end;
         double gauge;
@@ -282,15 +308,11 @@ public final class TrackConstructionManager {
         Session(ServerPlayer player, TrackPlacementEndpoint start) {
             this.player = player;
             level = player.serverLevel();
-            slot = player.getInventory().selected;
-            tool = player.getMainHandItem();
             this.start = start;
         }
 
         boolean matches(ServerPlayer current) {
-            return player == current && level == current.serverLevel() && slot == current.getInventory().selected
-                    && current.isAlive() && current.hasPermissions(2)
-                    && current.getMainHandItem() == tool && tool.is(UnrealTrainMod.TRACK_BUILDER.get());
+            return player == current && level == current.serverLevel() && current.isAlive() && current.hasPermissions(2);
         }
     }
 }

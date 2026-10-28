@@ -12,6 +12,7 @@ import com.unrealtrainmod.client.StaticModelShader;
 import com.unrealtrainmod.client.network.ClientPayloadHandlers;
 import com.unrealtrainmod.client.renderer.TrainModelRenderer;
 import com.unrealtrainmod.client.track.ClientTrackCache;
+import com.unrealtrainmod.client.track.ClientRailModelManager;
 import com.unrealtrainmod.client.track.ClientTrackConstruction;
 import com.unrealtrainmod.client.track.TrackConstructionRenderer;
 import com.unrealtrainmod.client.track.TrackWorldRenderer;
@@ -49,6 +50,7 @@ public class UnrealTrainModClient {
     @SubscribeEvent
     static void registerReloadListeners(RegisterClientReloadListenersEvent event) {
         event.registerReloadListener(ClientModelManager.INSTANCE);
+        event.registerReloadListener(ClientRailModelManager.INSTANCE);
         event.registerReloadListener(ClientTrackCache.INSTANCE);
     }
 
@@ -61,6 +63,7 @@ public class UnrealTrainModClient {
         NeoForge.EVENT_BUS.addListener(UnrealTrainModClient::onGameShuttingDown);
         NeoForge.EVENT_BUS.addListener(ClientPayloadHandlers::openModelSelector);
         NeoForge.EVENT_BUS.addListener(ClientPayloadHandlers::modelSelectionResult);
+        NeoForge.EVENT_BUS.addListener(ClientPayloadHandlers::railSelectionResult);
         NeoForge.EVENT_BUS.addListener(TrainModelRenderer::onFramePre);
         NeoForge.EVENT_BUS.addListener(TrainModelRenderer::onRenderStage);
         NeoForge.EVENT_BUS.addListener(ClientTrackCache.INSTANCE::onSync);
@@ -80,6 +83,7 @@ public class UnrealTrainModClient {
         ClientModelManager.INSTANCE.close();
         TrainModelRenderer.closeWorld();
         ClientTrackCache.INSTANCE.close();
+        ClientRailModelManager.INSTANCE.close();
         ClientTrackConstruction.INSTANCE.clear();
     }
 

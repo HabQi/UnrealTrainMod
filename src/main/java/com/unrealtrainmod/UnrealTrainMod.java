@@ -9,8 +9,9 @@ import com.unrealtrainmod.command.TrackCommands;
 import com.unrealtrainmod.entity.PlacedModelEntity;
 import com.unrealtrainmod.item.ModelPlacerItem;
 import com.unrealtrainmod.item.TrackBuilderItem;
+import com.unrealtrainmod.item.RailPlacerItem;
 import com.unrealtrainmod.track.construction.TrackConstructionManager;
-import com.unrealtrainmod.model.RtmPackageLoader;
+import com.unrealtrainmod.model.TrainModels;
 import com.unrealtrainmod.registry.ModDataComponents;
 import com.unrealtrainmod.registry.ModPayloads;
 import com.unrealtrainmod.network.TrackSyncManager;
@@ -74,6 +75,8 @@ public class UnrealTrainMod {
             "vehicle_placer", ModelPlacerItem::new, new Item.Properties().stacksTo(1));
     public static final DeferredItem<TrackBuilderItem> TRACK_BUILDER = ITEMS.registerItem(
             "track_builder", TrackBuilderItem::new, new Item.Properties().stacksTo(1));
+    public static final DeferredItem<RailPlacerItem> RAIL_PLACER = ITEMS.registerItem(
+            "rail_placer", RailPlacerItem::new, new Item.Properties().stacksTo(1));
 
     // Creates a creative tab with the id "unrealtrainmod:example_tab" for the example item, that is placed after the combat tab
     public static final DeferredHolder<CreativeModeTab, CreativeModeTab> EXAMPLE_TAB = CREATIVE_MODE_TABS.register("example_tab", () -> CreativeModeTab.builder()
@@ -83,12 +86,13 @@ public class UnrealTrainMod {
             .displayItems((parameters, output) -> {
                 output.accept(VEHICLE_PLACER.get());
                 output.accept(TRACK_BUILDER.get());
+                output.accept(RAIL_PLACER.get());
             }).build());
 
     // The constructor for the mod class is the first code that is run when your mod is loaded.
     // FML will recognize some parameter types like IEventBus or ModContainer and pass them in automatically.
     public UnrealTrainMod(IEventBus modEventBus, ModContainer modContainer) {
-        RtmPackageLoader.load(FMLPaths.MODSDIR.get());
+        TrainModels.load(FMLPaths.MODSDIR.get());
         // Register the commonSetup method for modloading
         modEventBus.addListener(this::commonSetup);
 

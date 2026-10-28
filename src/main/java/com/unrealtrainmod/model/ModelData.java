@@ -20,8 +20,12 @@ public record ModelData(List<Material> materials, List<Part> parts) {
         public static final Material DEFAULT = new Material("default", 1, 1, 1, 1, null, false);
     }
 
-    /** UVs and colors belong to face corners, not shared position vertices. */
-    public record Face(int[] indices, float[] uv, int[] colors, int material) {}
+    /** Clockwise source faces; UVs, colors and optional normal XYZ triples belong to corners. */
+    public record Face(int[] indices, float[] uv, int[] colors, int material, float[] normals) {
+        public Face(int[] indices, float[] uv, int[] colors, int material) {
+            this(indices, uv, colors, material, null);
+        }
+    }
 
     public record Part(String name, boolean visible, boolean smooth, float facet,
                        List<Position> positions, List<Face> faces) {
