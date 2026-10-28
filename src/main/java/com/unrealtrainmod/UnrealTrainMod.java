@@ -9,8 +9,10 @@ import com.unrealtrainmod.command.TrackCommands;
 import com.unrealtrainmod.entity.PlacedModelEntity;
 import com.unrealtrainmod.item.ModelPlacerItem;
 import com.unrealtrainmod.item.TrackBuilderItem;
+import com.unrealtrainmod.item.TrackWrenchItem;
 import com.unrealtrainmod.item.RailPlacerItem;
 import com.unrealtrainmod.track.construction.TrackConstructionManager;
+import com.unrealtrainmod.track.block.TrackBlock;
 import com.unrealtrainmod.model.TrainModels;
 import com.unrealtrainmod.registry.ModDataComponents;
 import com.unrealtrainmod.registry.ModPayloads;
@@ -30,8 +32,10 @@ import net.minecraft.world.item.CreativeModeTabs;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.SoundType;
 import net.minecraft.world.level.block.state.BlockBehaviour;
 import net.minecraft.world.level.material.MapColor;
+import net.minecraft.world.level.material.PushReaction;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.Mod;
@@ -68,6 +72,10 @@ public class UnrealTrainMod {
 
     // Creates a new Block with the id "unrealtrainmod:example_block", combining the namespace and path
     public static final DeferredBlock<Block> EXAMPLE_BLOCK = BLOCKS.registerSimpleBlock("example_block", BlockBehaviour.Properties.of().mapColor(MapColor.STONE));
+    public static final DeferredBlock<TrackBlock> TRACK_BLOCK = BLOCKS.registerBlock("track", TrackBlock::new,
+            BlockBehaviour.Properties.of().mapColor(MapColor.METAL).strength(0.5f).sound(SoundType.METAL)
+                    .noOcclusion().noLootTable().pushReaction(PushReaction.BLOCK)
+                    .isSuffocating((state, level, pos) -> false).isViewBlocking((state, level, pos) -> false));
     // Creates a new BlockItem with the id "unrealtrainmod:example_block", combining the namespace and path
     public static final DeferredItem<BlockItem> EXAMPLE_BLOCK_ITEM = ITEMS.registerSimpleBlockItem("example_block", EXAMPLE_BLOCK);
 
@@ -77,6 +85,8 @@ public class UnrealTrainMod {
             "track_builder", TrackBuilderItem::new, new Item.Properties().stacksTo(1));
     public static final DeferredItem<RailPlacerItem> RAIL_PLACER = ITEMS.registerItem(
             "rail_placer", RailPlacerItem::new, new Item.Properties().stacksTo(1));
+    public static final DeferredItem<TrackWrenchItem> TRACK_WRENCH = ITEMS.registerItem(
+            "track_wrench", TrackWrenchItem::new, new Item.Properties().stacksTo(1));
 
     // Creates a creative tab with the id "unrealtrainmod:example_tab" for the example item, that is placed after the combat tab
     public static final DeferredHolder<CreativeModeTab, CreativeModeTab> EXAMPLE_TAB = CREATIVE_MODE_TABS.register("example_tab", () -> CreativeModeTab.builder()
@@ -87,6 +97,7 @@ public class UnrealTrainMod {
                 output.accept(VEHICLE_PLACER.get());
                 output.accept(TRACK_BUILDER.get());
                 output.accept(RAIL_PLACER.get());
+                output.accept(TRACK_WRENCH.get());
             }).build());
 
     // The constructor for the mod class is the first code that is run when your mod is loaded.

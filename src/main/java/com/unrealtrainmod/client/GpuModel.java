@@ -64,20 +64,23 @@ public final class GpuModel implements AutoCloseable {
         try {
             for (var group : ordered) {
                 var original = group.getFirst().mesh();
-                int count = group.stream().mapToInt(batch -> batch.mesh().indices().length).sum();
-                int[] canonical = new int[count];
-                int offset = 0;
+                var offsets = new IdentityHashMap<IndexedMesh, Integer>();
+                int count = 0;
                 for (var batch : group) {
-                    int[] selected = batch.mesh().indices();
-                    System.arraycopy(selected, 0, canonical, offset, selected.length);
-                    offset += selected.length;
+                    if (!offsets.containsKey(batch.mesh())) {
+                        offsets.put(batch.mesh(), count);
+                        count += batch.mesh().indices().length;
+                    }
+                }
+                int[] canonical = new int[count];
+                for (var entry : offsets.entrySet()) {
+                    int[] selected = entry.getKey().indices();
+                    System.arraycopy(selected, 0, canonical, entry.getValue(), selected.length);
                 }
                 var mesh = new Mesh(uploadMesh(new IndexedMesh(original.vertices(), original.colors(), canonical)));
                 meshes.add(mesh);
-                offset = 0;
                 for (var batch : group) {
-                    parts.put(batch, new Part(mesh, offset));
-                    offset += batch.mesh().indices().length;
+                    parts.put(batch, new Part(mesh, offsets.get(batch.mesh()) + batch.firstIndex()));
                 }
                 vertices += original.colors().length;
                 indices += count;

@@ -5,6 +5,7 @@
 package com.unrealtrainmod.client.track;
 
 import com.unrealtrainmod.track.geometry.TrackVector;
+import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.world.phys.AABB;
 import org.joml.Matrix4f;
 
@@ -14,7 +15,8 @@ interface TrackRenderMesh extends AutoCloseable {
     TrackVector origin();
     boolean isEmpty();
     boolean isUploaded();
-    int upload(int budget);
+    /** Check for light changes and upload within budget, keeping previously uploaded buffers drawable. */
+    int upload(ClientLevel level, int budget);
     void draw(Matrix4f modelView, Matrix4f projection);
     @Override void close();
 }

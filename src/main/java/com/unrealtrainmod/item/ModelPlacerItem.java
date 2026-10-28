@@ -46,7 +46,8 @@ public final class ModelPlacerItem extends Item {
         }
         var level = context.getLevel();
         var modelId = selectedModel(context.getItemInHand());
-        if (TrainModels.find(modelId) == null) {
+        var model = TrainModels.find(modelId);
+        if (model == null) {
             if (!level.isClientSide) player.displayClientMessage(Component.translatable(
                     modelId == null ? "item.unrealtrainmod.vehicle_placer.unselected" : "item.unrealtrainmod.vehicle_placer.missing"), true);
             return InteractionResult.FAIL;
@@ -60,7 +61,9 @@ public final class ModelPlacerItem extends Item {
             if (entity == null) return InteractionResult.FAIL;
             entity.setModelId(modelId);
             float yaw = Math.round(player.getYRot() / 90f) * 90f;
-            entity.moveTo(context.getClickedPos().getX() + 0.5, hit.y,
+            // Raise the entire RTM assembly without changing source geometry or bogie offsets.
+            double placementY = hit.y + (model.parts().getFirst().source().format() == TrainModels.Format.MQO ? 1.0 : 0.0);
+            entity.moveTo(context.getClickedPos().getX() + 0.5, placementY,
                     context.getClickedPos().getZ() + 0.5, yaw, 0);
             if (!level.addFreshEntity(entity)) return InteractionResult.FAIL;
             level.playSound(null, entity.blockPosition(), SoundEvents.ARMOR_STAND_PLACE, SoundSource.BLOCKS, 0.8f, 1);

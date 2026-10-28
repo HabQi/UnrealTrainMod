@@ -12,11 +12,18 @@ import com.unrealtrainmod.network.payload.RailModelSelectionResultPayload;
 import com.unrealtrainmod.network.payload.ModelSelectionResultPayload;
 import com.unrealtrainmod.network.payload.SelectTrainModelPayload;
 import com.unrealtrainmod.registry.ModDataComponents;
+import com.unrealtrainmod.network.payload.SetTrackCurvePayload;
+import com.unrealtrainmod.track.construction.TrackConstructionManager;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionHand;
 import net.neoforged.neoforge.network.handling.IPayloadContext;
 
 public final class ServerPayloadHandlers {
     private ServerPayloadHandlers() {}
+
+    public static void setTrackCurve(SetTrackCurvePayload payload, IPayloadContext context) {
+        if (context.player() instanceof ServerPlayer player) TrackConstructionManager.setCurve(player, payload);
+    }
 
     public static void selectRailModel(SelectRailModelPayload payload, IPayloadContext context) {
         var player = context.player();

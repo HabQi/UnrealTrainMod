@@ -30,11 +30,11 @@ public final class RailPreviewRenderer implements AutoCloseable {
                 var batches = IntStream.range(0, selected.batches().size())
                         .mapToObj(i -> new RailTrackMeshData.Batch(i, selected.batches().get(i).mesh())).toList();
                 mesh = new RailTrackGpuMesh(new RailTrackMeshData(new TrackVector(0, 0, 0),
-                        new TrackMeshData.Bounds(b.minX(), b.minY(), b.minZ(), b.maxX(), b.maxY(), b.maxZ()), batches), selected);
+                        new TrackMeshData.Bounds(b.minX(), b.minY(), b.minZ(), b.maxX(), b.maxY(), b.maxZ()), batches), selected, true);
                 model = selected;
             }
             try {
-                if (!mesh.isUploaded()) mesh.upload(Integer.MAX_VALUE);
+                if (!mesh.isUploaded()) mesh.upload(null, Integer.MAX_VALUE);
                 mesh.draw(pose.last().pose(), RenderSystem.getProjectionMatrix());
             } finally {
                 VertexBuffer.unbind();

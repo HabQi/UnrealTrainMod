@@ -5,14 +5,20 @@
 package com.unrealtrainmod.track.persistence;
 
 import com.unrealtrainmod.track.TrackGraph;
+import com.unrealtrainmod.track.TrackCurveParameters;
 import com.unrealtrainmod.track.TrackNode;
 import com.unrealtrainmod.track.TrackSegment;
+import com.unrealtrainmod.track.block.TrackBlockManager;
+import com.unrealtrainmod.track.block.TrackBlockVolume;
 import com.unrealtrainmod.track.geometry.BezierTrackGeometry;
 import com.unrealtrainmod.track.geometry.TrackPoint;
 import com.unrealtrainmod.track.geometry.TrackVector;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.UUID;
+import net.minecraft.core.BlockPos;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
@@ -26,17 +32,22 @@ import net.minecraft.world.level.storage.LevelResource;
 /** Each ServerLevel owns one instance; derived geometry and indices are rebuilt on load. */
 public final class TrackSavedData extends SavedData {
     private static final String NAME = "unrealtrainmod_tracks";
-    private static final int FORMAT_VERSION = 2;
+    private static final int FORMAT_VERSION = 4;
     private static final Factory<TrackSavedData> FACTORY =
             new Factory<>(TrackSavedData::new, (tag, registries) -> load(tag));
     private final TrackGraph graph = new TrackGraph(this::setDirty);
+    private final Map<UUID, Map<BlockPos, Integer>> volumes = new HashMap<>();
+    private TrackBlockManager blocks;
 
     private TrackSavedData() {}
 
     public static TrackSavedData get(ServerLevel level) {
         var storage = level.getDataStorage();
         TrackSavedData data = storage.get(FACTORY, NAME);
-        if (data != null) return data;
+        if (data != null) {
+            data.attach(level);
+            return data;
+        }
         Path file = DimensionType.getStorageFolder(level.dimension(), level.getServer().getWorldPath(LevelResource.ROOT))
                 .resolve("data").resolve(NAME + ".dat");
         // DimensionDataStorage returns null both for absent files and for deserialization/IO errors.
@@ -44,7 +55,16 @@ public final class TrackSavedData extends SavedData {
         if (!Files.notExists(file)) throw new IllegalStateException(file.toString());
         data = new TrackSavedData();
         storage.set(NAME, data);
+        data.attach(level);
         return data;
+    }
+
+    private void attach(ServerLevel level) {
+        if (blocks == null) blocks = new TrackBlockManager(level, graph, volumes);
+    }
+
+    public TrackBlockManager blocks() {
+        return blocks;
     }
 
     public TrackGraph graph() {
@@ -52,7 +72,7 @@ public final class TrackSavedData extends SavedData {
     }
 
     private static TrackSavedData load(CompoundTag tag) {
-        if (!tag.contains("Version", Tag.TAG_INT) || (tag.getInt("Version") != 1 && tag.getInt("Version") != FORMAT_VERSION)) {
+        if (!tag.contains("Version", Tag.TAG_INT) || tag.getInt("Version") < 1 || tag.getInt("Version") > FORMAT_VERSION) {
             throw new IllegalArgumentException("Missing or unsupported track data version");
         }
         ListTag nodes = readList(tag, "Nodes"), segments = readList(tag, "Segments");
@@ -61,7 +81,7 @@ public final class TrackSavedData extends SavedData {
             CompoundTag node = nodes.getCompound(i);
             data.graph.addNode(readUuid(node, "Id"),
                     new TrackVector(readDouble(node, "X"), readDouble(node, "Y"), readDouble(node, "Z")),
-                    readDouble(node, "Gauge"));
+                    readDouble(node, "Gauge"), tag.getInt("Version") >= 3 ? readCurve(node) : null);
         }
         for (int i = 0; i < segments.size(); i++) {
             CompoundTag segment = segments.getCompound(i);
@@ -78,6 +98,9 @@ public final class TrackSavedData extends SavedData {
                 case "bezier" -> data.graph.addBezier(id, start, end,
                         readPoint(segment, "Control1"), readPoint(segment, "Control2"), modelId);
                 default -> throw new IllegalArgumentException("Unknown segment type: " + segment.getString("Type"));
+            }
+            if (tag.getInt("Version") >= 4 && segment.contains("Blocks")) {
+                data.volumes.put(id, readVolume(segment));
             }
         }
         // Do not publish a partly restored graph, or schedule a rewrite merely because it was loaded.
@@ -96,6 +119,12 @@ public final class TrackSavedData extends SavedData {
             entry.putDouble("Y", node.position().y());
             entry.putDouble("Z", node.position().z());
             entry.putDouble("Gauge", node.gauge());
+            if (node.curve() != null) {
+                CompoundTag curve = new CompoundTag();
+                curve.putDouble("Angle", node.curve().angle());
+                curve.putDouble("Length", node.curve().length());
+                entry.put("Curve", curve);
+            }
             nodes.add(entry);
         }
         tag.put("Nodes", nodes);
@@ -106,6 +135,8 @@ public final class TrackSavedData extends SavedData {
             entry.putUUID("StartNode", segment.startNodeId());
             entry.putUUID("EndNode", segment.endNodeId());
             if (segment.modelId() != null) entry.putString("ModelId", segment.modelId());
+            Map<BlockPos, Integer> volume = volumes.get(segment.id());
+            if (volume != null) writeVolume(entry, volume);
             if (segment.geometry() instanceof BezierTrackGeometry bezier) {
                 entry.putString("Type", "bezier");
                 entry.put("Control1", writePoint(bezier.control1()));
@@ -117,6 +148,45 @@ public final class TrackSavedData extends SavedData {
         }
         tag.put("Segments", segments);
         return tag;
+    }
+
+    private static Map<BlockPos, Integer> readVolume(CompoundTag segment) {
+        if (!segment.contains("Blocks", Tag.TAG_LONG_ARRAY) || !segment.contains("BlockHeights", Tag.TAG_BYTE_ARRAY)) {
+            throw new IllegalArgumentException("Invalid track volume");
+        }
+        long[] positions = segment.getLongArray("Blocks");
+        byte[] heights = segment.getByteArray("BlockHeights");
+        if (positions.length == 0 || positions.length > TrackBlockVolume.MAX_BLOCKS || positions.length != heights.length) {
+            throw new IllegalArgumentException("Invalid track volume size");
+        }
+        Map<BlockPos, Integer> volume = new HashMap<>();
+        for (int i = 0; i < positions.length; i++) {
+            int height = heights[i];
+            if (height < 1 || height > 16 || volume.put(BlockPos.of(positions[i]), height) != null) {
+                throw new IllegalArgumentException("Invalid track volume cell");
+            }
+        }
+        return volume;
+    }
+
+    private static void writeVolume(CompoundTag tag, Map<BlockPos, Integer> volume) {
+        long[] positions = new long[volume.size()];
+        byte[] heights = new byte[volume.size()];
+        int index = 0;
+        for (var cell : volume.entrySet()) {
+            positions[index] = cell.getKey().asLong();
+            heights[index] = cell.getValue().byteValue();
+            index++;
+        }
+        tag.putLongArray("Blocks", positions);
+        tag.putByteArray("BlockHeights", heights);
+    }
+
+    private static TrackCurveParameters readCurve(CompoundTag node) {
+        if (!node.contains("Curve")) return null;
+        if (!node.contains("Curve", Tag.TAG_COMPOUND)) throw new IllegalArgumentException("Invalid node curve");
+        CompoundTag curve = node.getCompound("Curve");
+        return new TrackCurveParameters(readDouble(curve, "Angle"), readDouble(curve, "Length"));
     }
 
     private static ListTag readList(CompoundTag tag, String key) {

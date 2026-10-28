@@ -60,7 +60,7 @@ public final class ModelRenderQueue implements AutoCloseable {
             pose.translate(offset.x(), offset.y(), offset.z());
             var snapshot = pose.last().copy();
             var gpu = instance.model().gpu();
-            for (var part : selection.parts()) for (var batch : part.batches()) {
+            for (var batch : selection.batches()) {
                 draws.add(new Draw(batch, customShader && gpu != null ? gpu.part(batch) : null, snapshot, light));
             }
         } finally {
@@ -81,10 +81,10 @@ public final class ModelRenderQueue implements AutoCloseable {
                 if (draw.gpu() != null) {
                     var part = draw.gpu();
                     state.prepareGpu(draw.pose(), draw.light(), alphaPass, modelView, projection);
-                    part.mesh().draw(false, part.firstIndex(), draw.batch().mesh().indices().length);
+                    part.mesh().draw(false, part.firstIndex(), draw.batch().indexCount());
                 } else {
                     state.endGpu();
-                    drawFallback(draw, alphaPass, 0, draw.batch().mesh().indices().length / 3, false);
+                    drawFallback(draw, alphaPass, 0, draw.batch().indexCount() / 3, false);
                 }
             }
         } catch (RuntimeException | Error e) {
@@ -140,13 +140,13 @@ public final class ModelRenderQueue implements AutoCloseable {
                     continue;
                 }
                 int end = start + 1;
-                int count = draw.batch().mesh().indices().length;
+                int count = draw.batch().indexCount();
                 if (draw.gpu() != null) {
                     while (end < draws.size()) {
                         var next = draws.get(end);
                         if (next.batch().category() == RenderCategory.CUTOUT || !canMerge(draw, next)
                                 || next.gpu().firstIndex() != draw.gpu().firstIndex() + count) break;
-                        count += next.batch().mesh().indices().length;
+                        count += next.batch().indexCount();
                         end++;
                     }
                 }
@@ -232,7 +232,7 @@ public final class ModelRenderQueue implements AutoCloseable {
             if (draw.gpu() == null) continue;
             var mesh = draw.gpu().mesh();
             if (sortedMeshes.put(mesh, Boolean.TRUE) == null) mesh.beginSortedIndices();
-            gpuOffset[i] = mesh.appendTriangle(draw.batch().mesh().indices(), triangleIndex[triangle]);
+            gpuOffset[i] = mesh.appendTriangle(draw.batch().mesh().indices(), draw.batch().firstIndex() / 3 + triangleIndex[triangle]);
         }
         sortedMeshes.keySet().forEach(GpuModel.Mesh::uploadSortedIndices);
     }
@@ -250,7 +250,7 @@ public final class ModelRenderQueue implements AutoCloseable {
         for (int t = start; t < end; t++) {
             int triangle = sorted ? triangleIndex[order[t]] : t;
             for (int corner = 0; corner < 3; corner++) {
-                int v = indices[triangle * 3 + corner], i = v * 8;
+                int v = indices[draw.batch().firstIndex() + triangle * 3 + corner], i = v * 8;
                 float x = vertices[i], y = vertices[i + 1], z = vertices[i + 2];
                 float nx = vertices[i + 5], ny = vertices[i + 6], nz = vertices[i + 7];
                 if (!customShader) {

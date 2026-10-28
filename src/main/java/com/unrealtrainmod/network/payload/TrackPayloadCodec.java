@@ -5,6 +5,7 @@
 package com.unrealtrainmod.network.payload;
 
 import com.unrealtrainmod.track.TrackSegment;
+import com.unrealtrainmod.track.TrackCurveParameters;
 import com.unrealtrainmod.track.TrackSegmentData;
 import com.unrealtrainmod.track.geometry.TrackPoint;
 import com.unrealtrainmod.track.geometry.TrackVector;
@@ -13,6 +14,18 @@ import net.minecraft.network.RegistryFriendlyByteBuf;
 
 final class TrackPayloadCodec {
     private TrackPayloadCodec() {}
+
+    static void writeCurve(RegistryFriendlyByteBuf buffer, TrackCurveParameters curve) {
+        buffer.writeBoolean(curve != null);
+        if (curve != null) {
+            buffer.writeDouble(curve.angle());
+            buffer.writeDouble(curve.length());
+        }
+    }
+
+    static TrackCurveParameters readCurve(RegistryFriendlyByteBuf buffer) {
+        return buffer.readBoolean() ? new TrackCurveParameters(buffer.readDouble(), buffer.readDouble()) : null;
+    }
 
     static void write(RegistryFriendlyByteBuf buffer, TrackSegmentData data) {
         buffer.writeUUID(data.id());

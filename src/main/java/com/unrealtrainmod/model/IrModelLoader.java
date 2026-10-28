@@ -15,7 +15,6 @@ import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.Map;
 import java.util.regex.Pattern;
 import java.util.zip.ZipEntry;
@@ -37,14 +36,15 @@ public final class IrModelLoader {
              var reader = new InputStreamReader(zip.getInputStream(requireEntry(zip, asset.entry())), StandardCharsets.UTF_8.newDecoder())) {
             var raw = ObjParser.parse(reader, asset.entry(), path -> openMaterial(zip, path));
             var textures = new HashMap<String, TrainModels.Texture>();
-            var missing = new HashSet<String>();
+            var textureEntries = new HashMap<String, ZipEntry>();
             for (var material : raw.materials()) {
-                if (material.texture() == null) continue;
-                var entry = zip.getEntry(material.texture());
-                if (entry != null && !entry.isDirectory()) {
+                String path = material.texture();
+                if (path == null) continue;
+                // Cache failed lookups too, so shared references produce one warning per model load.
+                if (!textureEntries.containsKey(path)) textureEntries.put(path, findTexture(zip, asset, path));
+                var entry = textureEntries.get(path);
+                if (entry != null) {
                     textures.put(material.name(), new TrainModels.Texture(new RtmAsset(asset.archive(), entry.getName()), false));
-                } else if (missing.add(material.texture())) {
-                    UnrealTrainMod.LOGGER.warn("IR {}: missing texture '{}'; using material color", asset, material.texture());
                 }
             }
             var parts = new ArrayList<ModelData.Part>();
@@ -68,6 +68,24 @@ public final class IrModelLoader {
     /** Cargo volumes and explicitly hidden controls are retained for named-part callers, but not drawn by default. */
     static boolean isVisible(String name) {
         return !name.contains("CARGO_ITEMS_") && !name.contains("CARGO_FILL_") && !HIDDEN.matcher(name).find();
+    }
+
+    private static ZipEntry findTexture(ZipFile zip, RtmAsset model, String path) {
+        var exact = zip.getEntry(path);
+        if (exact != null && !exact.isDirectory()) return exact;
+        var matches = zip.stream().filter(entry -> !entry.isDirectory() && entry.getName().equalsIgnoreCase(path))
+                .limit(2).toList();
+        if (matches.size() == 1) {
+            var entry = matches.getFirst();
+            UnrealTrainMod.LOGGER.warn("IR {}: texture '{}' matched ZIP entry '{}' ignoring case", model, path, entry.getName());
+            return entry;
+        }
+        if (matches.isEmpty()) {
+            UnrealTrainMod.LOGGER.warn("IR {}: missing texture '{}'; using material color", model, path);
+        } else {
+            UnrealTrainMod.LOGGER.warn("IR {}: ambiguous case-insensitive texture '{}'; using material color", model, path);
+        }
+        return null;
     }
 
     private static Reader openMaterial(ZipFile zip, String path) throws IOException {

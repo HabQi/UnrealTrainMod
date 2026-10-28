@@ -29,6 +29,7 @@ public final class TrackGraph {
     private final Map<Long, Set<UUID>> chunks = new HashMap<>();
     private final Runnable onChange;
     private final List<Consumer<TrackSegmentChange>> segmentListeners = new ArrayList<>();
+    private Consumer<TrackSegment> segmentValidator = segment -> {};
 
     public TrackGraph() {
         this(() -> {});
@@ -39,7 +40,11 @@ public final class TrackGraph {
     }
 
     public TrackNode addNode(UUID id, TrackVector position, double gauge) {
-        TrackNode node = new TrackNode(id, position, gauge);
+        return addNode(id, position, gauge, null);
+    }
+
+    public TrackNode addNode(UUID id, TrackVector position, double gauge, TrackCurveParameters curve) {
+        TrackNode node = new TrackNode(id, position, gauge, curve);
         if (nodes.containsKey(id)) throw new TrackGraphException(TrackGraphException.Reason.DUPLICATE_ID);
         insertNode(node);
         onChange.run();
@@ -65,14 +70,32 @@ public final class TrackGraph {
     }
 
     public TrackSegment addStraight(UUID id, TrackPlacementEndpoint start, TrackPlacementEndpoint end, double gauge, String modelId) {
+        return addPlacement(id, start, end, gauge, modelId, null, null, false, false);
+    }
+
+    public TrackSegment addPlacement(UUID id, TrackPlacementEndpoint start, TrackPlacementEndpoint end, double gauge,
+                                     String modelId, TrackCurveParameters startCurve, TrackCurveParameters endCurve,
+                                     boolean startEdited, boolean endEdited) {
         TrackNode a = placementNode(start, gauge), b = placementNode(end, gauge);
         if ((start.nodeId() == null && nodes.containsKey(a.id()))
                 || (end.nodeId() == null && nodes.containsKey(b.id()))) {
             throw new TrackGraphException(TrackGraphException.Reason.DUPLICATE_ID);
         }
-        TrackSegment segment = prepareSegment(id, a, b, null, null, modelId);
-        if (start.nodeId() == null) insertNode(a);
-        if (end.nodeId() == null) insertNode(b);
+        TrackGeometry geometry = TrackPlacementGeometry.create(a.position(), b.position(), gauge, startCurve, endCurve);
+        if (geometry.getLength() > TrackPlacementGeometry.MAX_LENGTH) {
+            throw new IllegalArgumentException("Construction track exceeds 256 blocks");
+        }
+        TrackPoint control1 = geometry instanceof BezierTrackGeometry bezier ? bezier.control1() : null;
+        TrackPoint control2 = geometry instanceof BezierTrackGeometry bezier ? bezier.control2() : null;
+        TrackSegment segment = prepareSegment(id, a, b, control1, control2, modelId, geometry);
+        TrackNode updatedA = start.nodeId() == null || startEdited
+                ? new TrackNode(a.id(), a.position(), gauge, startCurve) : a;
+        TrackNode updatedB = end.nodeId() == null || endEdited
+                ? new TrackNode(b.id(), b.position(), gauge, endCurve) : b;
+        if (start.nodeId() == null) insertNode(updatedA);
+        else if (startEdited) nodes.put(a.id(), updatedA);
+        if (end.nodeId() == null) insertNode(updatedB);
+        else if (endEdited) nodes.put(b.id(), updatedB);
         return insertSegment(segment);
     }
 
@@ -96,6 +119,11 @@ public final class TrackGraph {
 
     private TrackSegment prepareSegment(UUID id, TrackNode start, TrackNode end,
                                         TrackPoint control1, TrackPoint control2, String modelId) {
+        return prepareSegment(id, start, end, control1, control2, modelId, null);
+    }
+
+    private TrackSegment prepareSegment(UUID id, TrackNode start, TrackNode end,
+                                        TrackPoint control1, TrackPoint control2, String modelId, TrackGeometry preparedGeometry) {
         Objects.requireNonNull(id);
         if (modelId != null && modelId.isBlank()) throw new IllegalArgumentException("Blank track model ID");
         if (segments.containsKey(id)) throw new TrackGraphException(TrackGraphException.Reason.DUPLICATE_ID);
@@ -103,12 +131,17 @@ public final class TrackGraph {
         if (start.gauge() != end.gauge()) throw new TrackGraphException(TrackGraphException.Reason.GAUGE_MISMATCH);
         TrackPoint a = new TrackPoint(start.position().x(), start.position().z());
         TrackPoint b = new TrackPoint(end.position().x(), end.position().z());
-        LinearGrade grade = new LinearGrade(start.position().y(), end.position().y());
         TrackChunkBounds bounds = control1 == null ? TrackChunkBounds.of(a, b)
                 : TrackChunkBounds.of(a, control1, control2, b);
-        TrackGeometry geometry = control1 == null ? new StraightTrackGeometry(a, b, grade, start.gauge())
-                : new BezierTrackGeometry(a, control1, control2, b, grade, start.gauge());
-        return new TrackSegment(id, start.id(), end.id(), geometry, bounds, modelId);
+        TrackGeometry geometry = preparedGeometry;
+        if (geometry == null) {
+            LinearGrade grade = new LinearGrade(start.position().y(), end.position().y());
+            geometry = control1 == null ? new StraightTrackGeometry(a, b, grade, start.gauge())
+                    : new BezierTrackGeometry(a, control1, control2, b, grade, start.gauge());
+        }
+        TrackSegment segment = new TrackSegment(id, start.id(), end.id(), geometry, bounds, modelId);
+        segmentValidator.accept(segment);
+        return segment;
     }
 
     private TrackSegment insertSegment(TrackSegment segment) {
@@ -128,6 +161,12 @@ public final class TrackGraph {
         segments.remove(id);
         connections.get(segment.startNodeId()).removeIf(connection -> connection.segmentId().equals(id));
         connections.get(segment.endNodeId()).removeIf(connection -> connection.segmentId().equals(id));
+        for (UUID nodeId : List.of(segment.startNodeId(), segment.endNodeId())) {
+            if (connections.get(nodeId).isEmpty()) {
+                nodes.remove(nodeId);
+                connections.remove(nodeId);
+            }
+        }
         segment.chunkBounds().forEachChunk(key -> {
             Set<UUID> indexed = chunks.get(key);
             indexed.remove(id);
@@ -139,6 +178,11 @@ public final class TrackGraph {
 
     public void addSegmentListener(Consumer<TrackSegmentChange> listener) {
         segmentListeners.add(Objects.requireNonNull(listener));
+    }
+
+    /** Runs before any placement node or segment is committed. Installed after saved graph restoration. */
+    public void setSegmentValidator(Consumer<TrackSegment> validator) {
+        segmentValidator = Objects.requireNonNull(validator);
     }
 
     public void removeSegmentListener(Consumer<TrackSegmentChange> listener) {

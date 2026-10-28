@@ -28,9 +28,11 @@ final class TrackRenderTypes extends RenderStateShard {
     }
 
     static void clearTextures() { TEXTURED.clear(); }
-    static final RenderType OPAQUE = RenderType.create("utm_track", DefaultVertexFormat.POSITION_COLOR,
+    static final RenderType OPAQUE = RenderType.create("utm_track", DefaultVertexFormat.POSITION_COLOR_LIGHTMAP,
             VertexFormat.Mode.QUADS, 1536, false, false, RenderType.CompositeState.builder()
-                    .setShaderState(POSITION_COLOR_SHADER)
+                    // This vanilla shader consumes packed block/sky UV2 and needs no surface texture or normals.
+                    .setShaderState(RENDERTYPE_TEXT_BACKGROUND_SHADER)
+                    .setLightmapState(LIGHTMAP)
                     .setTransparencyState(NO_TRANSPARENCY)
                     .setDepthTestState(LEQUAL_DEPTH_TEST)
                     .setWriteMaskState(COLOR_DEPTH_WRITE)

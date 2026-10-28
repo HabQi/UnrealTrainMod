@@ -14,6 +14,7 @@ import com.mojang.blaze3d.vertex.VertexFormat;
 import com.unrealtrainmod.track.geometry.TrackVector;
 import com.unrealtrainmod.track.mesh.RailTrackMeshData;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.renderer.LightTexture;
 import net.minecraft.client.renderer.texture.OverlayTexture;
 import net.minecraft.world.phys.AABB;
@@ -29,14 +30,17 @@ final class RailTrackGpuMesh implements TrackRenderMesh {
     private final ClientRailModelManager.Model model;
     private final AABB bounds;
     private final VertexBuffer[] buffers;
+    private final TrackLighting lighting;
     private int uploaded;
+    private int nextUpload;
 
-    RailTrackGpuMesh(RailTrackMeshData data, ClientRailModelManager.Model model) {
+    RailTrackGpuMesh(RailTrackMeshData data, ClientRailModelManager.Model model, boolean fullBright) {
         this.data = data;
         this.model = model;
         var b = data.bounds();
         bounds = new AABB(b.minX(), b.minY(), b.minZ(), b.maxX(), b.maxY(), b.maxZ()).inflate(0.001);
         buffers = new VertexBuffer[data.batches().size()];
+        lighting = fullBright ? null : new TrackLighting(data.origin());
     }
 
     @Override public AABB bounds() { return bounds; }
@@ -45,26 +49,34 @@ final class RailTrackGpuMesh implements TrackRenderMesh {
     @Override public boolean isUploaded() { return uploaded == buffers.length; }
 
     @Override
-    public int upload(int budget) {
+    public int upload(ClientLevel level, int budget) {
+        if (lighting != null && nextUpload == buffers.length && lighting.refresh(level)) nextUpload = 0;
+        if (budget == 0 || nextUpload == buffers.length) return 0;
         int used = 0;
         try {
-            while (used < budget && uploaded < buffers.length) {
-                var mesh = data.batches().get(uploaded).mesh();
-                var buffer = new VertexBuffer(VertexBuffer.Usage.STATIC);
-                buffers[uploaded] = buffer;
+            while (used < budget && nextUpload < buffers.length) {
+                var mesh = data.batches().get(nextUpload).mesh();
+                var buffer = buffers[nextUpload];
+                if (buffer == null) {
+                    buffer = new VertexBuffer(VertexBuffer.Usage.STATIC);
+                    buffers[nextUpload] = buffer;
+                }
                 try (var bytes = new ByteBufferBuilder(Math.multiplyExact(mesh.indices().length, DefaultVertexFormat.NEW_ENTITY.getVertexSize()))) {
                     var builder = new BufferBuilder(bytes, VertexFormat.Mode.TRIANGLES, DefaultVertexFormat.NEW_ENTITY);
                     float[] v = mesh.vertices();
                     for (int index : mesh.indices()) {
                         int i = index * 8;
+                        int light = lighting == null ? LightTexture.FULL_BRIGHT
+                                : lighting.sample(level, v[i], v[i + 1], v[i + 2], v[i + 5], v[i + 6], v[i + 7]);
                         builder.addVertex(v[i], v[i + 1], v[i + 2]).setColor(mesh.colors()[index])
-                                .setUv(v[i + 3], v[i + 4]).setOverlay(OverlayTexture.NO_OVERLAY).setLight(LightTexture.FULL_BRIGHT)
+                                .setUv(v[i + 3], v[i + 4]).setOverlay(OverlayTexture.NO_OVERLAY).setLight(light)
                                 .setNormal(v[i + 5], v[i + 6], v[i + 7]);
                     }
                     buffer.bind();
                     buffer.upload(builder.buildOrThrow());
                 }
-                uploaded++;
+                nextUpload++;
+                uploaded = Math.max(uploaded, nextUpload);
                 used++;
             }
         } catch (RuntimeException | Error exception) {
@@ -87,7 +99,7 @@ final class RailTrackGpuMesh implements TrackRenderMesh {
                 Vector3f previousLight0 = readLight(shader.LIGHT0_DIRECTION);
                 Vector3f previousLight1 = readLight(shader.LIGHT1_DIRECTION);
                 try {
-                    // AFTER_SOLID_BLOCKS precedes Lighting.setupLevel(). FULL_BRIGHT only controls the lightmap.
+                    // AFTER_SOLID_BLOCKS precedes Lighting.setupLevel(); diffuse shading is separate from world light.
                     if (previousLight0 != null) shader.LIGHT0_DIRECTION.set(LIGHT_0);
                     if (previousLight1 != null) shader.LIGHT1_DIRECTION.set(LIGHT_1);
                     shader.apply();
@@ -114,5 +126,6 @@ final class RailTrackGpuMesh implements TrackRenderMesh {
             buffers[i] = null;
         }
         uploaded = 0;
+        nextUpload = 0;
     }
 }

@@ -10,13 +10,15 @@ import com.unrealtrainmod.model.RailModels;
 import com.unrealtrainmod.network.payload.TrackConstructionPayload;
 import com.unrealtrainmod.network.payload.TrackConstructionPayload.Feedback;
 import com.unrealtrainmod.network.payload.TrackConstructionPayload.Phase;
+import com.unrealtrainmod.network.payload.OpenTrackCurvePayload;
+import com.unrealtrainmod.network.payload.SetTrackCurvePayload;
+import com.unrealtrainmod.network.payload.TrackCurveResultPayload;
+import com.unrealtrainmod.track.TrackCurveParameters;
 import com.unrealtrainmod.track.TrackGraph;
 import com.unrealtrainmod.track.TrackGraphException;
 import com.unrealtrainmod.track.TrackNode;
 import com.unrealtrainmod.track.TrackPlacementEndpoint;
-import com.unrealtrainmod.track.geometry.LinearGrade;
-import com.unrealtrainmod.track.geometry.StraightTrackGeometry;
-import com.unrealtrainmod.track.geometry.TrackPoint;
+import com.unrealtrainmod.track.TrackPlacementGeometry;
 import com.unrealtrainmod.track.geometry.TrackVector;
 import com.unrealtrainmod.track.persistence.TrackSavedData;
 import java.util.HashMap;
@@ -29,6 +31,9 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.item.context.UseOnContext;
+import net.minecraft.world.level.ClipContext;
+import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.Vec3;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.neoforge.common.util.TriState;
 import net.neoforged.neoforge.event.entity.player.PlayerEvent;
@@ -42,7 +47,8 @@ import net.neoforged.neoforge.network.PacketDistributor;
 public final class TrackConstructionManager {
     private static final double DEFAULT_GAUGE = 1.435;
     private static final double SNAP_DISTANCE_SQUARED = 0.75 * 0.75;
-    private static final double MAX_LENGTH = 256;
+    private static final double NODE_HIT_RADIUS = 0.2;
+    private static final UUID EMPTY_REVISION = new UUID(0, 0);
     private static final Map<UUID, Session> SESSIONS = new HashMap<>();
 
     private TrackConstructionManager() {}
@@ -60,7 +66,8 @@ public final class TrackConstructionManager {
     private static void rightClickBlock(PlayerInteractEvent.RightClickBlock event) {
         if (event.getHand() == InteractionHand.MAIN_HAND
                 && (event.getItemStack().is(UnrealTrainMod.TRACK_BUILDER.get())
-                || event.getItemStack().is(UnrealTrainMod.RAIL_PLACER.get()))) {
+                || event.getItemStack().is(UnrealTrainMod.RAIL_PLACER.get())
+                || event.getItemStack().is(UnrealTrainMod.TRACK_WRENCH.get()))) {
             event.setUseBlock(TriState.FALSE);
         }
     }
@@ -111,14 +118,142 @@ public final class TrackConstructionManager {
         if (session == null) {
             session = new Session(player, selected);
             session.gauge = selected.nodeId() == null ? DEFAULT_GAUGE : graph.node(selected.nodeId()).gauge();
+            session.startCurve = savedCurve(graph, selected);
             SESSIONS.put(player.getUUID(), session);
             publish(player, session, Feedback.START);
         } else if (refreshStart(player, graph, session)) {
             session.end = selected;
+            session.endCurve = savedCurve(graph, selected);
+            session.endEdited = false;
+            session.changed();
             Feedback result = validate(graph, session);
-            session.ready = result == Feedback.READY;
             publish(player, session, result);
         }
+    }
+
+    private static TrackCurveParameters savedCurve(TrackGraph graph, TrackPlacementEndpoint endpoint) {
+        return endpoint.nodeId() == null ? null : graph.node(endpoint.nodeId()).curve();
+    }
+
+    public static void edit(ServerPlayer player) {
+        if (!player.isAlive() || !player.getMainHandItem().is(UnrealTrainMod.TRACK_WRENCH.get())) {
+            publish(player, SESSIONS.get(player.getUUID()), Feedback.INVALID_ITEM);
+            return;
+        }
+        if (!player.hasPermissions(2)) {
+            clear(player, Feedback.NO_PERMISSION);
+            return;
+        }
+        if (player.isShiftKeyDown()) {
+            clear(player, Feedback.CANCELLED);
+            return;
+        }
+        Session session = SESSIONS.get(player.getUUID());
+        if (session == null || !session.matches(player)) {
+            clear(player, Feedback.NO_DRAFT);
+            return;
+        }
+        TrackGraph graph = graph(player);
+        if (graph == null || !refreshStart(player, graph, session) || !refreshEnd(player, graph, session)) return;
+        Vec3 eye = player.getEyePosition();
+        Vec3 rayEnd = eye.add(player.getLookAngle().scale(player.blockInteractionRange()));
+        Vec3 visibleEnd = player.serverLevel().clip(new ClipContext(eye, rayEnd,
+                ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, player)).getLocation();
+        double startHit = hitDistance(session.start, eye, visibleEnd);
+        double endHit = session.end == null ? Double.POSITIVE_INFINITY : hitDistance(session.end, eye, visibleEnd);
+        if (!Double.isFinite(Math.min(startHit, endHit))) {
+            publish(player, session, Feedback.AIM_NODE);
+            return;
+        }
+        boolean start = startHit <= endHit;
+        TrackPlacementEndpoint selected = start ? session.start : session.end;
+        if (!canEditPoint(player, selected.position())) {
+            publish(player, session, Feedback.INVALID_POINT);
+            return;
+        }
+        session.editorId = UUID.randomUUID();
+        session.editStart = start;
+        TrackCurveParameters curve = start ? session.startCurve : session.endCurve;
+        TrackPlacementEndpoint other = start ? session.end : session.start;
+        TrackCurveParameters initial = curve != null ? curve : TrackPlacementGeometry.defaults(
+                selected.position(), other == null ? null : other.position(), player.getYRot());
+        Feedback feedback = session.end == null ? Feedback.START : validate(graph, session);
+        publish(player, session, feedback);
+        PacketDistributor.sendToPlayer(player, new OpenTrackCurvePayload(player.serverLevel().dimension().location(),
+                session.revision, session.editorId, start, curve == null, initial));
+    }
+
+    private static double hitDistance(TrackPlacementEndpoint endpoint, Vec3 eye, Vec3 end) {
+        var p = endpoint.position();
+        AABB box = new AABB(p.x() - NODE_HIT_RADIUS, p.y() - NODE_HIT_RADIUS, p.z() - NODE_HIT_RADIUS,
+                p.x() + NODE_HIT_RADIUS, p.y() + NODE_HIT_RADIUS, p.z() + NODE_HIT_RADIUS);
+        if (box.contains(eye)) return 0;
+        return box.clip(eye, end).map(eye::distanceToSqr).orElse(Double.POSITIVE_INFINITY);
+    }
+
+    private static boolean canEditPoint(ServerPlayer player, TrackVector position) {
+        if (!validPosition(player.serverLevel(), position)) return false;
+        Vec3 eye = player.getEyePosition(), point = new Vec3(position.x(), position.y(), position.z());
+        double distance = eye.distanceTo(point);
+        if (distance > player.blockInteractionRange() + NODE_HIT_RADIUS) return false;
+        var hit = player.serverLevel().clip(new ClipContext(eye, point,
+                ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, player));
+        return eye.distanceTo(hit.getLocation()) + 1e-6 >= distance;
+    }
+
+    public static void setCurve(ServerPlayer player, SetTrackCurvePayload payload) {
+        Session session = SESSIONS.get(player.getUUID());
+        Feedback error = null;
+        if (!player.isAlive() || !player.hasPermissions(2)) error = Feedback.NO_PERMISSION;
+        else if (!player.getMainHandItem().is(UnrealTrainMod.TRACK_WRENCH.get())) error = Feedback.INVALID_ITEM;
+        else if (session == null || !session.matches(player)
+                || !player.serverLevel().dimension().location().equals(payload.dimension())
+                || !session.revision.equals(payload.revision()) || !payload.editorId().equals(session.editorId)
+                || payload.start() != session.editStart || (!payload.start() && session.end == null)) {
+            error = Feedback.STALE_EDIT;
+        }
+        if (error != null) {
+            curveResult(player, payload, false, error);
+            return;
+        }
+        TrackGraph graph = graph(player);
+        if (graph == null) {
+            curveResult(player, payload, false, Feedback.STORAGE);
+            return;
+        }
+        if (!refreshStart(player, graph, session) || !refreshEnd(player, graph, session)) {
+            curveResult(player, payload, false, Feedback.STALE_EDIT);
+            return;
+        }
+        var endpoint = payload.start() ? session.start : session.end;
+        if (!canEditPoint(player, endpoint.position())) {
+            curveResult(player, payload, false, Feedback.INVALID_POINT);
+            return;
+        }
+        TrackCurveParameters curve;
+        try {
+            // Even an automatic request must carry finite, bounded numeric values.
+            curve = new TrackCurveParameters(payload.angle(), payload.length());
+        } catch (IllegalArgumentException exception) {
+            curveResult(player, payload, false, Feedback.INVALID_PARAMETERS);
+            return;
+        }
+        if (payload.automatic()) curve = null;
+        if (payload.start()) {
+            session.startCurve = curve;
+            session.startEdited = true;
+        } else {
+            session.endCurve = curve;
+            session.endEdited = true;
+        }
+        session.changed();
+        Feedback feedback = session.end == null ? Feedback.START : validate(graph, session);
+        publish(player, session, feedback);
+        curveResult(player, payload, true, feedback);
+    }
+
+    private static void curveResult(ServerPlayer player, SetTrackCurvePayload payload, boolean accepted, Feedback feedback) {
+        PacketDistributor.sendToPlayer(player, new TrackCurveResultPayload(payload.editorId(), accepted, feedback));
     }
 
     public static void place(ServerPlayer player) {
@@ -139,7 +274,7 @@ public final class TrackConstructionManager {
             clear(player, Feedback.CLEARED);
             session = null;
         }
-        if (session == null || !session.ready) {
+        if (session == null || session.validation != Feedback.READY) {
             publish(player, session, Feedback.LINE_NOT_READY);
             return;
         }
@@ -205,6 +340,11 @@ public final class TrackConstructionManager {
     }
 
     private static Feedback validate(TrackGraph graph, Session session) {
+        session.validation = validateGeometry(graph, session);
+        return session.validation;
+    }
+
+    private static Feedback validateGeometry(TrackGraph graph, Session session) {
         var a = session.start;
         var b = session.end;
         if (a.nodeId() != null && a.nodeId().equals(b.nodeId())) return Feedback.SAME_NODE;
@@ -213,10 +353,9 @@ public final class TrackConstructionManager {
         session.gauge = a.nodeId() != null ? gaugeA : gaugeB;
         if (a.nodeId() != null && b.nodeId() != null && gaugeA != gaugeB) return Feedback.GAUGE_MISMATCH;
         try {
-            var geometry = new StraightTrackGeometry(new TrackPoint(a.position().x(), a.position().z()),
-                    new TrackPoint(b.position().x(), b.position().z()),
-                    new LinearGrade(a.position().y(), b.position().y()), session.gauge);
-            return geometry.getLength() <= MAX_LENGTH ? Feedback.READY : Feedback.TOO_LONG;
+            var geometry = TrackPlacementGeometry.create(a.position(), b.position(), session.gauge,
+                    session.startCurve, session.endCurve);
+            return geometry.getLength() <= TrackPlacementGeometry.MAX_LENGTH ? Feedback.READY : Feedback.TOO_LONG;
         } catch (IllegalArgumentException exception) {
             return Feedback.INVALID_GEOMETRY;
         }
@@ -224,45 +363,65 @@ public final class TrackConstructionManager {
 
     private static void confirm(ServerPlayer player, Session session, String modelId) {
         TrackGraph graph = graph(player);
-        if (graph == null || !refreshStart(player, graph, session)) return;
-        try {
-            session.end = refresh(graph, session.end);
-        } catch (TrackGraphException exception) {
-            rejectEnd(player, session, Feedback.STALE_END);
-            return;
-        }
-        if (!validPosition(player.serverLevel(), session.end.position())) {
-            rejectEnd(player, session, Feedback.STALE_END);
-            return;
-        }
+        if (graph == null || !refreshStart(player, graph, session) || !refreshEnd(player, graph, session)) return;
         Feedback result = validate(graph, session);
         if (result != Feedback.READY) {
-            rejectEnd(player, session, result);
+            publish(player, session, result);
             return;
         }
         // All input validation precedes the graph's atomic commit; sync sees both endpoint nodes.
         UUID id = UUID.randomUUID();
         try {
-            graph.addStraight(id, session.start, session.end, session.gauge, modelId);
+            graph.addPlacement(id, session.start, session.end, session.gauge, modelId,
+                    session.startCurve, session.endCurve, session.startEdited, session.endEdited);
         } catch (TrackGraphException exception) {
-            rejectEnd(player, session, Feedback.INVALID_GEOMETRY);
+            Feedback feedback = switch (exception.reason()) {
+                case BLOCKED_VOLUME -> Feedback.BLOCKED_VOLUME;
+                case UNLOADED_VOLUME -> Feedback.UNLOADED_VOLUME;
+                case VOLUME_TOO_LARGE -> Feedback.VOLUME_TOO_LARGE;
+                case INVALID_POSITION -> Feedback.INVALID_POINT;
+                default -> Feedback.INVALID_GEOMETRY;
+            };
+            publish(player, session, feedback);
+            return;
+        } catch (IllegalArgumentException exception) {
+            session.validation = Feedback.INVALID_GEOMETRY;
+            publish(player, session, Feedback.INVALID_GEOMETRY);
             return;
         }
         clear(player, Feedback.CREATED);
         player.sendSystemMessage(Component.translatable("item.unrealtrainmod.track_builder.created", id.toString()));
     }
 
+    private static boolean refreshEnd(ServerPlayer player, TrackGraph graph, Session session) {
+        if (session.end == null) return true;
+        try {
+            session.end = refresh(graph, session.end);
+            if (validPosition(player.serverLevel(), session.end.position())) return true;
+        } catch (TrackGraphException exception) {
+            // The selected end can disappear while its preview is being edited.
+        }
+        rejectEnd(player, session, Feedback.STALE_END);
+        return false;
+    }
+
     private static void rejectEnd(ServerPlayer player, Session session, Feedback feedback) {
         session.end = null;
-        session.ready = false;
+        session.endCurve = null;
+        session.endEdited = false;
+        session.validation = Feedback.START;
+        session.changed();
         publish(player, session, feedback);
     }
 
     private static void publish(ServerPlayer player, Session session, Feedback feedback) {
         PacketDistributor.sendToPlayer(player, new TrackConstructionPayload(player.serverLevel().dimension().location(),
-                session == null ? Phase.EMPTY : session.ready ? Phase.READY : Phase.START,
+                session == null ? Phase.EMPTY : session.validation == Feedback.READY ? Phase.READY : Phase.START,
                 session == null ? null : session.start, session == null ? null : session.end,
-                session == null ? DEFAULT_GAUGE : session.gauge, feedback));
+                session == null ? DEFAULT_GAUGE : session.gauge, feedback,
+                session == null ? EMPTY_REVISION : session.revision,
+                session == null ? null : session.startCurve, session == null ? null : session.endCurve,
+                session == null ? Feedback.START : session.validation));
     }
 
     private static void clear(ServerPlayer player, Feedback feedback) {
@@ -302,13 +461,25 @@ public final class TrackConstructionManager {
         final ServerLevel level;
         TrackPlacementEndpoint start;
         TrackPlacementEndpoint end;
+        TrackCurveParameters startCurve;
+        TrackCurveParameters endCurve;
+        boolean startEdited;
+        boolean endEdited;
+        UUID revision = UUID.randomUUID();
+        UUID editorId;
+        boolean editStart;
         double gauge;
-        boolean ready;
+        Feedback validation = Feedback.START;
 
         Session(ServerPlayer player, TrackPlacementEndpoint start) {
             this.player = player;
             level = player.serverLevel();
             this.start = start;
+        }
+
+        void changed() {
+            revision = UUID.randomUUID();
+            editorId = null;
         }
 
         boolean matches(ServerPlayer current) {

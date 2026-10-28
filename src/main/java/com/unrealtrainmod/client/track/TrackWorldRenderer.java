@@ -16,7 +16,7 @@ import net.minecraft.world.level.ChunkPos;
 import net.neoforged.neoforge.client.event.RenderLevelStageEvent;
 import org.joml.Matrix4f;
 
-/** Independent opaque pass; vertices are generated/uploaded once and reused on ordinary frames. */
+/** Independent opaque pass; static geometry is reused, with budgeted light updates. */
 public final class TrackWorldRenderer {
     private static final int BUILDS_PER_FRAME = 4;
     private static final int UPLOADS_PER_FRAME = 4;
@@ -50,11 +50,9 @@ public final class TrackWorldRenderer {
                         builds--;
                     }
                     if (mesh.isEmpty() || !event.getFrustum().isVisible(mesh.bounds())) continue;
-                    if (!mesh.isUploaded()) {
-                        if (uploads == 0) continue;
-                        uploads -= mesh.upload(uploads);
-                        if (!mesh.isUploaded()) continue;
-                    }
+                    // Uploaded meshes also check for local light changes; old buffers remain drawable during updates.
+                    uploads -= mesh.upload(level, uploads);
+                    if (!mesh.isUploaded()) continue;
                     var origin = mesh.origin();
                     modelView.set(event.getModelViewMatrix()).translate((float)(origin.x() - camera.x),
                             (float)(origin.y() - camera.y), (float)(origin.z() - camera.z));
@@ -75,7 +73,7 @@ public final class TrackWorldRenderer {
             if (model != null) {
                 try {
                     return new RailTrackGpuMesh(RailTrackMeshBuilder.build(entry.geometry,
-                            model.batches().stream().map(ClientRailModelManager.Batch::mesh).toList(), x, z), model);
+                            model.batches().stream().map(ClientRailModelManager.Batch::mesh).toList(), x, z), model, false);
                 } catch (IllegalArgumentException exception) {
                     UnrealTrainMod.LOGGER.warn("Cannot build RTM rail {} using {} in chunk {}, {}: {}; using native appearance",
                             id, modelId, x, z, exception.getMessage());

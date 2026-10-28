@@ -18,6 +18,8 @@ import com.unrealtrainmod.model.MqoParser;
 import com.unrealtrainmod.model.RtmAsset;
 import com.unrealtrainmod.model.TrainModels;
 import it.unimi.dsi.fastutil.ints.IntArrayList;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -29,6 +31,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.IntPredicate;
+import javax.imageio.ImageIO;
+import javax.imageio.stream.MemoryCacheImageInputStream;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.texture.DynamicTexture;
 import net.minecraft.resources.ResourceLocation;
@@ -43,12 +47,23 @@ public final class ClientModelManager extends SimplePreparableReloadListener<Cli
     private Map<TrainModels.Source, LoadedSource> sources = Map.of();
     private Set<ResourceLocation> textures = Set.of();
 
-    /** A null mode retains the legacy package policy; category describes the classified geometry. */
-    public record RenderBatch(IndexedMesh mesh, ResourceLocation texture, RenderCategory category,
+    /** firstIndex/indexCount address mesh indices, not bytes. A null mode retains the legacy package policy. */
+    public record RenderBatch(IndexedMesh mesh, int firstIndex, int indexCount, ResourceLocation texture, RenderCategory category,
                               MaterialRenderMode mode, boolean doubleSided, float[] centers) {
         public RenderBatch(IndexedMesh mesh, ResourceLocation texture, RenderCategory category,
                            MaterialRenderMode mode, boolean doubleSided) {
-            this(mesh, texture, category, mode, doubleSided, triangleCenters(mesh, category));
+            this(mesh, 0, mesh.indices().length, texture, category, mode, doubleSided);
+        }
+
+        public RenderBatch(IndexedMesh mesh, ResourceLocation texture, RenderCategory category,
+                           MaterialRenderMode mode, boolean doubleSided, float[] centers) {
+            this(mesh, 0, mesh.indices().length, texture, category, mode, doubleSided, centers);
+        }
+
+        public RenderBatch(IndexedMesh mesh, int firstIndex, int indexCount, ResourceLocation texture,
+                           RenderCategory category, MaterialRenderMode mode, boolean doubleSided) {
+            this(mesh, firstIndex, indexCount, texture, category, mode, doubleSided,
+                    triangleCenters(mesh, firstIndex, indexCount, category));
         }
 
         public int alphaPass(boolean blended) {
@@ -59,12 +74,12 @@ public final class ClientModelManager extends SimplePreparableReloadListener<Cli
             return category == RenderCategory.MIXED ? StaticModelShader.MIXED_OPAQUE : StaticModelShader.LEGACY_CUTOUT;
         }
 
-        private static float[] triangleCenters(IndexedMesh mesh, RenderCategory category) {
+        private static float[] triangleCenters(IndexedMesh mesh, int firstIndex, int indexCount, RenderCategory category) {
             if (category == RenderCategory.CUTOUT) return new float[0];
             int[] indices = mesh.indices();
-            float[] vertices = mesh.vertices(), centers = new float[indices.length];
-            for (int i = 0; i < indices.length; i += 3) {
-                int a = indices[i] * 8, b = indices[i + 1] * 8, c = indices[i + 2] * 8;
+            float[] vertices = mesh.vertices(), centers = new float[indexCount];
+            for (int i = 0; i < indexCount; i += 3) {
+                int a = indices[firstIndex + i] * 8, b = indices[firstIndex + i + 1] * 8, c = indices[firstIndex + i + 2] * 8;
                 for (int axis = 0; axis < 3; axis++) {
                     centers[i + axis] = (vertices[a + axis] + vertices[b + axis] + vertices[c + axis]) / 3;
                 }
@@ -79,14 +94,21 @@ public final class ClientModelManager extends SimplePreparableReloadListener<Cli
     /** Immutable selection of source-local parts, shared by GPU and buffered rendering. */
     public static final class PartSelection implements IntPredicate {
         private final List<LoadedPart> parts;
+        private final List<RenderBatch> batches;
         private final BitSet indices = new BitSet();
 
         private PartSelection(List<LoadedPart> parts) {
+            this(parts, parts.stream().flatMap(part -> part.batches().stream()).toList());
+        }
+
+        private PartSelection(List<LoadedPart> parts, List<RenderBatch> batches) {
             this.parts = List.copyOf(parts);
+            this.batches = List.copyOf(batches);
             for (var part : parts) indices.set(part.index());
         }
 
         public List<LoadedPart> parts() { return parts; }
+        public List<RenderBatch> batches() { return batches; }
         @Override public boolean test(int index) { return indices.get(index); }
     }
 
@@ -173,9 +195,6 @@ public final class ClientModelManager extends SimplePreparableReloadListener<Cli
                     source.model(), mesh.fanFallbackCount());
         }
         var parts = new ArrayList<LoadedPart>();
-        var visible = new ArrayList<LoadedPart>();
-        var named = new HashMap<String, List<LoadedPart>>();
-        var allBatches = new ArrayList<RenderBatch>();
         var summaries = new LinkedHashMap<String, MaterialSummary>();
         int[] counts = new int[RenderCategory.values().length];
         var warned = new HashSet<String>();
@@ -197,8 +216,12 @@ public final class ClientModelManager extends SimplePreparableReloadListener<Cli
                 if (binding != null) {
                     var asset = binding.asset();
                     if (!images.containsKey(asset)) {
-                        try (var input = asset.open()) {
-                            images.put(asset, NativeImage.read(input));
+                        if (source.format() == TrainModels.Format.IR_OBJ) {
+                            images.put(asset, readIrTexture(asset));
+                        } else {
+                            try (var input = asset.open()) {
+                                images.put(asset, NativeImage.read(input));
+                            }
                         }
                     }
                     texture = textureId(asset);
@@ -238,11 +261,21 @@ public final class ClientModelManager extends SimplePreparableReloadListener<Cli
                     batches.add(new RenderBatch(selectedMesh, texture, category, mode, doubleSided));
                 }
             }
-            allBatches.addAll(batches);
-            var loaded = new LoadedPart(index, part.name(), part.visible(), batches);
-            parts.add(loaded);
-            if (loaded.visible()) visible.add(loaded);
-            named.computeIfAbsent(loaded.name(), ignored -> new ArrayList<>()).add(loaded);
+            parts.add(new LoadedPart(index, part.name(), part.visible(), batches));
+        }
+        var originalVisible = parts.stream().filter(LoadedPart::visible).flatMap(part -> part.batches().stream())
+                .filter(batch -> batch.category() == RenderCategory.CUTOUT).toList();
+        var merged = OpaqueBatchMerger.merge(parts);
+        var visible = merged.parts().stream().filter(LoadedPart::visible).toList();
+        var named = new HashMap<String, List<LoadedPart>>();
+        var allBatches = new ArrayList<RenderBatch>();
+        for (var part : merged.parts()) {
+            allBatches.addAll(part.batches());
+            named.computeIfAbsent(part.name(), ignored -> new ArrayList<>()).add(part);
+        }
+        // Default ranges alias the same meshes as the per-part ranges; GPU upload deduplicates their storage.
+        for (var batch : merged.visibleBatches()) {
+            if (batch.category() == RenderCategory.CUTOUT) allBatches.add(batch);
         }
         var partsByName = new HashMap<String, PartSelection>();
         named.forEach((name, matching) -> partsByName.put(name, new PartSelection(matching)));
@@ -252,7 +285,62 @@ public final class ClientModelManager extends SimplePreparableReloadListener<Cli
                 summary.alphaBlend, summary.reducedAlpha, summary.counts[0], summary.counts[1], summary.counts[2], summary.skipped));
         UnrealTrainMod.LOGGER.info("Prepared {} {}: {} parts, {} triangles; CUTOUT={}, BLEND={}, MIXED={}",
                 source.format(), source.model(), mesh.parts().size(), mesh.triangleCount(), counts[0], counts[1], counts[2]);
-        return new PreparedSource(List.copyOf(parts), new PartSelection(visible), Map.copyOf(partsByName), List.copyOf(allBatches));
+        var mergedVisible = merged.visibleBatches().stream().filter(batch -> batch.category() == RenderCategory.CUTOUT).toList();
+        UnrealTrainMod.LOGGER.info("Model {}: visible CUTOUT batches {} -> {}; triangles {} -> {}",
+                source.model(), originalVisible.size(), mergedVisible.size(),
+                originalVisible.stream().mapToInt(batch -> batch.indexCount() / 3).sum(),
+                mergedVisible.stream().mapToInt(batch -> batch.indexCount() / 3).sum());
+        return new PreparedSource(merged.parts(), new PartSelection(visible, merged.visibleBatches()),
+                Map.copyOf(partsByName), List.copyOf(allBatches));
+    }
+
+    private static NativeImage readIrTexture(RtmAsset asset) throws IOException {
+        try {
+            byte[] bytes;
+            try (var input = asset.open()) {
+                bytes = input.readAllBytes();
+            }
+            if (bytes.length >= 3 && (bytes[0] & 255) == 0xff && (bytes[1] & 255) == 0xd8 && (bytes[2] & 255) == 0xff) {
+                return readJpeg(bytes);
+            }
+            // The byte[] overload copies the whole encoded image onto LWJGL's limited MemoryStack.
+            return NativeImage.read(new ByteArrayInputStream(bytes));
+        } catch (IOException | RuntimeException e) {
+            throw new IOException("Unable to decode IR texture " + asset, e);
+        }
+    }
+
+    private static NativeImage readJpeg(byte[] bytes) throws IOException {
+        BufferedImage decoded;
+        // An explicit memory cache avoids ImageIO's process-wide disk-cache setting.
+        try (var input = new MemoryCacheImageInputStream(new ByteArrayInputStream(bytes))) {
+            var readers = ImageIO.getImageReaders(input);
+            if (!readers.hasNext()) throw new IOException("No JPEG image reader available");
+            var reader = readers.next();
+            try {
+                reader.setInput(input, true, true);
+                decoded = reader.read(0);
+            } finally {
+                reader.dispose();
+            }
+        }
+        var image = new NativeImage(NativeImage.Format.RGBA, decoded.getWidth(), decoded.getHeight(), false);
+        try {
+            for (int y = 0; y < decoded.getHeight(); y++) {
+                for (int x = 0; x < decoded.getWidth(); x++) {
+                    int argb = decoded.getRGB(x, y);
+                    // NativeImage's RGBA pixel integer is ABGR; JPEG contributes no alpha channel.
+                    int abgr = 0xff000000 | ((argb & 255) << 16) | (argb & 0xff00) | ((argb >>> 16) & 255);
+                    image.setPixelRGBA(x, y, abgr);
+                }
+            }
+            return image;
+        } catch (RuntimeException | Error e) {
+            image.close();
+            throw e;
+        } finally {
+            decoded.flush();
+        }
     }
 
     @Override
