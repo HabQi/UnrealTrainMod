@@ -5,9 +5,14 @@
 package com.unrealtrainmod.registry;
 
 import com.unrealtrainmod.network.ModelSelectionResultEvent;
+import com.unrealtrainmod.network.TrackSyncEvent;
 import com.unrealtrainmod.network.handler.ServerPayloadHandlers;
 import com.unrealtrainmod.network.payload.ModelSelectionResultPayload;
 import com.unrealtrainmod.network.payload.SelectTrainModelPayload;
+import com.unrealtrainmod.network.payload.TrackChunkPayload;
+import com.unrealtrainmod.network.payload.TrackChunkUnloadPayload;
+import com.unrealtrainmod.network.payload.TrackConstructionPayload;
+import com.unrealtrainmod.network.payload.TrackSegmentRemovePayload;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
 
@@ -20,5 +25,13 @@ public final class ModPayloads {
                 ServerPayloadHandlers::selectTrainModel);
         registrar.playToClient(ModelSelectionResultPayload.TYPE, ModelSelectionResultPayload.STREAM_CODEC,
                 (payload, context) -> NeoForge.EVENT_BUS.post(new ModelSelectionResultEvent(payload)));
+        registrar.playToClient(TrackChunkPayload.TYPE, TrackChunkPayload.STREAM_CODEC,
+                (payload, context) -> NeoForge.EVENT_BUS.post(new TrackSyncEvent(payload)));
+        registrar.playToClient(TrackChunkUnloadPayload.TYPE, TrackChunkUnloadPayload.STREAM_CODEC,
+                (payload, context) -> NeoForge.EVENT_BUS.post(new TrackSyncEvent(payload)));
+        registrar.playToClient(TrackSegmentRemovePayload.TYPE, TrackSegmentRemovePayload.STREAM_CODEC,
+                (payload, context) -> NeoForge.EVENT_BUS.post(new TrackSyncEvent(payload)));
+        registrar.playToClient(TrackConstructionPayload.TYPE, TrackConstructionPayload.STREAM_CODEC,
+                (payload, context) -> NeoForge.EVENT_BUS.post(new TrackSyncEvent(payload)));
     }
 }

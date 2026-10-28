@@ -5,11 +5,16 @@
  */
 package com.unrealtrainmod;
 
+import com.unrealtrainmod.client.ClientConfig;
 import com.unrealtrainmod.client.ClientModelManager;
 import com.unrealtrainmod.client.PlacedModelRenderer;
 import com.unrealtrainmod.client.StaticModelShader;
 import com.unrealtrainmod.client.network.ClientPayloadHandlers;
 import com.unrealtrainmod.client.renderer.TrainModelRenderer;
+import com.unrealtrainmod.client.track.ClientTrackCache;
+import com.unrealtrainmod.client.track.ClientTrackConstruction;
+import com.unrealtrainmod.client.track.TrackConstructionRenderer;
+import com.unrealtrainmod.client.track.TrackWorldRenderer;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.GameShuttingDownEvent;
 import net.minecraft.client.Minecraft;
@@ -18,6 +23,7 @@ import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.fml.common.Mod;
+import net.neoforged.fml.config.ModConfig;
 import net.neoforged.fml.event.lifecycle.FMLClientSetupEvent;
 import net.neoforged.neoforge.client.gui.ConfigurationScreen;
 import net.neoforged.neoforge.client.gui.IConfigScreenFactory;
@@ -43,9 +49,11 @@ public class UnrealTrainModClient {
     @SubscribeEvent
     static void registerReloadListeners(RegisterClientReloadListenersEvent event) {
         event.registerReloadListener(ClientModelManager.INSTANCE);
+        event.registerReloadListener(ClientTrackCache.INSTANCE);
     }
 
     public UnrealTrainModClient(ModContainer container) {
+        container.registerConfig(ModConfig.Type.CLIENT, ClientConfig.SPEC);
         // Allows NeoForge to create a config screen for this mod's configs.
         // The config screen is accessed by going to the Mods screen > clicking on your mod > clicking on config.
         // Do not forget to add translations for your config options to the en_us.json file.
@@ -55,11 +63,24 @@ public class UnrealTrainModClient {
         NeoForge.EVENT_BUS.addListener(ClientPayloadHandlers::modelSelectionResult);
         NeoForge.EVENT_BUS.addListener(TrainModelRenderer::onFramePre);
         NeoForge.EVENT_BUS.addListener(TrainModelRenderer::onRenderStage);
+        NeoForge.EVENT_BUS.addListener(ClientTrackCache.INSTANCE::onSync);
+        NeoForge.EVENT_BUS.addListener(ClientTrackCache.INSTANCE::onLevelLoad);
+        NeoForge.EVENT_BUS.addListener(ClientTrackCache.INSTANCE::onLevelUnload);
+        NeoForge.EVENT_BUS.addListener(ClientTrackCache.INSTANCE::onLogout);
+        NeoForge.EVENT_BUS.addListener(TrackWorldRenderer::render);
+        NeoForge.EVENT_BUS.addListener(ClientTrackConstruction.INSTANCE::onSync);
+        NeoForge.EVENT_BUS.addListener(ClientTrackConstruction.INSTANCE::onTick);
+        NeoForge.EVENT_BUS.addListener(ClientTrackConstruction.INSTANCE::onLevelUnload);
+        NeoForge.EVENT_BUS.addListener(ClientTrackConstruction.INSTANCE::onClone);
+        NeoForge.EVENT_BUS.addListener(ClientTrackConstruction.INSTANCE::onLogout);
+        NeoForge.EVENT_BUS.addListener(TrackConstructionRenderer::render);
     }
 
     private static void onGameShuttingDown(GameShuttingDownEvent event) {
         ClientModelManager.INSTANCE.close();
         TrainModelRenderer.closeWorld();
+        ClientTrackCache.INSTANCE.close();
+        ClientTrackConstruction.INSTANCE.clear();
     }
 
     @SubscribeEvent

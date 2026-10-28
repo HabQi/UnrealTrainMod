@@ -11,6 +11,7 @@ import com.mojang.blaze3d.vertex.ByteBufferBuilder;
 import com.mojang.blaze3d.vertex.DefaultVertexFormat;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexFormat;
+import com.unrealtrainmod.client.ClientConfig;
 import com.unrealtrainmod.client.ClientModelManager;
 import com.unrealtrainmod.client.ClientModelManager.RenderBatch;
 import com.unrealtrainmod.client.GpuModel;
@@ -95,9 +96,13 @@ public final class ModelRenderQueue implements AutoCloseable {
     public void drawTranslucent() {
         RenderSystem.assertOnRenderThread();
         try {
+            if (ClientConfig.USE_STATIC_TRANSLUCENT_BATCHES.getAsBoolean()) {
+                drawStaticTranslucent();
+                return;
+            }
             collectTriangles();
             if (triangles == 0) return;
-            sortTriangles();
+            if (ClientConfig.SORT_TRANSLUCENT_TRIANGLES.getAsBoolean()) sortTriangles();
             try (var state = new ModelRenderState()) {
                 prepareGpuIndices();
                 for (int start = 0; start < triangles;) {
@@ -119,6 +124,44 @@ public final class ModelRenderQueue implements AutoCloseable {
             }
         } finally {
             clear();
+        }
+    }
+
+    /** Submission-order comparison path: GPU draws reuse canonical IBO ranges without collecting triangles. */
+    private void drawStaticTranslucent() {
+        int start = 0;
+        while (start < draws.size() && draws.get(start).batch().category() == RenderCategory.CUTOUT) start++;
+        if (start == draws.size()) return;
+        try (var state = new ModelRenderState()) {
+            while (start < draws.size()) {
+                var draw = draws.get(start);
+                if (draw.batch().category() == RenderCategory.CUTOUT) {
+                    start++;
+                    continue;
+                }
+                int end = start + 1;
+                int count = draw.batch().mesh().indices().length;
+                if (draw.gpu() != null) {
+                    while (end < draws.size()) {
+                        var next = draws.get(end);
+                        if (next.batch().category() == RenderCategory.CUTOUT || !canMerge(draw, next)
+                                || next.gpu().firstIndex() != draw.gpu().firstIndex() + count) break;
+                        count += next.batch().mesh().indices().length;
+                        end++;
+                    }
+                }
+                int alphaPass = draw.batch().alphaPass(true);
+                state.use(ModelRenderTypes.get(draw.batch().texture(), draw.batch().doubleSided(), true, false),
+                        true, draw.batch().doubleSided());
+                if (draw.gpu() != null) {
+                    state.prepareGpu(draw.pose(), draw.light(), alphaPass, modelView, projection);
+                    draw.gpu().mesh().draw(false, draw.gpu().firstIndex(), count);
+                } else {
+                    state.endGpu();
+                    drawFallback(draw, alphaPass, 0, count / 3, false);
+                }
+                start = end;
+            }
         }
     }
 

@@ -5,11 +5,15 @@
  */
 package com.unrealtrainmod;
 
+import com.unrealtrainmod.command.TrackCommands;
 import com.unrealtrainmod.entity.PlacedModelEntity;
 import com.unrealtrainmod.item.ModelPlacerItem;
+import com.unrealtrainmod.item.TrackBuilderItem;
+import com.unrealtrainmod.track.construction.TrackConstructionManager;
 import com.unrealtrainmod.model.RtmPackageLoader;
 import com.unrealtrainmod.registry.ModDataComponents;
 import com.unrealtrainmod.registry.ModPayloads;
+import com.unrealtrainmod.network.TrackSyncManager;
 import org.slf4j.Logger;
 
 import com.mojang.logging.LogUtils;
@@ -68,6 +72,8 @@ public class UnrealTrainMod {
 
     public static final DeferredItem<ModelPlacerItem> VEHICLE_PLACER = ITEMS.registerItem(
             "vehicle_placer", ModelPlacerItem::new, new Item.Properties().stacksTo(1));
+    public static final DeferredItem<TrackBuilderItem> TRACK_BUILDER = ITEMS.registerItem(
+            "track_builder", TrackBuilderItem::new, new Item.Properties().stacksTo(1));
 
     // Creates a creative tab with the id "unrealtrainmod:example_tab" for the example item, that is placed after the combat tab
     public static final DeferredHolder<CreativeModeTab, CreativeModeTab> EXAMPLE_TAB = CREATIVE_MODE_TABS.register("example_tab", () -> CreativeModeTab.builder()
@@ -76,6 +82,7 @@ public class UnrealTrainMod {
             .icon(() -> VEHICLE_PLACER.get().getDefaultInstance())
             .displayItems((parameters, output) -> {
                 output.accept(VEHICLE_PLACER.get());
+                output.accept(TRACK_BUILDER.get());
             }).build());
 
     // The constructor for the mod class is the first code that is run when your mod is loaded.
@@ -99,6 +106,9 @@ public class UnrealTrainMod {
         // Note that this is necessary if and only if we want *this* class (UnrealTrainMod) to respond directly to events.
         // Do not add this line if there are no @SubscribeEvent-annotated functions in this class, like onServerStarting() below.
         NeoForge.EVENT_BUS.register(this);
+        NeoForge.EVENT_BUS.addListener(TrackCommands::register);
+        TrackSyncManager.register(NeoForge.EVENT_BUS);
+        TrackConstructionManager.register(NeoForge.EVENT_BUS);
 
         // Register the item to a creative tab
         modEventBus.addListener(this::addCreative);

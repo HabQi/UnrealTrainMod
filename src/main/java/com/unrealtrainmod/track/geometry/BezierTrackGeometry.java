@@ -55,6 +55,14 @@ public final class BezierTrackGeometry implements TrackGeometry {
         return length;
     }
 
+    public TrackPoint control1() {
+        return p1;
+    }
+
+    public TrackPoint control2() {
+        return p2;
+    }
+
     @Override
     public TrackPose sample(double distance) {
         double fraction = GeometrySupport.clampDistance(distance, length) / length;
