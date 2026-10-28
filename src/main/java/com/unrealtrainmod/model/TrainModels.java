@@ -17,8 +17,12 @@ import net.minecraft.resources.ResourceLocation;
 public final class TrainModels {
     public static final float MQO_SCALE = 0.01f;
     public record Texture(RtmAsset asset, boolean alphaBlend) {}
-    public record Source(RtmAsset model, Map<String, Texture> textures, boolean smoothing, boolean cullFaces) {
-        public Source { textures = Map.copyOf(textures); }
+    public record Source(RtmAsset model, Map<String, Texture> textures,
+                         Map<String, MaterialRenderMode> materialRenderModes, boolean smoothing, boolean cullFaces) {
+        public Source {
+            textures = Map.copyOf(textures);
+            materialRenderModes = Map.copyOf(materialRenderModes);
+        }
     }
     public record Instance(Source source, ModelData.Position offset) {}
     public record Definition(ResourceLocation id, String name, String packName, String trainType,

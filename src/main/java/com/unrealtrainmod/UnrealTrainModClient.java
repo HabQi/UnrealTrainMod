@@ -9,6 +9,7 @@ import com.unrealtrainmod.client.ClientModelManager;
 import com.unrealtrainmod.client.PlacedModelRenderer;
 import com.unrealtrainmod.client.StaticModelShader;
 import com.unrealtrainmod.client.network.ClientPayloadHandlers;
+import com.unrealtrainmod.client.renderer.TrainModelRenderer;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.GameShuttingDownEvent;
 import net.minecraft.client.Minecraft;
@@ -52,10 +53,13 @@ public class UnrealTrainModClient {
         NeoForge.EVENT_BUS.addListener(UnrealTrainModClient::onGameShuttingDown);
         NeoForge.EVENT_BUS.addListener(ClientPayloadHandlers::openModelSelector);
         NeoForge.EVENT_BUS.addListener(ClientPayloadHandlers::modelSelectionResult);
+        NeoForge.EVENT_BUS.addListener(TrainModelRenderer::onFramePre);
+        NeoForge.EVENT_BUS.addListener(TrainModelRenderer::onRenderStage);
     }
 
     private static void onGameShuttingDown(GameShuttingDownEvent event) {
         ClientModelManager.INSTANCE.close();
+        TrainModelRenderer.closeWorld();
     }
 
     @SubscribeEvent

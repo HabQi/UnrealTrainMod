@@ -8,7 +8,6 @@ import com.mojang.blaze3d.pipeline.TextureTarget;
 import com.mojang.blaze3d.platform.GlStateManager;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.BufferUploader;
-import com.mojang.blaze3d.vertex.ByteBufferBuilder;
 import com.mojang.blaze3d.vertex.DefaultVertexFormat;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.Tesselator;
@@ -16,22 +15,20 @@ import com.mojang.blaze3d.vertex.VertexFormat;
 import com.mojang.blaze3d.vertex.VertexSorting;
 import com.mojang.math.Axis;
 import com.unrealtrainmod.client.ClientModelManager;
-import com.unrealtrainmod.client.renderer.TrainModelRenderer;
+import com.unrealtrainmod.client.renderer.ModelRenderQueue;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.renderer.GameRenderer;
 import net.minecraft.client.renderer.LightTexture;
-import net.minecraft.client.renderer.MultiBufferSource;
 import net.neoforged.neoforge.client.GlStateBackup;
 import org.joml.Matrix4f;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL13;
 import org.lwjgl.opengl.GL30;
 
-/** Owns only its depth-enabled target and scratch buffer; model resources remain repository-owned. */
+/** Owns its depth-enabled target and independent scene queue; model resources remain repository-owned. */
 public final class TrainPreviewRenderer implements AutoCloseable {
-    private final ByteBufferBuilder scratch = new ByteBufferBuilder(1 << 18);
-    private final MultiBufferSource.BufferSource buffers = MultiBufferSource.immediate(scratch);
+    private final ModelRenderQueue queue = new ModelRenderQueue();
     private TextureTarget target;
 
     public void render(GuiGraphics graphics, int x, int y, int width, int height,
@@ -70,6 +67,7 @@ public final class TrainPreviewRenderer implements AutoCloseable {
     }
 
     private void renderScene(ClientModelManager.LoadedModel model, PreviewCamera camera, int width, int height) {
+        queue.clear();
         var minecraft = Minecraft.getInstance();
         var state = new GlStateBackup();
         RenderSystem.backupGlState(state);
@@ -128,9 +126,11 @@ public final class TrainPreviewRenderer implements AutoCloseable {
             pose.mulPose(Axis.XP.rotationDegrees(camera.pitch()));
             pose.mulPose(Axis.YP.rotationDegrees(camera.yaw()));
             pose.translate(-bounds.centerX(), -bounds.centerY(), -bounds.centerZ());
-            TrainModelRenderer.render(model, pose, buffers, LightTexture.FULL_BRIGHT);
-            buffers.endBatch();
+            queue.submit(model, pose, LightTexture.FULL_BRIGHT);
+            queue.drawOpaque();
+            queue.drawTranslucent();
         } finally {
+            queue.clear();
             modelView.popMatrix();
             RenderSystem.applyModelViewMatrix();
             RenderSystem.setProjectionMatrix(projection, sorting);
@@ -168,7 +168,7 @@ public final class TrainPreviewRenderer implements AutoCloseable {
                 }
             }
         } finally {
-            scratch.close();
+            queue.close();
         }
     }
 }

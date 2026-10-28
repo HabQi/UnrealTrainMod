@@ -130,7 +130,30 @@ public final class RtmPackageLoader {
                     .stream().anyMatch(flag -> flag.strip().equals("AlphaBlend"));
             textures.put(material, new TrainModels.Texture(image, alphaBlend));
         }
-        return new TrainModels.Source(asset, textures, smoothing, cullFaces);
+        return new TrainModels.Source(asset, textures, readMaterialRenderModes(json, model), smoothing, cullFaces);
+    }
+
+    private static Map<String, MaterialRenderMode> readMaterialRenderModes(JsonObject json, String model) throws IOException {
+        if (!json.has("materialRenderModes")) return Map.of();
+        var configured = json.get("materialRenderModes");
+        if (!configured.isJsonObject()) {
+            throw new IOException(model + ": materialRenderModes must be an object keyed by MQO material name");
+        }
+        var modes = new HashMap<String, MaterialRenderMode>();
+        for (var entry : configured.getAsJsonObject().entrySet()) {
+            String field = model + ": materialRenderModes['" + entry.getKey() + "']";
+            var value = entry.getValue();
+            if (!value.isJsonPrimitive() || !value.getAsJsonPrimitive().isString()) {
+                throw new IOException(field + " must be a string: OPAQUE, CUTOUT, TRANSLUCENT or AUTO");
+            }
+            try {
+                modes.put(entry.getKey(), MaterialRenderMode.valueOf(value.getAsString()));
+            } catch (IllegalArgumentException e) {
+                throw new IOException(field + ": invalid mode '" + value.getAsString()
+                        + "'; expected OPAQUE, CUTOUT, TRANSLUCENT or AUTO", e);
+            }
+        }
+        return modes;
     }
 
     private static RtmAsset requireAsset(Path archive, ZipFile zip, String prefix, String reference) throws IOException {

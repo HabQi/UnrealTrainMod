@@ -12,7 +12,7 @@ import java.util.Map;
 
 /** Prepared once on resource reload. Source coordinates are scaled to blocks without changing the origin. */
 public record ModelMesh(List<Part> parts, int triangleCount) {
-    public record Part(String name, List<Batch> batches) {}
+    public record Part(String name, boolean visible, List<Batch> batches) {}
     public record Batch(ModelData.Material material, IndexedMesh mesh) {}
 
     public static ModelMesh prepare(ModelData model, float scale, boolean smoothing) throws IOException {
@@ -20,7 +20,6 @@ public record ModelMesh(List<Part> parts, int triangleCount) {
         List<Part> parts = new ArrayList<>();
         int triangles = 0;
         for (var part : model.parts()) {
-            if (!part.visible()) continue;
             boolean smooth = smoothing && part.smooth();
             int faceCount = part.faces().size();
             float[][] normals = new float[faceCount][];
@@ -73,7 +72,7 @@ public record ModelMesh(List<Part> parts, int triangleCount) {
                 }
                 triangles += corners.length / 3;
             }
-            parts.add(new Part(part.name(), batches.values().stream().map(BatchBuilder::build).toList()));
+            parts.add(new Part(part.name(), part.visible(), batches.values().stream().map(BatchBuilder::build).toList()));
         }
         if (triangles == 0) throw new IOException("Model contains no renderable faces");
         return new ModelMesh(List.copyOf(parts), triangles);
