@@ -5,6 +5,8 @@
 package com.unrealtrainmod.model;
 
 import com.unrealtrainmod.UnrealTrainMod;
+import com.unrealtrainmod.resource.PackageArchive;
+import com.unrealtrainmod.resource.PackageAsset;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.Reader;
@@ -17,34 +19,32 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.regex.Pattern;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipFile;
 
 /** Package-local OBJ/MTL lookup and orientation for a static IR vehicle. No files are extracted. */
 public final class IrModelLoader {
     private static final Charset LEGACY_MTL_CHARSET = Charset.forName("GB18030");
     private static final Pattern HIDDEN = Pattern.compile("(?:^|_)HIDE(?:_|$)");
 
-    public record Imported(ModelData model, Map<String, TrainModels.Texture> textures) {
+    public record Imported(ModelData model, Map<String, ModelTexture> textures) {
         public Imported { textures = Map.copyOf(textures); }
     }
 
     private IrModelLoader() {}
 
-    public static Imported load(RtmAsset asset) throws IOException {
-        try (var zip = new ZipFile(asset.archive().toFile());
-             var reader = new InputStreamReader(zip.getInputStream(requireEntry(zip, asset.entry())), StandardCharsets.UTF_8.newDecoder())) {
-            var raw = ObjParser.parse(reader, asset.entry(), path -> openMaterial(zip, path));
-            var textures = new HashMap<String, TrainModels.Texture>();
-            var textureEntries = new HashMap<String, ZipEntry>();
+    public static Imported load(PackageAsset asset) throws IOException {
+        try (var archive = new PackageArchive(asset.archive());
+             var reader = new InputStreamReader(archive.open(asset.entry()), StandardCharsets.UTF_8.newDecoder())) {
+            var raw = ObjParser.parse(reader, asset.entry(), path -> openMaterial(archive, path));
+            var textures = new HashMap<String, ModelTexture>();
+            var textureEntries = new HashMap<String, String>();
             for (var material : raw.materials()) {
                 String path = material.texture();
                 if (path == null) continue;
                 // Cache failed lookups too, so shared references produce one warning per model load.
-                if (!textureEntries.containsKey(path)) textureEntries.put(path, findTexture(zip, asset, path));
+                if (!textureEntries.containsKey(path)) textureEntries.put(path, findTexture(archive, asset, path));
                 var entry = textureEntries.get(path);
                 if (entry != null) {
-                    textures.put(material.name(), new TrainModels.Texture(new RtmAsset(asset.archive(), entry.getName()), false));
+                    textures.put(material.name(), new ModelTexture(new PackageAsset(asset.archive(), entry), false));
                 }
             }
             var parts = new ArrayList<ModelData.Part>();
@@ -66,18 +66,17 @@ public final class IrModelLoader {
     }
 
     /** Cargo volumes and explicitly hidden controls are retained for named-part callers, but not drawn by default. */
-    static boolean isVisible(String name) {
+    public static boolean isVisible(String name) {
         return !name.contains("CARGO_ITEMS_") && !name.contains("CARGO_FILL_") && !HIDDEN.matcher(name).find();
     }
 
-    private static ZipEntry findTexture(ZipFile zip, RtmAsset model, String path) {
-        var exact = zip.getEntry(path);
-        if (exact != null && !exact.isDirectory()) return exact;
-        var matches = zip.stream().filter(entry -> !entry.isDirectory() && entry.getName().equalsIgnoreCase(path))
+    private static String findTexture(PackageArchive archive, PackageAsset model, String path) {
+        if (archive.contains(path)) return path;
+        var matches = archive.entries().stream().filter(entry -> entry.equalsIgnoreCase(path))
                 .limit(2).toList();
         if (matches.size() == 1) {
             var entry = matches.getFirst();
-            UnrealTrainMod.LOGGER.warn("IR {}: texture '{}' matched ZIP entry '{}' ignoring case", model, path, entry.getName());
+            UnrealTrainMod.LOGGER.warn("IR {}: texture '{}' matched ZIP entry '{}' ignoring case", model, path, entry);
             return entry;
         }
         if (matches.isEmpty()) {
@@ -88,9 +87,9 @@ public final class IrModelLoader {
         return null;
     }
 
-    private static Reader openMaterial(ZipFile zip, String path) throws IOException {
+    private static Reader openMaterial(PackageArchive archive, String path) throws IOException {
         byte[] bytes;
-        try (var input = zip.getInputStream(requireEntry(zip, path))) {
+        try (var input = archive.open(path)) {
             bytes = input.readAllBytes();
         }
         try {
@@ -105,9 +104,4 @@ public final class IrModelLoader {
         }
     }
 
-    private static ZipEntry requireEntry(ZipFile zip, String path) throws IOException {
-        var entry = zip.getEntry(path);
-        if (entry == null || entry.isDirectory()) throw new IOException("Missing ZIP resource: " + path);
-        return entry;
-    }
 }

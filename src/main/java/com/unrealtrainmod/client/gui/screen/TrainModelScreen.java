@@ -4,6 +4,8 @@
  */
 package com.unrealtrainmod.client.gui.screen;
 
+import com.unrealtrainmod.vehicle.VehicleDefinition;
+import com.unrealtrainmod.vehicle.VehicleCatalog;
 import com.unrealtrainmod.UnrealTrainMod;
 import com.unrealtrainmod.client.ClientModelManager;
 import com.unrealtrainmod.client.gui.base.BaseTrainScreen;
@@ -15,13 +17,11 @@ import com.unrealtrainmod.client.gui.widget.TrainPreviewWidget;
 import com.unrealtrainmod.client.gui.widget.TrainSlider;
 import com.unrealtrainmod.client.renderer.preview.PreviewCamera;
 import com.unrealtrainmod.item.ModelPlacerItem;
-import com.unrealtrainmod.model.TrainModels;
 import com.unrealtrainmod.network.payload.ModelSelectionResultPayload;
 import com.unrealtrainmod.network.payload.SelectTrainModelPayload;
 import java.util.UUID;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.EditBox;
-import net.minecraft.network.chat.CommonComponents;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.item.ItemStack;
@@ -34,15 +34,14 @@ public final class TrainModelScreen extends BaseTrainScreen {
     private final int hotbarSlot;
     private final ItemStack originalStack;
     private final PreviewCamera camera = new PreviewCamera();
-    private TrainModels.Definition selected;
+    private VehicleDefinition selected;
     private EditBox search;
-    private TrainListWidget<TrainModels.Definition> list;
+    private TrainListWidget<VehicleDefinition> list;
     private TrainPreviewWidget preview;
     private NumberInputWidget yawInput;
     private TrainSlider zoomSlider;
     private TrainIconButton apply;
     private TrainIconButton reset;
-    private TrainIconButton cancel;
     private TrainIconButton close;
     private UUID pendingRequest;
     private Component status;
@@ -55,8 +54,8 @@ public final class TrainModelScreen extends BaseTrainScreen {
         this.hand = hand;
         this.hotbarSlot = hotbarSlot;
         originalStack = stack;
-        selected = TrainModels.find(ModelPlacerItem.selectedModel(stack));
-        if (selected == null && !TrainModels.all().isEmpty()) selected = TrainModels.all().getFirst();
+        selected = VehicleCatalog.find(ModelPlacerItem.selectedModel(stack));
+        if (selected == null && !VehicleCatalog.all().isEmpty()) selected = VehicleCatalog.all().getFirst();
     }
 
     @Override
@@ -78,24 +77,25 @@ public final class TrainModelScreen extends BaseTrainScreen {
         zoomSlider.visible = expanded;
         apply.setRectangle(expanded ? 150 : 126, 20,
                 left + panelWidth - gap - (expanded ? 150 : 126), top + panelHeight - 30);
-        cancel.setRectangle(90, 20, left + gap, apply.getY());
         close.setRectangle(24, 20, left + panelWidth - gap - 24, top + 5);
         addRenderableWidget(search);
         addRenderableWidget(list);
+        // Handle the overlay button before the preview, but draw it above the preview.
+        addWidget(reset);
         addRenderableWidget(preview);
         addRenderableWidget(yawInput);
         addRenderableWidget(zoomSlider);
-        addRenderableWidget(reset);
+        addRenderableOnly(reset);
         addRenderableWidget(apply);
-        addRenderableWidget(cancel);
         addRenderableWidget(close);
         updateApplyButton();
     }
 
     private void createWidgets() {
         dimension = minecraft.level.dimension();
-        list = new TrainListWidget<>(minecraft, 100, 100, TrainModels.all(),
-                model -> Component.literal(model.name()), model -> model.packName() + " · " + model.id(), this::selectModel);
+        list = new TrainListWidget<>(minecraft, 100, 100, VehicleCatalog.all(),
+                model -> model.config().archive(), model -> Component.literal(model.name()),
+                model -> model.id().toString(), this::selectModel);
         list.filter("");
         list.select(selected);
         search = new EditBox(font, 0, 0, 100, 18, Component.translatable("gui.unrealtrainmod.models.search"));
@@ -111,12 +111,11 @@ public final class TrainModelScreen extends BaseTrainScreen {
                 TrainIconButton.Icon.RESET, this::resetCamera);
         apply = new TrainIconButton(0, 0, 150, Component.translatable("gui.unrealtrainmod.models.apply"),
                 TrainIconButton.Icon.CONFIRM, this::submit);
-        cancel = new TrainIconButton(0, 0, 90, CommonComponents.GUI_CANCEL, TrainIconButton.Icon.CLOSE, this::onClose);
         close = new TrainIconButton(0, 0, 24, Component.translatable("gui.unrealtrainmod.close"),
                 TrainIconButton.Icon.CLOSE, this::onClose);
     }
 
-    private void selectModel(TrainModels.Definition model) {
+    private void selectModel(VehicleDefinition model) {
         selected = model;
         preview.setModel(model.id());
         resetCamera();
@@ -202,7 +201,7 @@ public final class TrainModelScreen extends BaseTrainScreen {
             graphics.drawString(font, Component.translatable("gui.unrealtrainmod.preview.yaw"),
                     yawInput.getX(), yawInput.getY() - 12, GuiTheme.MUTED, false);
         }
-        var message = status != null ? status : Component.translatable("gui.unrealtrainmod.models.count", TrainModels.all().size());
+        var message = status != null ? status : Component.translatable("gui.unrealtrainmod.models.count", VehicleCatalog.all().size());
         graphics.drawString(font, font.plainSubstrByWidth(message.getString(), panelWidth - 20),
                 left + 10, top + panelHeight - 48, statusError ? GuiTheme.ERROR : GuiTheme.MUTED, false);
     }

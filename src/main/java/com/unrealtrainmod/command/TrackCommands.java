@@ -4,7 +4,7 @@
  */
 package com.unrealtrainmod.command;
 
-import com.unrealtrainmod.model.RailModels;
+import com.unrealtrainmod.track.model.RailCatalog;
 import net.minecraft.resources.ResourceLocation;
 
 import com.mojang.brigadier.builder.RequiredArgumentBuilder;
@@ -130,7 +130,7 @@ public final class TrackCommands {
             if (segment.modelId() == null) {
                 context.getSource().sendSuccess(() -> Component.translatable(PREFIX + "model_native"), false);
             } else {
-                var model = RailModels.find(ResourceLocation.parse(segment.modelId()));
+                var model = RailCatalog.find(ResourceLocation.parse(segment.modelId()));
                 context.getSource().sendSuccess(() -> Component.translatable(PREFIX + "model_info", segment.modelId(),
                         Component.translatable(PREFIX + (model == null ? "model_missing" : "model_present"))), false);
             }

@@ -4,8 +4,8 @@
  */
 package com.unrealtrainmod.entity;
 
+import com.unrealtrainmod.vehicle.VehicleCatalog;
 import com.unrealtrainmod.UnrealTrainMod;
-import com.unrealtrainmod.model.TrainModels;
 import com.unrealtrainmod.model.ModelBounds;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.syncher.SynchedEntityData;
@@ -75,7 +75,7 @@ public final class PlacedModelEntity extends Entity {
 
     @Override
     protected AABB makeBoundingBox() {
-        var model = TrainModels.find(getModelId());
+        var model = VehicleCatalog.find(getModelId());
         var bounds = model == null ? ModelBounds.MISSING : model.bounds();
         double yaw = Math.toRadians(getYRot());
         double cosine = Math.cos(yaw), sine = Math.sin(yaw);

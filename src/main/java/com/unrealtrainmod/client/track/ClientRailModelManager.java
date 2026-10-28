@@ -4,14 +4,15 @@
  */
 package com.unrealtrainmod.client.track;
 
+import com.unrealtrainmod.resource.PackageAsset;
+import com.unrealtrainmod.track.model.RailDefinition;
+import com.unrealtrainmod.track.model.RailCatalog;
 import com.mojang.blaze3d.platform.NativeImage;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.unrealtrainmod.UnrealTrainMod;
 import com.unrealtrainmod.model.IndexedMesh;
 import com.unrealtrainmod.model.ModelBounds;
 import com.unrealtrainmod.model.ModelMesh;
-import com.unrealtrainmod.model.RailModels;
-import com.unrealtrainmod.model.RtmAsset;
 import com.unrealtrainmod.track.mesh.RailTrackMeshBuilder;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -39,7 +40,7 @@ public final class ClientRailModelManager extends SimplePreparableReloadListener
     public record Model(List<Batch> batches, double padding, ModelBounds bounds) {
         public Model { batches = List.copyOf(batches); }
     }
-    public record Prepared(Map<ResourceLocation, Model> models, Map<RtmAsset, NativeImage> images) {}
+    public record Prepared(Map<ResourceLocation, Model> models, Map<PackageAsset, NativeImage> images) {}
     private Map<ResourceLocation, Model> models = Map.of();
     private final Set<ResourceLocation> textures = new HashSet<>();
 
@@ -47,12 +48,12 @@ public final class ClientRailModelManager extends SimplePreparableReloadListener
     Model model(String id) { return id == null ? null : models.get(ResourceLocation.parse(id)); }
     public Model model(ResourceLocation id) { return id == null ? null : models.get(id); }
 
-    private static ResourceLocation textureId(RtmAsset asset) {
+    private static ResourceLocation textureId(PackageAsset asset) {
         return ResourceLocation.fromNamespaceAndPath(UnrealTrainMod.MODID, "rtm_rail/" + UUID.nameUUIDFromBytes(
                 (asset.archive() + "!" + asset.entry()).getBytes(StandardCharsets.UTF_8)));
     }
 
-    private static NativeImage image(RtmAsset asset, Map<RtmAsset, NativeImage> images) throws IOException {
+    private static NativeImage image(PackageAsset asset, Map<PackageAsset, NativeImage> images) throws IOException {
         NativeImage image = images.get(asset);
         if (image == null) {
             try (var input = asset.open()) { image = NativeImage.read(input); }
@@ -64,11 +65,11 @@ public final class ClientRailModelManager extends SimplePreparableReloadListener
     @Override
     protected Prepared prepare(ResourceManager resources, ProfilerFiller profiler) {
         var models = new HashMap<ResourceLocation, Model>();
-        var images = new HashMap<RtmAsset, NativeImage>();
-        var meshes = new HashMap<RtmAsset, ModelMesh>();
-        var sources = new HashMap<RailModels.Source, Model>();
+        var images = new HashMap<PackageAsset, NativeImage>();
+        var meshes = new HashMap<PackageAsset, ModelMesh>();
+        var sources = new HashMap<RailDefinition.Source, Model>();
         try {
-            for (var definition : RailModels.all()) {
+            for (var definition : RailCatalog.all()) {
                 var source = definition.source();
                 try {
                     Model preparedSource = sources.get(source);

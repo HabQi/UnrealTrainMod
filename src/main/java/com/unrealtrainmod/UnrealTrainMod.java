@@ -5,6 +5,7 @@
  */
 package com.unrealtrainmod;
 
+import com.unrealtrainmod.loading.ResourceLoader;
 import com.unrealtrainmod.command.TrackCommands;
 import com.unrealtrainmod.entity.PlacedModelEntity;
 import com.unrealtrainmod.item.ModelPlacerItem;
@@ -13,7 +14,6 @@ import com.unrealtrainmod.item.TrackWrenchItem;
 import com.unrealtrainmod.item.RailPlacerItem;
 import com.unrealtrainmod.track.construction.TrackConstructionManager;
 import com.unrealtrainmod.track.block.TrackBlock;
-import com.unrealtrainmod.model.TrainModels;
 import com.unrealtrainmod.registry.ModDataComponents;
 import com.unrealtrainmod.registry.ModPayloads;
 import com.unrealtrainmod.network.TrackSyncManager;
@@ -103,7 +103,7 @@ public class UnrealTrainMod {
     // The constructor for the mod class is the first code that is run when your mod is loaded.
     // FML will recognize some parameter types like IEventBus or ModContainer and pass them in automatically.
     public UnrealTrainMod(IEventBus modEventBus, ModContainer modContainer) {
-        TrainModels.load(FMLPaths.MODSDIR.get());
+        ResourceLoader.load(FMLPaths.MODSDIR.get());
         // Register the commonSetup method for modloading
         modEventBus.addListener(this::commonSetup);
 

@@ -4,8 +4,9 @@
  */
 package com.unrealtrainmod.item;
 
+import com.unrealtrainmod.model.ModelSource;
+import com.unrealtrainmod.vehicle.VehicleCatalog;
 import com.unrealtrainmod.UnrealTrainMod;
-import com.unrealtrainmod.model.TrainModels;
 import com.unrealtrainmod.registry.ModDataComponents;
 import net.minecraft.ChatFormatting;
 import net.minecraft.core.Direction;
@@ -46,7 +47,7 @@ public final class ModelPlacerItem extends Item {
         }
         var level = context.getLevel();
         var modelId = selectedModel(context.getItemInHand());
-        var model = TrainModels.find(modelId);
+        var model = VehicleCatalog.find(modelId);
         if (model == null) {
             if (!level.isClientSide) player.displayClientMessage(Component.translatable(
                     modelId == null ? "item.unrealtrainmod.vehicle_placer.unselected" : "item.unrealtrainmod.vehicle_placer.missing"), true);
@@ -62,7 +63,7 @@ public final class ModelPlacerItem extends Item {
             entity.setModelId(modelId);
             float yaw = Math.round(player.getYRot() / 90f) * 90f;
             // Raise the entire RTM assembly without changing source geometry or bogie offsets.
-            double placementY = hit.y + (model.parts().getFirst().source().format() == TrainModels.Format.MQO ? 1.0 : 0.0);
+            double placementY = hit.y + (model.parts().getFirst().source().format() == ModelSource.Format.MQO ? 1.0 : 0.0);
             entity.moveTo(context.getClickedPos().getX() + 0.5, placementY,
                     context.getClickedPos().getZ() + 0.5, yaw, 0);
             if (!level.addFreshEntity(entity)) return InteractionResult.FAIL;
@@ -76,7 +77,7 @@ public final class ModelPlacerItem extends Item {
     @Override
     public void appendHoverText(ItemStack stack, TooltipContext context, List<Component> lines, TooltipFlag flags) {
         var modelId = selectedModel(stack);
-        var model = TrainModels.find(modelId);
+        var model = VehicleCatalog.find(modelId);
         lines.add(Component.translatable("item.unrealtrainmod.vehicle_placer.selected",
                 modelId == null ? Component.translatable("item.unrealtrainmod.vehicle_placer.none")
                         : Component.literal(model == null ? modelId.toString() : model.name())).withStyle(ChatFormatting.AQUA));

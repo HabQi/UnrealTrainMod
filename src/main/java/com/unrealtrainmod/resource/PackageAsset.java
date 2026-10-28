@@ -2,7 +2,7 @@
  * Copyright (c) 2026 HabQi
  * SPDX-License-Identifier: GPL-3.0-only
  */
-package com.unrealtrainmod.model;
+package com.unrealtrainmod.resource;
 
 import java.io.FilterInputStream;
 import java.io.IOException;
@@ -11,7 +11,7 @@ import java.nio.file.Path;
 import java.util.zip.ZipFile;
 
 /** An exact, case-sensitive entry in its owning package. No files are extracted. */
-public record RtmAsset(Path archive, String entry) {
+public record PackageAsset(Path archive, String entry) {
     public InputStream open() throws IOException {
         var zip = new ZipFile(archive.toFile());
         try {

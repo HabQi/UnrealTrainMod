@@ -4,9 +4,9 @@
  */
 package com.unrealtrainmod.network.handler;
 
+import com.unrealtrainmod.vehicle.VehicleCatalog;
+import com.unrealtrainmod.track.model.RailCatalog;
 import com.unrealtrainmod.UnrealTrainMod;
-import com.unrealtrainmod.model.TrainModels;
-import com.unrealtrainmod.model.RailModels;
 import com.unrealtrainmod.network.payload.SelectRailModelPayload;
 import com.unrealtrainmod.network.payload.RailModelSelectionResultPayload;
 import com.unrealtrainmod.network.payload.ModelSelectionResultPayload;
@@ -34,7 +34,7 @@ public final class ServerPayloadHandlers {
         } else if (payload.hotbarSlot() < 0 || payload.hotbarSlot() > 8
                 || player.getInventory().selected != payload.hotbarSlot() || !stack.is(UnrealTrainMod.RAIL_PLACER.get())) {
             result = ModelSelectionResultPayload.Result.INVALID_ITEM;
-        } else if (RailModels.find(payload.modelId()) == null) {
+        } else if (RailCatalog.find(payload.modelId()) == null) {
             result = ModelSelectionResultPayload.Result.UNKNOWN_MODEL;
         } else {
             stack.set(ModDataComponents.SELECTED_RAIL_MODEL.get(), payload.modelId());
@@ -53,7 +53,7 @@ public final class ServerPayloadHandlers {
                 || (payload.hand() == InteractionHand.MAIN_HAND && player.getInventory().selected != payload.hotbarSlot())
                 || !stack.is(UnrealTrainMod.VEHICLE_PLACER.get())) {
             result = ModelSelectionResultPayload.Result.INVALID_ITEM;
-        } else if (TrainModels.find(payload.modelId()) == null) {
+        } else if (VehicleCatalog.find(payload.modelId()) == null) {
             result = ModelSelectionResultPayload.Result.UNKNOWN_MODEL;
         } else {
             stack.set(ModDataComponents.SELECTED_MODEL.get(), payload.modelId());

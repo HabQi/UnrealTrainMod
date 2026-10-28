@@ -10,7 +10,7 @@ import com.mojang.blaze3d.vertex.ByteBufferBuilder;
 import com.mojang.blaze3d.vertex.MeshData;
 import com.mojang.blaze3d.vertex.VertexBuffer;
 import com.mojang.blaze3d.vertex.VertexFormat;
-import com.unrealtrainmod.client.ClientModelManager.RenderBatch;
+import com.unrealtrainmod.client.renderer.RenderBatch;
 import com.unrealtrainmod.model.IndexedMesh;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;

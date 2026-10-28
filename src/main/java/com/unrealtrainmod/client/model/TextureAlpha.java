@@ -2,27 +2,37 @@
  * Copyright (c) 2026 HabQi
  * SPDX-License-Identifier: GPL-3.0-only
  */
-package com.unrealtrainmod.client;
+package com.unrealtrainmod.client.model;
 
 import com.mojang.blaze3d.platform.NativeImage;
+import com.unrealtrainmod.client.RenderCategory;
 import com.unrealtrainmod.model.MaterialRenderMode;
 
 /** Conservative alpha queries for nearest-filtered, repeating textures. Exists only during preparation. */
 final class TextureAlpha {
     private static final int PARTIAL = 1, OPAQUE = 2;
-    static final TextureAlpha WHITE = new TextureAlpha();
+    static final TextureAlpha WHITE = new TextureAlpha(OPAQUE);
     private final int width, height, stride;
+    private final int constantMask;
     private final int[] partial, opaque;
 
-    private TextureAlpha() {
+    private TextureAlpha(int mask) {
         width = height = stride = 0;
+        constantMask = mask;
         partial = opaque = null;
     }
 
-    TextureAlpha(NativeImage image) {
+    /** A nonnegative mask means every texel has that alpha class; -1 requests spatial queries. */
+    TextureAlpha(NativeImage image, int constantMask) {
         width = image.getWidth();
         height = image.getHeight();
         stride = Math.addExact(width, 1);
+        // Only images with different alpha classes need spatial queries.
+        this.constantMask = constantMask;
+        if (constantMask >= 0) {
+            partial = opaque = null;
+            return;
+        }
         int size = Math.multiplyExact(stride, Math.addExact(height, 1));
         partial = new int[size];
         opaque = new int[size];
@@ -39,6 +49,10 @@ final class TextureAlpha {
         }
     }
 
+    static int pixelMask(int alpha) {
+        return alpha == 255 ? OPAQUE : alpha >= 26 ? PARTIAL : 0;
+    }
+
     /** Null means that no fragment can contribute color. Vertex alpha already includes material alpha. */
     RenderCategory classify(float[] vertices, int[] colors, int a, int b, int c,
                             boolean alphaBlend, MaterialRenderMode mode) {
@@ -48,11 +62,14 @@ final class TextureAlpha {
         int maxAlpha = Math.max(colors[a] >>> 24, Math.max(colors[b] >>> 24, colors[c] >>> 24));
         if (maxAlpha == 0) return null;
         if (mode == null && !alphaBlend && minAlpha == 255) return RenderCategory.CUTOUT;
-        float minU = Math.min(vertices[a * 8 + 3], Math.min(vertices[b * 8 + 3], vertices[c * 8 + 3]));
-        float maxU = Math.max(vertices[a * 8 + 3], Math.max(vertices[b * 8 + 3], vertices[c * 8 + 3]));
-        float minV = Math.min(vertices[a * 8 + 4], Math.min(vertices[b * 8 + 4], vertices[c * 8 + 4]));
-        float maxV = Math.max(vertices[a * 8 + 4], Math.max(vertices[b * 8 + 4], vertices[c * 8 + 4]));
-        int mask = mask(minU, minV, maxU, maxV);
+        int mask = constantMask;
+        if (mask < 0) {
+            float minU = Math.min(vertices[a * 8 + 3], Math.min(vertices[b * 8 + 3], vertices[c * 8 + 3]));
+            float maxU = Math.max(vertices[a * 8 + 3], Math.max(vertices[b * 8 + 3], vertices[c * 8 + 3]));
+            float minV = Math.min(vertices[a * 8 + 4], Math.min(vertices[b * 8 + 4], vertices[c * 8 + 4]));
+            float maxV = Math.max(vertices[a * 8 + 4], Math.max(vertices[b * 8 + 4], vertices[c * 8 + 4]));
+            mask = mask(minU, minV, maxU, maxV);
+        }
         if (mask == 0) return null;
         // CUTOUT remains conservative: the shader evaluates the interpolated final alpha.
         if (mode == MaterialRenderMode.CUTOUT) return RenderCategory.CUTOUT;
@@ -63,7 +80,6 @@ final class TextureAlpha {
     }
 
     private int mask(float minU, float minV, float maxU, float maxV) {
-        if (opaque == null) return OPAQUE;
         // Inclusive texel bounds, expanded by one texel on each side. Long/double arithmetic avoids UV overflow.
         double x0 = Math.floor((double)minU * width) - 1;
         double y0 = Math.floor((double)minV * height) - 1;

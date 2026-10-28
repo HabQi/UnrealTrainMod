@@ -6,6 +6,7 @@ package com.unrealtrainmod.client.gui.screen;
 
 import com.unrealtrainmod.UnrealTrainMod;
 import com.unrealtrainmod.client.gui.theme.GuiTheme;
+import com.unrealtrainmod.client.gui.widget.AngleSlider;
 import com.unrealtrainmod.client.gui.widget.TrainIconButton;
 import com.unrealtrainmod.client.track.ClientTrackConstruction;
 import com.unrealtrainmod.network.payload.OpenTrackCurvePayload;
@@ -14,7 +15,9 @@ import com.unrealtrainmod.network.payload.TrackConstructionPayload.Feedback;
 import com.unrealtrainmod.network.payload.TrackCurveResultPayload;
 import com.unrealtrainmod.track.TrackCurveParameters;
 import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
+import net.minecraft.client.gui.components.Tooltip;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.CommonComponents;
 import net.minecraft.network.chat.Component;
@@ -23,7 +26,11 @@ import net.neoforged.neoforge.network.PacketDistributor;
 /** A small non-pausing panel; the world remains visible behind the local, reversible edit. */
 public final class TrackCurveScreen extends Screen {
     private final OpenTrackCurvePayload open;
-    private EditBox angle;
+    private AngleSlider angle;
+    private Button angleDecreaseLarge;
+    private Button angleDecreaseSmall;
+    private Button angleIncreaseSmall;
+    private Button angleIncreaseLarge;
     private EditBox length;
     private TrainIconButton apply;
     private TrainIconButton reset;
@@ -50,13 +57,15 @@ public final class TrackCurveScreen extends Screen {
         panelHeight = Math.min(248, height - 12);
         left = 6;
         top = Math.max(6, (height - panelHeight) / 2);
-        String angleText = angle == null ? Double.toString(open.initial().angle()) : angle.getValue();
+        double angleValue = angle == null ? open.initial().angle() : angle.number();
         String lengthText = length == null ? Double.toString(open.initial().length()) : length.getValue();
-        angle = new EditBox(font, left + 10, top + 55, panelWidth - 20, 18, label("angle"));
+        angle = new AngleSlider(left + 50, top + 55, panelWidth - 100, angleValue, value -> changed());
+        angleDecreaseLarge = angleButton(left + 10, "<<", "angle_decrease_large", 15, false);
+        angleDecreaseSmall = angleButton(left + 30, "<", "angle_decrease_small", 1, false);
+        angleIncreaseSmall = angleButton(angle.getRight() + 2, ">", "angle_increase_small", 1, true);
+        angleIncreaseLarge = angleButton(angle.getRight() + 22, ">>", "angle_increase_large", 15, true);
         length = new EditBox(font, left + 10, top + 92, panelWidth - 20, 18, label("length"));
-        angle.setMaxLength(32);
         length.setMaxLength(32);
-        angle.setValue(angleText);
         length.setValue(lengthText);
         apply = new TrainIconButton(left + 10, top + panelHeight - 74, panelWidth - 20,
                 label("apply"), TrainIconButton.Icon.CONFIRM, this::submit);
@@ -64,9 +73,12 @@ public final class TrackCurveScreen extends Screen {
                 label("automatic"), TrainIconButton.Icon.RESET, this::resetAutomatic);
         var cancel = new TrainIconButton(left + 10, top + panelHeight - 26, panelWidth - 20,
                 CommonComponents.GUI_CANCEL, TrainIconButton.Icon.CLOSE, this::onClose);
-        angle.setResponder(value -> changed());
         length.setResponder(value -> changed());
+        addRenderableWidget(angleDecreaseLarge);
+        addRenderableWidget(angleDecreaseSmall);
         addRenderableWidget(angle);
+        addRenderableWidget(angleIncreaseSmall);
+        addRenderableWidget(angleIncreaseLarge);
         addRenderableWidget(length);
         addRenderableWidget(apply);
         addRenderableWidget(reset);
@@ -78,11 +90,20 @@ public final class TrackCurveScreen extends Screen {
         return Component.translatable("gui.unrealtrainmod.track_curve." + key);
     }
 
+    private Button angleButton(int x, String text, String key, int step, boolean increase) {
+        Component description = label(key);
+        return Button.builder(Component.literal(text), button -> angle.adjust(step, increase))
+                .bounds(x, top + 55, 18, 18)
+                .tooltip(Tooltip.create(description))
+                .createNarration(supplier -> description.copy())
+                .build();
+    }
+
     private void changed() {
         automatic = false;
         status = null;
         try {
-            parsed = new TrackCurveParameters(Double.parseDouble(angle.getValue()), Double.parseDouble(length.getValue()));
+            parsed = new TrackCurveParameters(angle.number(), Double.parseDouble(length.getValue()));
             valid = true;
             ClientTrackConstruction.INSTANCE.editPreview(open.start(), parsed);
         } catch (IllegalArgumentException exception) {
@@ -93,7 +114,7 @@ public final class TrackCurveScreen extends Screen {
     }
 
     private void resetAutomatic() {
-        angle.setValue(Double.toString(open.initial().angle()));
+        angle.setNumber(open.initial().angle());
         length.setValue(Double.toString(open.initial().length()));
         automatic = true;
         valid = true;
@@ -106,7 +127,11 @@ public final class TrackCurveScreen extends Screen {
     private void updateWidgets() {
         apply.active = valid && !pending;
         reset.active = !pending;
-        angle.setEditable(!pending);
+        angle.active = !pending;
+        angleDecreaseLarge.active = !pending;
+        angleDecreaseSmall.active = !pending;
+        angleIncreaseSmall.active = !pending;
+        angleIncreaseLarge.active = !pending;
         length.setEditable(!pending);
     }
 

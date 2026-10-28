@@ -4,9 +4,9 @@
  */
 package com.unrealtrainmod.track.construction;
 
+import com.unrealtrainmod.track.model.RailCatalog;
 import com.unrealtrainmod.UnrealTrainMod;
 import com.unrealtrainmod.item.RailPlacerItem;
-import com.unrealtrainmod.model.RailModels;
 import com.unrealtrainmod.network.payload.TrackConstructionPayload;
 import com.unrealtrainmod.network.payload.TrackConstructionPayload.Feedback;
 import com.unrealtrainmod.network.payload.TrackConstructionPayload.Phase;
@@ -279,7 +279,7 @@ public final class TrackConstructionManager {
             return;
         }
         var modelId = RailPlacerItem.selectedModel(player.getMainHandItem());
-        if (modelId == null || RailModels.find(modelId) == null) {
+        if (modelId == null || RailCatalog.find(modelId) == null) {
             publish(player, session, modelId == null ? Feedback.SELECT_MODEL : Feedback.MISSING_MODEL);
             return;
         }

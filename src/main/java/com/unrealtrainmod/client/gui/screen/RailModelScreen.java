@@ -4,6 +4,8 @@
  */
 package com.unrealtrainmod.client.gui.screen;
 
+import com.unrealtrainmod.track.model.RailDefinition;
+import com.unrealtrainmod.track.model.RailCatalog;
 import com.unrealtrainmod.UnrealTrainMod;
 import com.unrealtrainmod.client.gui.base.BaseTrainScreen;
 import com.unrealtrainmod.client.gui.theme.GuiTheme;
@@ -12,7 +14,6 @@ import com.unrealtrainmod.client.gui.widget.TrainIconButton;
 import com.unrealtrainmod.client.gui.widget.TrainListWidget;
 import com.unrealtrainmod.client.renderer.preview.PreviewCamera;
 import com.unrealtrainmod.item.RailPlacerItem;
-import com.unrealtrainmod.model.RailModels;
 import com.unrealtrainmod.network.payload.ModelSelectionResultPayload;
 import com.unrealtrainmod.network.payload.RailModelSelectionResultPayload;
 import com.unrealtrainmod.network.payload.SelectRailModelPayload;
@@ -20,7 +21,6 @@ import java.util.Locale;
 import java.util.UUID;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.EditBox;
-import net.minecraft.network.chat.CommonComponents;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.world.item.ItemStack;
@@ -33,13 +33,13 @@ public final class RailModelScreen extends BaseTrainScreen {
     private final ItemStack originalStack;
     private final ResourceKey<Level> dimension;
     private final PreviewCamera camera = new PreviewCamera();
-    private RailModels.Definition selected;
-    private TrainListWidget<RailModels.Definition> list;
+    private RailDefinition selected;
+    private TrainListWidget<RailDefinition> list;
     private EditBox search;
     private RailPreviewWidget preview;
     private TrainIconButton apply;
     private TrainIconButton reset;
-    private TrainIconButton cancel;
+    private TrainIconButton close;
     private boolean expanded;
     private UUID pendingRequest;
     private Component status;
@@ -49,17 +49,18 @@ public final class RailModelScreen extends BaseTrainScreen {
         this.slot = slot;
         this.dimension = dimension;
         originalStack = stack;
-        selected = RailModels.find(RailPlacerItem.selectedModel(stack));
-        if (selected == null && !RailModels.all().isEmpty()) selected = RailModels.all().getFirst();
+        selected = RailCatalog.find(RailPlacerItem.selectedModel(stack));
+        if (selected == null && !RailCatalog.all().isEmpty()) selected = RailCatalog.all().getFirst();
     }
 
     @Override
     protected void buildWidgets() {
         int listWidth = Math.min(200, Math.max(90, (panelWidth - 30) * 2 / 5));
         if (search == null) {
-            list = new TrainListWidget<>(minecraft, listWidth, 100, RailModels.all(),
+            list = new TrainListWidget<>(minecraft, listWidth, 100, RailCatalog.all(),
+                    model -> model.config().archive(),
                     model -> Component.literal(model.railName()),
-                    model -> model.packName() + " · " + model.tags() + " · " + model.id(), this::selectModel,
+                    model -> model.tags().isBlank() ? model.id().toString() : model.tags() + " · " + model.id(), this::selectModel,
                     Component.translatable("gui.unrealtrainmod.rail_models.empty"));
             list.select(selected);
             list.filter("");
@@ -72,7 +73,8 @@ public final class RailModelScreen extends BaseTrainScreen {
                     TrainIconButton.Icon.RESET, camera::reset);
             apply = new TrainIconButton(0, 0, 120, Component.translatable("gui.unrealtrainmod.rail_models.apply"),
                     TrainIconButton.Icon.CONFIRM, this::submit);
-            cancel = new TrainIconButton(0, 0, 90, CommonComponents.GUI_CANCEL, TrainIconButton.Icon.CLOSE, this::onClose);
+            close = new TrainIconButton(0, 0, 24, Component.translatable("gui.unrealtrainmod.close"),
+                    TrainIconButton.Icon.CLOSE, this::onClose);
         }
         expanded = panelHeight >= 250;
         int rightX = left + listWidth + 20;
@@ -81,19 +83,21 @@ public final class RailModelScreen extends BaseTrainScreen {
         list.setRectangle(listWidth, Math.max(35, panelHeight - 112), left + 10, top + 56);
         list.clampScrollAmount();
         preview.setRectangle(rightWidth, Math.max(30, panelHeight - (expanded ? 144 : 112)), rightX, top + 32);
-        reset.setRectangle(24, 20, preview.getRight() - 24, top + 5);
+        reset.setRectangle(24, 20, preview.getRight() - 28, preview.getY() + 4);
         apply.setRectangle(120, 20, left + panelWidth - 130, top + panelHeight - 30);
-        cancel.setRectangle(90, 20, left + 10, top + panelHeight - 30);
+        close.setRectangle(24, 20, left + panelWidth - GuiTheme.PADDING - 24, top + 5);
         addRenderableWidget(search);
         addRenderableWidget(list);
+        // Handle the overlay button before the preview, but draw it above the preview.
+        addWidget(reset);
         addRenderableWidget(preview);
-        addRenderableWidget(reset);
+        addRenderableOnly(reset);
         addRenderableWidget(apply);
-        addRenderableWidget(cancel);
+        addRenderableWidget(close);
         updateWidgets();
     }
 
-    private void selectModel(RailModels.Definition model) {
+    private void selectModel(RailDefinition model) {
         selected = model;
         preview.setModel(model.id());
         status = null;
@@ -150,7 +154,7 @@ public final class RailModelScreen extends BaseTrainScreen {
                 }
             }
         }
-        Component message = status == null ? Component.translatable("gui.unrealtrainmod.rail_models.count", RailModels.all().size()) : status;
+        Component message = status == null ? Component.translatable("gui.unrealtrainmod.rail_models.count", RailCatalog.all().size()) : status;
         graphics.drawString(font, font.plainSubstrByWidth(message.getString(), panelWidth - 20),
                 left + 10, top + panelHeight - 46, GuiTheme.MUTED, false);
     }

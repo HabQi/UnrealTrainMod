@@ -5,7 +5,7 @@
 package com.unrealtrainmod.client.renderer;
 
 import com.mojang.blaze3d.vertex.PoseStack;
-import com.unrealtrainmod.client.ClientModelManager;
+import com.unrealtrainmod.client.model.LoadedModel;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.neoforged.neoforge.client.event.RenderFrameEvent;
 import net.neoforged.neoforge.client.event.RenderLevelStageEvent;
@@ -17,19 +17,19 @@ public final class TrainModelRenderer {
     private TrainModelRenderer() {}
 
     /** The source remains in the signature for callers; geometry is submitted to the world scene queue. */
-    public static void render(ClientModelManager.LoadedModel model, PoseStack pose,
+    public static void render(LoadedModel model, PoseStack pose,
                               MultiBufferSource buffers, int light) {
         WORLD.submit(model, pose, light);
     }
 
     /** Exact-name matches include hidden parts; submission never changes source visibility or geometry. */
-    public static boolean renderPart(ClientModelManager.LoadedInstance instance, String name, PoseStack pose,
+    public static boolean renderPart(LoadedModel.Instance instance, String name, PoseStack pose,
                                      MultiBufferSource buffers, int light) {
         return submitPart(WORLD, instance, name, pose, light);
     }
 
     /** Independent scenes can use named-part selections without leaking into the world queue. */
-    public static boolean submitPart(ModelRenderQueue queue, ClientModelManager.LoadedInstance instance,
+    public static boolean submitPart(ModelRenderQueue queue, LoadedModel.Instance instance,
                                      String name, PoseStack pose, int light) {
         var selection = instance.model().partsByName().get(name);
         if (selection == null) return false;

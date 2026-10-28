@@ -25,6 +25,7 @@ public final class MqoParser {
     private final BufferedReader reader;
     private int lineNumber;
     private ModelBounds.Builder scannedBounds;
+    private float scannedScale;
 
     private MqoParser(Reader reader) {
         this.reader = new BufferedReader(reader);
@@ -35,8 +36,10 @@ public final class MqoParser {
     }
 
     /** Scans visible vertices without retaining faces or constructing rendering geometry. */
-    public static ModelBounds scanBounds(InputStream input, Charset fallback) throws IOException {
+    public static ModelBounds scanBounds(InputStream input, Charset fallback, float scale) throws IOException {
+        if (!Float.isFinite(scale) || scale <= 0) throw new IOException("Model scale must be positive");
         var parser = new MqoParser(openReader(input, fallback));
+        parser.scannedScale = scale;
         parser.scannedBounds = new ModelBounds.Builder();
         try {
             parser.readModel();
@@ -182,7 +185,7 @@ public final class MqoParser {
                         if (v.size() != 3) throw error("Expected XYZ vertex");
                         float x = number(v.get(0)), y = number(v.get(1)), z = number(v.get(2));
                         if (partBounds == null) vertices.add(new ModelData.Position(x, y, z));
-                        else partBounds.include(x * TrainModels.MQO_SCALE, y * TrainModels.MQO_SCALE, z * TrainModels.MQO_SCALE);
+                        else partBounds.include(x * scannedScale, y * scannedScale, z * scannedScale);
                     }
                     requireEnd();
                 }

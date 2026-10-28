@@ -15,6 +15,7 @@ import net.minecraft.client.renderer.RenderType;
 import net.minecraft.client.renderer.ShaderInstance;
 import net.neoforged.neoforge.client.GlStateBackup;
 import org.joml.Matrix4f;
+import org.joml.Vector3f;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL13;
 import org.lwjgl.opengl.GL15;
@@ -23,6 +24,9 @@ import org.lwjgl.opengl.GL30;
 
 /** Protects the caller's state without changing framebuffer or projection. */
 final class ModelRenderState implements AutoCloseable {
+    // Preview poses transform normals into view space; +Z points toward the window's viewer.
+    private static final Vector3f FRONT_LIGHT = new Vector3f(0, 0, 1);
+    private final boolean frontLighting;
     private final GlStateBackup state = new GlStateBackup();
     private final ShaderInstance shader = RenderSystem.getShader();
     private final int program = GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM);
@@ -35,9 +39,10 @@ final class ModelRenderState implements AutoCloseable {
     private ShaderInstance boundShader;
     private PoseStack.Pose gpuPose;
     private int gpuLight, gpuPass;
-    private boolean defaultsPrepared;
+    private boolean texturesDirty;
 
-    ModelRenderState() {
+    ModelRenderState(boolean frontLighting) {
+        this.frontLighting = frontLighting;
         RenderSystem.backupGlState(state);
         for (int i = 0; i < 3; i++) {
             shaderTextures[i] = RenderSystem.getShaderTexture(i);
@@ -49,10 +54,10 @@ final class ModelRenderState implements AutoCloseable {
 
     void use(RenderType type, boolean blended, boolean doubleSided) {
         if (active != type) {
-            endGpu();
             if (active != null) active.clearRenderState();
             active = type;
             active.setupRenderState();
+            texturesDirty = true;
             RenderSystem.enableDepthTest();
             RenderSystem.depthFunc(GL11.GL_LEQUAL);
             RenderSystem.depthMask(!blended);
@@ -62,21 +67,17 @@ final class ModelRenderState implements AutoCloseable {
         }
     }
 
-    /** Scene uniforms and sampler binding are shared by consecutive draws of this RenderType. */
+    /** RenderTypes select engine shaders but do not bind a GL program; keep our shader across texture changes. */
     void prepareGpu(PoseStack.Pose pose, int light, int pass, Matrix4f modelView, Matrix4f projection) {
         if (boundShader == null) {
             custom.prepare(pose, light, pass);
-            if (!defaultsPrepared) {
-                custom.shader().setDefaultUniforms(VertexFormat.Mode.TRIANGLES, modelView, projection,
-                        Minecraft.getInstance().getWindow());
-                defaultsPrepared = true;
-            } else {
-                // RenderType switches update the shader texture IDs; scene uniforms remain unchanged.
-                for (int i = 0; i < 3; i++) custom.shader().setSampler("Sampler" + i, RenderSystem.getShaderTexture(i));
-            }
+            custom.shader().setDefaultUniforms(VertexFormat.Mode.TRIANGLES, modelView, projection,
+                    Minecraft.getInstance().getWindow());
+            setupLights(custom.shader());
             boundShader = custom.shader();
             boundShader.apply();
         } else {
+            if (texturesDirty) bindGpuTextures();
             // Uniform.upload does not skip unchanged values in this engine version.
             if (gpuPose != pose) {
                 custom.modelMatrix().set(pose.pose());
@@ -96,14 +97,37 @@ final class ModelRenderState implements AutoCloseable {
         gpuPose = pose;
         gpuLight = light;
         gpuPass = pass;
+        texturesDirty = false;
+    }
+
+    private void bindGpuTextures() {
+        int previous = GlStateManager._getActiveTexture();
+        for (int i = 0; i < 3; i++) {
+            int texture = RenderSystem.getShaderTexture(i);
+            boundShader.setSampler("Sampler" + i, texture);
+            RenderSystem.activeTexture(GL13.GL_TEXTURE0 + i);
+            RenderSystem.bindTexture(texture);
+        }
+        RenderSystem.activeTexture(previous);
     }
 
     /** CPU fallback owns its shader binding; the next GPU segment must apply its shader again. */
     void endGpu() {
         if (boundShader != null) {
             boundShader.clear();
+            restoreLights(boundShader);
             boundShader = null;
         }
+    }
+
+    void setupLights(ShaderInstance shader) {
+        if (!frontLighting) return;
+        if (shader.LIGHT0_DIRECTION != null) shader.LIGHT0_DIRECTION.set(FRONT_LIGHT);
+        if (shader.LIGHT1_DIRECTION != null) shader.LIGHT1_DIRECTION.set(FRONT_LIGHT);
+    }
+
+    void restoreLights(ShaderInstance shader) {
+        if (frontLighting) RenderSystem.setupShaderLights(shader);
     }
 
     @Override

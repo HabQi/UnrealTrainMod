@@ -13,11 +13,11 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.IntStream;
 
-/** Rail-only static repetition and endpoint clipping. No textures, Minecraft classes, or GPU resources. */
+/** Rail-only static repetition with endpoint tangent extension. No textures, Minecraft classes, or GPU resources. */
 public final class RailTrackMeshBuilder {
     public static final double MODEL_SCALE = 0.01;
     public static final double TOP_OFFSET = 0.25;
-    public static final double PERIOD = 0.625;
+    public static final double PERIOD = 0.5;
     private static final int MAX_VERTICES = 262_144;
     private final TrackGeometry geometry;
     private final int chunkX, chunkZ;
@@ -65,81 +65,40 @@ public final class RailTrackMeshBuilder {
             cells(source, split, end, vertices, colors);
             return;
         }
-        // Own an entire repeated module by its clipped along-track interval midpoint, never by individual faces.
+        // Own an entire repeated module by its within-track interval midpoint, never by individual faces.
         if (Math.floor(middle.x() / 16) != chunkX || Math.floor(middle.z() / 16) != chunkZ) return;
         double center = first * PERIOD + PERIOD / 2;
         int[] indices = source.indices();
-        for (int i = 0; i < indices.length; i += 3) {
-            List<Vertex> polygon = List.of(vertex(source, indices[i], center), vertex(source, indices[i + 1], center),
-                    vertex(source, indices[i + 2], center));
-            polygon = clip(clip(polygon, 0, true), length, false);
-            for (int j = 1; j + 1 < polygon.size(); j++) {
-                emit(polygon.get(0), vertices, colors);
-                emit(polygon.get(j), vertices, colors);
-                emit(polygon.get(j + 1), vertices, colors);
-            }
-        }
+        for (int index : indices) emit(source, index, center, vertices, colors);
     }
 
-    private static Vertex vertex(IndexedMesh mesh, int index, double center) {
-        float[] data = mesh.vertices();
-        int offset = index * 8, color = mesh.colors()[index];
-        return new Vertex(new double[]{data[offset], data[offset + 1], data[offset + 2] + center,
-                data[offset + 3], data[offset + 4], data[offset + 5], data[offset + 6], data[offset + 7],
-                (color >>> 24) & 255, (color >>> 16) & 255, (color >>> 8) & 255, color & 255});
-    }
-
-    private static List<Vertex> clip(List<Vertex> polygon, double boundary, boolean greater) {
-        if (polygon.isEmpty()) return polygon;
-        var result = new ArrayList<Vertex>(polygon.size() + 1);
-        Vertex previous = polygon.getLast();
-        boolean previousInside = inside(previous, boundary, greater);
-        for (Vertex current : polygon) {
-            boolean currentInside = inside(current, boundary, greater);
-            if (currentInside != previousInside) {
-                double t = (boundary - previous.data[2]) / (current.data[2] - previous.data[2]);
-                double[] data = new double[12];
-                for (int i = 0; i < data.length; i++) data[i] = previous.data[i] + (current.data[i] - previous.data[i]) * t;
-                data[2] = boundary;
-                result.add(new Vertex(data));
-            }
-            if (currentInside) result.add(current);
-            previous = current;
-            previousInside = currentInside;
-        }
-        return result;
-    }
-
-    private static boolean inside(Vertex v, double boundary, boolean greater) {
-        return greater ? v.data[2] >= boundary : v.data[2] <= boundary;
-    }
-
-    private void emit(Vertex vertex, FloatArrayList vertices, IntArrayList colors) {
+    private void emit(IndexedMesh mesh, int index, double center, FloatArrayList vertices, IntArrayList colors) {
         if (++vertexCount > MAX_VERTICES) throw new IllegalArgumentException("RTM rail chunk mesh exceeds 262,144 vertices");
-        double[] v = vertex.data;
-        var pose = geometry.sample(v[2]);
+        float[] v = mesh.vertices();
+        int offset = index * 8;
+        double distance = v[offset + 2] + center;
+        double sampledDistance = Math.clamp(distance, 0, length);
+        var pose = geometry.sample(sampledDistance);
         var p = pose.position(); var l = pose.lateral(); var n = pose.normal(); var t = pose.tangent();
-        double y = v[1] - TOP_OFFSET;
-        double xw = p.x() + l.x() * v[0] + n.x() * y;
-        double yw = p.y() + l.y() * v[0] + n.y() * y;
-        double zw = p.z() + l.z() * v[0] + n.z() * y;
-        double nx = l.x() * v[5] + n.x() * v[6] + t.x() * v[7];
-        double ny = l.y() * v[5] + n.y() * v[6] + t.y() * v[7];
-        double nz = l.z() * v[5] + n.z() * v[6] + t.z() * v[7];
+        // Preserve overhanging geometry by extending the centerline along its endpoint tangent.
+        double extension = distance - sampledDistance;
+        double x = v[offset], y = v[offset + 1] - TOP_OFFSET;
+        double xw = p.x() + l.x() * x + n.x() * y + t.x() * extension;
+        double yw = p.y() + l.y() * x + n.y() * y + t.y() * extension;
+        double zw = p.z() + l.z() * x + n.z() * y + t.z() * extension;
+        double nx = l.x() * v[offset + 5] + n.x() * v[offset + 6] + t.x() * v[offset + 7];
+        double ny = l.y() * v[offset + 5] + n.y() * v[offset + 6] + t.y() * v[offset + 7];
+        double nz = l.z() * v[offset + 5] + n.z() * v[offset + 6] + t.z() * v[offset + 7];
         double normalLength = Math.sqrt(nx * nx + ny * ny + nz * nz);
         if (normalLength > 0) { nx /= normalLength; ny /= normalLength; nz /= normalLength; }
-        for (double value : new double[]{xw - origin.x(), yw - origin.y(), zw - origin.z(), v[3], v[4], nx, ny, nz}) {
+        for (double value : new double[]{xw - origin.x(), yw - origin.y(), zw - origin.z(), v[offset + 3], v[offset + 4], nx, ny, nz}) {
             float component = (float)value;
             if (!Float.isFinite(component)) throw new IllegalArgumentException("Non-finite RTM rail vertex");
             vertices.add(component);
         }
-        int color = 0;
-        for (int i = 8; i < 12; i++) color = (color << 8) | (int)Math.clamp(Math.round(v[i]), 0, 255);
-        colors.add(color);
+        colors.add(mesh.colors()[index]);
         minX = Math.min(minX, xw); maxX = Math.max(maxX, xw);
         minY = Math.min(minY, yw); maxY = Math.max(maxY, yw);
         minZ = Math.min(minZ, zw); maxZ = Math.max(maxZ, zw);
     }
-
-    private record Vertex(double[] data) {}
 }

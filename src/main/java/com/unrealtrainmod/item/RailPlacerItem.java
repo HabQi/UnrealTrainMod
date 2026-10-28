@@ -4,7 +4,7 @@
  */
 package com.unrealtrainmod.item;
 
-import com.unrealtrainmod.model.RailModels;
+import com.unrealtrainmod.track.model.RailCatalog;
 import com.unrealtrainmod.registry.ModDataComponents;
 import com.unrealtrainmod.track.construction.TrackConstructionManager;
 import java.util.List;
@@ -49,7 +49,7 @@ public final class RailPlacerItem extends Item {
     @Override
     public void appendHoverText(ItemStack stack, TooltipContext context, List<Component> lines, TooltipFlag flags) {
         var id = selectedModel(stack);
-        var definition = RailModels.find(id);
+        var definition = RailCatalog.find(id);
         lines.add(Component.translatable("item.unrealtrainmod.rail_placer.selected", id == null
                 ? Component.translatable("item.unrealtrainmod.rail_placer.none")
                 : Component.literal(definition == null ? id.toString() : definition.railName())).withStyle(ChatFormatting.AQUA));

@@ -4,10 +4,10 @@
  */
 package com.unrealtrainmod.client;
 
+import com.unrealtrainmod.vehicle.VehicleCatalog;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.math.Axis;
 import com.unrealtrainmod.entity.PlacedModelEntity;
-import com.unrealtrainmod.model.TrainModels;
 import com.unrealtrainmod.model.ModelBounds;
 import com.unrealtrainmod.client.renderer.TrainModelRenderer;
 import net.minecraft.client.renderer.LevelRenderer;
@@ -29,7 +29,7 @@ public final class PlacedModelRenderer extends EntityRenderer<PlacedModelEntity>
             pose.mulPose(Axis.YP.rotationDegrees(-yaw));
             if (model == null) {
                 // Keep a failed import selectable and visible instead of leaving an invisible entity.
-                var definition = TrainModels.find(entity.getModelId());
+                var definition = VehicleCatalog.find(entity.getModelId());
                 var bounds = definition == null ? ModelBounds.MISSING : definition.bounds();
                 LevelRenderer.renderLineBox(pose, buffers.getBuffer(RenderType.lines()),
                         bounds.minX(), bounds.minY(), bounds.minZ(),

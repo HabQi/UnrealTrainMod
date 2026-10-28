@@ -12,11 +12,11 @@ import com.mojang.blaze3d.vertex.DefaultVertexFormat;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexFormat;
 import com.unrealtrainmod.client.ClientConfig;
-import com.unrealtrainmod.client.ClientModelManager;
-import com.unrealtrainmod.client.ClientModelManager.RenderBatch;
 import com.unrealtrainmod.client.GpuModel;
 import com.unrealtrainmod.client.RenderCategory;
 import com.unrealtrainmod.client.StaticModelShader;
+import com.unrealtrainmod.client.model.LoadedModel;
+import com.unrealtrainmod.client.model.PartSelection;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.IdentityHashMap;
@@ -29,6 +29,7 @@ import org.joml.Vector3f;
 /** One world view or one preview. No per-triangle objects and no vertex uploads on the normal GPU path. */
 public final class ModelRenderQueue implements AutoCloseable {
     private record Draw(RenderBatch batch, GpuModel.Part gpu, PoseStack.Pose pose, int light) {}
+    private final boolean frontLighting;
     private final List<Draw> draws = new ArrayList<>();
     private final IdentityHashMap<GpuModel.Mesh, Boolean> sortedMeshes = new IdentityHashMap<>();
     private final Matrix4f modelView = new Matrix4f(), projection = new Matrix4f();
@@ -40,12 +41,17 @@ public final class ModelRenderQueue implements AutoCloseable {
     private boolean started, customShader;
     private ByteBufferBuilder fallbackBuffer;
 
-    public void submit(ClientModelManager.LoadedModel model, PoseStack pose, int light) {
+    public ModelRenderQueue() { this(false); }
+
+    /** Front lighting is reserved for GUI vehicle previews; world queues retain scene lighting. */
+    public ModelRenderQueue(boolean frontLighting) { this.frontLighting = frontLighting; }
+
+    public void submit(LoadedModel model, PoseStack pose, int light) {
         for (var instance : model.instances()) submit(instance, instance.model().visibleParts(), pose, light);
     }
 
     /** Supports the existing exact-name selection API, including explicitly selected hidden parts. */
-    public void submit(ClientModelManager.LoadedInstance instance, ClientModelManager.PartSelection selection,
+    public void submit(LoadedModel.Instance instance, PartSelection selection,
                        PoseStack pose, int light) {
         RenderSystem.assertOnRenderThread();
         if (!started) {
@@ -71,7 +77,7 @@ public final class ModelRenderQueue implements AutoCloseable {
     public void drawOpaque() {
         RenderSystem.assertOnRenderThread();
         if (draws.isEmpty()) return;
-        try (var state = new ModelRenderState()) {
+        try (var state = new ModelRenderState(frontLighting)) {
             for (var draw : draws) {
                 var category = draw.batch().category();
                 if (category == RenderCategory.BLEND || (category == RenderCategory.MIXED && !customShader)) continue;
@@ -84,7 +90,7 @@ public final class ModelRenderQueue implements AutoCloseable {
                     part.mesh().draw(false, part.firstIndex(), draw.batch().indexCount());
                 } else {
                     state.endGpu();
-                    drawFallback(draw, alphaPass, 0, draw.batch().indexCount() / 3, false);
+                    drawFallback(state, draw, alphaPass, 0, draw.batch().indexCount() / 3, false);
                 }
             }
         } catch (RuntimeException | Error e) {
@@ -103,7 +109,7 @@ public final class ModelRenderQueue implements AutoCloseable {
             collectTriangles();
             if (triangles == 0) return;
             if (ClientConfig.SORT_TRANSLUCENT_TRIANGLES.getAsBoolean()) sortTriangles();
-            try (var state = new ModelRenderState()) {
+            try (var state = new ModelRenderState(frontLighting)) {
                 prepareGpuIndices();
                 for (int start = 0; start < triangles;) {
                     int drawIndex = triangleDraw[order[start]];
@@ -117,7 +123,7 @@ public final class ModelRenderQueue implements AutoCloseable {
                         draw.gpu().mesh().draw(true, gpuOffset[start], (end - start) * 3);
                     } else {
                         state.endGpu();
-                        drawFallback(draw, alphaPass, start, end, true);
+                        drawFallback(state, draw, alphaPass, start, end, true);
                     }
                     start = end;
                 }
@@ -132,7 +138,7 @@ public final class ModelRenderQueue implements AutoCloseable {
         int start = 0;
         while (start < draws.size() && draws.get(start).batch().category() == RenderCategory.CUTOUT) start++;
         if (start == draws.size()) return;
-        try (var state = new ModelRenderState()) {
+        try (var state = new ModelRenderState(frontLighting)) {
             while (start < draws.size()) {
                 var draw = draws.get(start);
                 if (draw.batch().category() == RenderCategory.CUTOUT) {
@@ -158,7 +164,7 @@ public final class ModelRenderQueue implements AutoCloseable {
                     draw.gpu().mesh().draw(false, draw.gpu().firstIndex(), count);
                 } else {
                     state.endGpu();
-                    drawFallback(draw, alphaPass, 0, count / 3, false);
+                    drawFallback(state, draw, alphaPass, 0, count / 3, false);
                 }
                 start = end;
             }
@@ -238,7 +244,7 @@ public final class ModelRenderQueue implements AutoCloseable {
     }
 
     /** CPU submission is used only when upload or shader loading failed; triangles are never sorted a second time. */
-    private void drawFallback(Draw draw, int alphaPass, int start, int end, boolean sorted) {
+    private void drawFallback(ModelRenderState state, Draw draw, int alphaPass, int start, int end, boolean sorted) {
         if (!customShader && alphaPass == StaticModelShader.FORCE_CUTOUT) StaticModelShader.warnCutoutFallback();
         if (fallbackBuffer == null) fallbackBuffer = new ByteBufferBuilder(1 << 18);
         var format = customShader ? StaticModelShader.FORMAT : DefaultVertexFormat.NEW_ENTITY;
@@ -272,11 +278,13 @@ public final class ModelRenderQueue implements AutoCloseable {
             shader = custom.shader();
         }
         shader.setDefaultUniforms(VertexFormat.Mode.TRIANGLES, modelView, projection, Minecraft.getInstance().getWindow());
-        shader.apply();
+        state.setupLights(shader);
         try {
+            shader.apply();
             BufferUploader.draw(builder.buildOrThrow());
         } finally {
             shader.clear();
+            state.restoreLights(shader);
         }
     }
 

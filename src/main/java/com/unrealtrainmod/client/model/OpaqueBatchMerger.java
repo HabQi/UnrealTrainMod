@@ -2,10 +2,10 @@
  * Copyright (c) 2026 HabQi
  * SPDX-License-Identifier: GPL-3.0-only
  */
-package com.unrealtrainmod.client;
+package com.unrealtrainmod.client.model;
 
-import com.unrealtrainmod.client.ClientModelManager.LoadedPart;
-import com.unrealtrainmod.client.ClientModelManager.RenderBatch;
+import com.unrealtrainmod.client.RenderCategory;
+import com.unrealtrainmod.client.renderer.RenderBatch;
 import com.unrealtrainmod.model.IndexedMesh;
 import com.unrealtrainmod.model.MaterialRenderMode;
 import it.unimi.dsi.fastutil.floats.FloatArrayList;
@@ -21,7 +21,7 @@ import net.minecraft.resources.ResourceLocation;
 
 /** Packs static cutout geometry once; part selections and the visible union only differ in index ranges. */
 final class OpaqueBatchMerger {
-    record Result(List<LoadedPart> parts, List<RenderBatch> visibleBatches) {}
+    record Result(List<ModelPart> parts, List<RenderBatch> visibleBatches) {}
     private record Key(ResourceLocation texture, MaterialRenderMode mode, boolean doubleSided) {
         static Key of(RenderBatch batch) { return new Key(batch.texture(), batch.mode(), batch.doubleSided()); }
     }
@@ -29,7 +29,7 @@ final class OpaqueBatchMerger {
 
     private OpaqueBatchMerger() {}
 
-    static Result merge(List<LoadedPart> parts) {
+    static Result merge(List<ModelPart> parts) {
         var groups = new LinkedHashMap<Key, Group>();
         // Visible ranges form a prefix in every group, so the default selection needs one draw per state.
         for (int pass = 0; pass < 2; pass++) {
@@ -58,7 +58,7 @@ final class OpaqueBatchMerger {
             }
         }
 
-        var mergedParts = new ArrayList<LoadedPart>();
+        var mergedParts = new ArrayList<ModelPart>();
         var visibleBatches = new ArrayList<RenderBatch>();
         for (var part : parts) {
             var batches = new ArrayList<RenderBatch>();
@@ -77,7 +77,7 @@ final class OpaqueBatchMerger {
                     if (part.visible()) visibleBatches.add(batch);
                 }
             }
-            mergedParts.add(new LoadedPart(part.index(), part.name(), part.visible(), batches));
+            mergedParts.add(new ModelPart(part.index(), part.name(), part.visible(), batches));
         }
         return new Result(List.copyOf(mergedParts), List.copyOf(visibleBatches));
     }
@@ -92,7 +92,7 @@ final class OpaqueBatchMerger {
 
         private Group(Key key) { this.key = key; }
 
-        private void append(LoadedPart part, List<RenderBatch> batches) {
+        private void append(ModelPart part, List<RenderBatch> batches) {
             int first = indices.size();
             for (var batch : batches) {
                 var mesh = batch.mesh();
