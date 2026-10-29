@@ -25,23 +25,43 @@ public final class TrainEntityRenderer extends EntityRenderer<TrainEntity> {
     public void render(TrainEntity entity, float yaw, float partialTick, PoseStack pose,
                        MultiBufferSource buffers, int light) {
         var model = ClientModelManager.INSTANCE.model(entity.getModelId());
+        var vehiclePose = entity.renderPose(partialTick);
         pose.pushPose();
         try {
-            pose.mulPose(Axis.YP.rotationDegrees(-Mth.rotLerp(partialTick, entity.yRotO, entity.getYRot())));
-            pose.mulPose(Axis.XP.rotationDegrees(Mth.lerp(partialTick, entity.xRotO, entity.getXRot())));
+            if (vehiclePose != null) pose.mulPose(vehiclePose.body().rotation());
+            else {
+                pose.mulPose(Axis.YP.rotationDegrees(-Mth.rotLerp(partialTick, entity.yRotO, entity.getYRot())));
+                pose.mulPose(Axis.XP.rotationDegrees(Mth.lerp(partialTick, entity.xRotO, entity.getXRot())));
+            }
             if (model == null) {
                 var definition = VehicleCatalog.find(entity.getModelId());
-                var bounds = definition == null ? ModelBounds.MISSING : definition.bounds();
-                LevelRenderer.renderLineBox(pose, buffers.getBuffer(RenderType.lines()),
-                        bounds.minX(), bounds.minY(), bounds.minZ(),
-                        bounds.maxX(), bounds.maxY(), bounds.maxZ(), 1, 0, 1, 1);
+                if (vehiclePose != null && definition != null) {
+                    for (var part : definition.parts()) {
+                        pose.pushPose();
+                        try {
+                            var transform = vehiclePose.partTransform(part);
+                            var p = transform.position();
+                            pose.translate(p.x(), p.y(), p.z());
+                            pose.mulPose(transform.rotation());
+                            lineBox(part.bounds(), pose, buffers);
+                        } finally {
+                            pose.popPose();
+                        }
+                    }
+                } else lineBox(definition == null ? ModelBounds.MISSING : definition.bounds(), pose, buffers);
             } else {
-                TrainModelRenderer.render(model, pose, buffers, light);
+                if (vehiclePose == null) TrainModelRenderer.render(model, pose, buffers, light);
+                else TrainModelRenderer.render(model, vehiclePose, pose, light);
             }
         } finally {
             pose.popPose();
         }
         super.render(entity, yaw, partialTick, pose, buffers, light);
+    }
+
+    private static void lineBox(ModelBounds bounds, PoseStack pose, MultiBufferSource buffers) {
+        LevelRenderer.renderLineBox(pose, buffers.getBuffer(RenderType.lines()),
+                bounds.minX(), bounds.minY(), bounds.minZ(), bounds.maxX(), bounds.maxY(), bounds.maxZ(), 1, 0, 1, 1);
     }
 
     @Override public ResourceLocation getTextureLocation(TrainEntity entity) { return ClientModelManager.WHITE; }

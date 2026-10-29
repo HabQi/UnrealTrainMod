@@ -13,7 +13,8 @@ import java.util.UUID;
 public final class TrainConsist {
     public enum StopReason {
         STOPPED, END_OF_ROUTE, UNLOADED_AREA, INVALID_POSITION, TRACK_CHANGED,
-        INVALID_ANCHOR, MISSING_MODEL, STORAGE_ERROR, UNBOUND
+        INVALID_ANCHOR, MISSING_MODEL, STORAGE_ERROR, UNBOUND,
+        INSUFFICIENT_ROUTE, DEGENERATE_GEOMETRY
     }
 
     public static final double DEFAULT_SPEED = 4;

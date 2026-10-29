@@ -56,29 +56,43 @@ public final class ObjParser {
 
     /** The part filter uses the same consecutive o/g names as full parsing. */
     public static ModelBounds scanBounds(Reader reader, String sourcePath, Predicate<String> includePart) throws IOException {
+        var bounds = new ModelBounds.Builder();
+        scanPartBounds(reader, sourcePath, includePart).values().forEach(bounds::include);
+        return bounds.build();
+    }
+
+    /** One pass over face references, retaining only vertices and per-name bounds, never materials/faces. */
+    public static Map<String, ModelBounds> scanPartBounds(Reader reader, String sourcePath,
+                                                        Predicate<String> includePart) throws IOException {
         var text = new WavefrontReader(reader, sourcePath);
         var positions = new ArrayList<ModelData.Position>();
-        var bounds = new ModelBounds.Builder();
+        var bounds = new LinkedHashMap<String, ModelBounds.Builder>();
+        String name = "default";
         boolean visible = includePart.test("default");
         String[] line;
         while ((line = text.next()) != null) {
             switch (line[0]) {
                 case "v" -> positions.add(readPosition(text, line));
-                case "o", "g" -> visible = includePart.test(line.length == 1 ? "default" : text.argument());
+                case "o", "g" -> {
+                    name = line.length == 1 ? "default" : text.argument();
+                    visible = includePart.test(name);
+                }
                 case "f" -> {
                     text.count(line, 4, 4097);
+                    var partBounds = visible ? bounds.computeIfAbsent(name, ignored -> new ModelBounds.Builder()) : null;
                     for (int i = 1; i < line.length; i++) {
                         String[] corner = readCorner(text, line[i]);
                         var p = positions.get(index(text, corner[0], positions.size(), "position"));
-                        if (visible) bounds.include(p.x(), p.y(), p.z());
+                        if (partBounds != null) partBounds.include(p.x(), p.y(), p.z());
                     }
                 }
                 default -> checkGeometry(text, line[0]);
             }
         }
-        var result = bounds.build();
-        if (result == null) throw text.error("OBJ contains no included polygon faces");
-        return result;
+        if (bounds.isEmpty()) throw text.error("OBJ contains no included polygon faces");
+        var result = new LinkedHashMap<String, ModelBounds>();
+        bounds.forEach((part, builder) -> result.put(part, builder.build()));
+        return Map.copyOf(result);
     }
 
     private static ModelData.Position readPosition(WavefrontReader text, String[] line) throws IOException {

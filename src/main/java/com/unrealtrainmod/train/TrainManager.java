@@ -9,12 +9,13 @@ import com.unrealtrainmod.track.TrackConnection;
 import com.unrealtrainmod.track.TrackGraph;
 import com.unrealtrainmod.track.TrackSegmentChange;
 import com.unrealtrainmod.track.block.TrackBlockManager;
-import com.unrealtrainmod.track.geometry.TrackPose;
 import com.unrealtrainmod.track.path.TrackCursor;
 import com.unrealtrainmod.track.path.TrackPathSampler;
 import com.unrealtrainmod.track.path.TrackRoute;
 import com.unrealtrainmod.train.TrainConsist.StopReason;
 import com.unrealtrainmod.vehicle.VehicleCatalog;
+import com.unrealtrainmod.vehicle.VehiclePose;
+import com.unrealtrainmod.vehicle.VehiclePoseSolver;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
@@ -23,6 +24,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Consumer;
+import java.util.function.Predicate;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.phys.AABB;
@@ -119,22 +121,40 @@ public final class TrainManager {
         var train = state(entity);
         if (train.route() == null) {
             var failure = prepare(entity, entity.getRailAnchor(), train);
-            if (failure != null) train.stop(failure);
+            if (failure != null) stop(entity, train, failure);
         }
         return train;
     }
 
     /** Returns a failure reason, or null after an atomic stopped binding. */
     public StopReason bind(TrainEntity entity, TrainAnchor anchor) {
+        return bind(entity, anchor, ignored -> true, false);
+    }
+
+    /** Placement validates geometry, all occupied chunks and player permissions before spawning. */
+    public StopReason place(TrainEntity entity, TrainAnchor anchor, Predicate<BlockPos> allowed) {
+        return bind(entity, anchor, allowed, true);
+    }
+
+    private StopReason bind(TrainEntity entity, TrainAnchor anchor, Predicate<BlockPos> allowed, boolean spawn) {
         var candidate = new TrainConsist(entity.getUUID());
         var failure = prepare(entity, anchor, candidate);
         if (failure != null) return failure;
-        var pose = Pose.of(candidate.sampler().sample(candidate.progress()), VehicleCatalog.find(entity.getModelId()).motionSpec().trackDatum());
-        failure = areaFailure(pose.areaBounds(entity));
+        var solved = VehiclePoseSolver.solve(candidate.sampler(), candidate.progress(),
+                VehicleCatalog.find(entity.getModelId()).motionSpec());
+        if (solved.failure() != null) return poseFailure(solved.failure());
+        var pose = solved.pose();
+        failure = areaFailure(entity.boundsAt(pose));
         if (failure != null) return failure;
+        var position = pose.body().position();
+        if (!allowed.test(BlockPos.containing(position.x(), position.y(), position.z()))) return StopReason.INVALID_POSITION;
         entity.setRailAnchor(anchor);
-        pose.apply(entity);
+        entity.setRailPose(pose);
         entity.setOldPosAndRot();
+        if (spawn && !level.addFreshEntity(entity)) {
+            pending.remove(candidate.id());
+            return StopReason.INVALID_POSITION;
+        }
         trains.put(candidate.id(), candidate);
         pending.remove(candidate.id());
         return null;
@@ -145,24 +165,36 @@ public final class TrainManager {
         var train = state(entity);
         var model = VehicleCatalog.find(entity.getModelId());
         if (model == null) {
-            train.stop(StopReason.MISSING_MODEL);
+            stop(entity, train, StopReason.MISSING_MODEL);
             return StopReason.MISSING_MODEL;
         }
         StopReason failure = null;
+        VehiclePose pose = null;
         if (train.routeDirty()) failure = prepare(entity, entity.getRailAnchor(), train);
         if (failure == null) {
-            var pose = Pose.of(train.sampler().sample(train.progress()), model.motionSpec().trackDatum());
-            failure = areaFailure(currentArea(entity).minmax(pose.areaBounds(entity)));
+            var solved = VehiclePoseSolver.solve(train.sampler(), train.progress(), model.motionSpec());
+            if (solved.failure() != null) failure = poseFailure(solved.failure());
+            else {
+                pose = solved.pose();
+                failure = areaFailure(currentArea(entity).minmax(entity.boundsAt(pose)));
+            }
         }
         if (failure != null) {
-            train.stop(failure);
+            stop(entity, train, failure);
             return failure;
         }
+        entity.setRailPose(pose);
         train.start();
         return null;
     }
 
-    public void stop(TrainEntity entity) { state(entity).stop(StopReason.STOPPED); }
+    public void stop(TrainEntity entity) { stop(entity, state(entity), StopReason.STOPPED); }
+
+    private static void stop(TrainEntity entity, TrainConsist train, StopReason reason) {
+        train.stop(reason);
+        // Flush a final odd-tick sample too, so stopping never leaves the client one sample behind.
+        entity.syncRailPose();
+    }
 
     public StopReason setSpeed(TrainEntity entity, double speed) {
         if (!Double.isFinite(speed) || Math.abs(speed) > TrainConsist.MAX_SPEED) {
@@ -216,7 +248,10 @@ public final class TrainManager {
     private void trackChanged(TrackSegmentChange change) {
         var segment = change.segment();
         for (var train : trains.values()) {
-            if (train.usesNode(segment.startNodeId()) || train.usesNode(segment.endNodeId())) train.invalidate();
+            if (train.usesNode(segment.startNodeId()) || train.usesNode(segment.endNodeId())) {
+                train.invalidate();
+                if (level.getEntity(train.id()) instanceof TrainEntity entity) entity.syncRailPose();
+            }
         }
     }
 
@@ -243,21 +278,26 @@ public final class TrainManager {
     private void advance(TrainEntity entity, TrainConsist train) {
         var model = VehicleCatalog.find(entity.getModelId());
         if (model == null) {
-            train.stop(StopReason.MISSING_MODEL);
+            stop(entity, train, StopReason.MISSING_MODEL);
             return;
         }
         AABB previous = currentArea(entity);
         var failure = areaFailure(previous);
         if (failure != null) {
-            train.stop(failure);
+            stop(entity, train, failure);
             return;
         }
         double from = train.progress();
+        var range = VehiclePoseSolver.range(train.route().getLength(), model.motionSpec());
+        if (!range.contains(from)) {
+            stop(entity, train, StopReason.INSUFFICIENT_ROUTE);
+            return;
+        }
         double requested = from + train.actualSpeed() / 20;
-        double target = Math.clamp(requested, 0, train.route().getLength());
+        double target = Math.clamp(requested, range.min(), range.max());
         boolean forward = train.actualSpeed() > 0;
         double accepted = from;
-        Pose acceptedPose = null;
+        VehiclePose acceptedPose = null;
         while (accepted != target) {
             var cursor = train.sampler().locate(accepted);
             int index = cursor.segmentIndex();
@@ -266,8 +306,13 @@ public final class TrainManager {
                     forward ? train.route().segmentLength(index) : 0));
             double next = forward ? Math.min(target, Math.min(accepted + SAMPLE_STEP, boundary))
                     : Math.max(target, Math.max(accepted - SAMPLE_STEP, boundary));
-            var pose = Pose.of(train.sampler().sample(next), model.motionSpec().trackDatum());
-            var bounds = pose.areaBounds(entity);
+            var solved = VehiclePoseSolver.solve(train.sampler(), next, model.motionSpec());
+            if (solved.failure() != null) {
+                failure = poseFailure(solved.failure());
+                break;
+            }
+            var pose = solved.pose();
+            var bounds = entity.boundsAt(pose);
             failure = areaFailure(previous.minmax(bounds));
             if (failure != null) break;
             accepted = next;
@@ -281,10 +326,10 @@ public final class TrainManager {
                     : train.route().segmentLength(cursor.segmentIndex()) - cursor.distance();
             entity.setRailAnchor(new TrainAnchor(connection.segmentId(), local, connection.fromStart()));
             train.setProgress(accepted);
-            acceptedPose.apply(entity);
+            entity.advanceRailPose(acceptedPose);
         }
-        if (failure != null) train.stop(failure);
-        else if (accepted == 0 || accepted == train.route().getLength()) train.stop(StopReason.END_OF_ROUTE);
+        if (failure != null) stop(entity, train, failure);
+        else if (accepted == range.min() || accepted == range.max()) stop(entity, train, StopReason.END_OF_ROUTE);
     }
 
     private static AABB currentArea(TrainEntity entity) {
@@ -314,20 +359,10 @@ public final class TrainManager {
         return null;
     }
 
-    private record Pose(double x, double y, double z, float yaw, float pitch) {
-        static Pose of(TrackPose pose, double datum) {
-            var position = pose.position();
-            var normal = pose.normal();
-            var tangent = pose.tangent();
-            return new Pose(position.x() + normal.x() * datum, position.y() + normal.y() * datum,
-                    position.z() + normal.z() * datum,
-                    (float)Math.toDegrees(Math.atan2(-tangent.x(), tangent.z())),
-                    (float)-Math.toDegrees(Math.atan2(tangent.y(), Math.hypot(tangent.x(), tangent.z()))));
-        }
-
-        AABB areaBounds(TrainEntity entity) {
-            return entity.boundsAt(x, y, z, yaw, pitch).minmax(new AABB(x, y, z, x, y, z));
-        }
-        void apply(TrainEntity entity) { entity.setRailPose(x, y, z, yaw, pitch); }
+    private static StopReason poseFailure(VehiclePoseSolver.Failure failure) {
+        return switch (failure) {
+            case INSUFFICIENT_ROUTE -> StopReason.INSUFFICIENT_ROUTE;
+            case DEGENERATE_GEOMETRY -> StopReason.DEGENERATE_GEOMETRY;
+        };
     }
 }

@@ -7,6 +7,7 @@ package com.unrealtrainmod.client.gui.screen;
 import com.unrealtrainmod.track.model.RailDefinition;
 import com.unrealtrainmod.track.model.RailCatalog;
 import com.unrealtrainmod.UnrealTrainMod;
+import com.unrealtrainmod.client.ClientThumbnailManager;
 import com.unrealtrainmod.client.gui.base.BaseTrainScreen;
 import com.unrealtrainmod.client.gui.theme.GuiTheme;
 import com.unrealtrainmod.client.gui.widget.RailPreviewWidget;
@@ -55,13 +56,14 @@ public final class RailModelScreen extends BaseTrainScreen {
 
     @Override
     protected void buildWidgets() {
-        int listWidth = Math.min(200, Math.max(90, (panelWidth - 30) * 2 / 5));
+        int listWidth = Math.min(200, Math.max(90, (panelWidth - 30) * 2 / 5))
+                + TrainListWidget.SCROLLBAR_GUTTER;
         if (search == null) {
             list = new TrainListWidget<>(minecraft, listWidth, 100, RailCatalog.all(),
                     model -> model.config().archive(),
                     model -> Component.literal(model.railName()),
                     model -> model.tags().isBlank() ? model.id().toString() : model.tags() + " · " + model.id(),
-                    RailDefinition::buttonTexture, this::selectModel,
+                    ClientThumbnailManager.INSTANCE::railImage, this::selectModel,
                     Component.translatable("gui.unrealtrainmod.rail_models.empty"));
             list.select(selected);
             list.filter("");

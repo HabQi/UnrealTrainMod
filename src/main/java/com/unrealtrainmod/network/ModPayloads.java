@@ -23,7 +23,7 @@ public final class ModPayloads {
     private ModPayloads() {}
 
     public static void register(RegisterPayloadHandlersEvent event) {
-        var registrar = event.registrar("5");
+        var registrar = event.registrar("6");
         registrar.playToServer(SetTrackCurvePayload.TYPE, SetTrackCurvePayload.STREAM_CODEC,
                 ServerPayloadHandlers::setTrackCurve);
         registrar.playToClient(OpenTrackCurvePayload.TYPE, OpenTrackCurvePayload.STREAM_CODEC,

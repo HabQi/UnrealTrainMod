@@ -175,12 +175,14 @@
   "commands.unrealtrainmod.train.anchor_none": "No valid anchor. Use /utm train bind to attach this vehicle explicitly.",
   "commands.unrealtrainmod.train.state.running": "running",
   "commands.unrealtrainmod.train.state.stopped": "stopped",
-  "commands.unrealtrainmod.train.state.end_of_route": "route endpoint reached",
+  "commands.unrealtrainmod.train.state.end_of_route": "vehicle travel limit reached; both bogies remain on the route",
   "commands.unrealtrainmod.train.state.unloaded_area": "car or swept area is not loaded and entity-ticking; load the area and start manually",
-  "commands.unrealtrainmod.train.state.invalid_position": "car or swept area exceeds the world border or build height",
+  "commands.unrealtrainmod.train.state.invalid_position": "car or swept area exceeds the world border or build height, or the target position is not permitted",
   "commands.unrealtrainmod.train.state.track_changed": "track connections changed; start to rebuild the route, or bind again if the anchor track was removed",
   "commands.unrealtrainmod.train.state.invalid_anchor": "invalid anchor: missing track, distance outside its segment, malformed saved data or an unusable route; bind again",
   "commands.unrealtrainmod.train.state.missing_model": "vehicle model is missing; restore the package before starting",
   "commands.unrealtrainmod.train.state.storage_error": "track storage is unavailable; inspect the track save and logs",
-  "commands.unrealtrainmod.train.state.unbound": "not bound to a track; use /utm train bind"
+  "commands.unrealtrainmod.train.state.unbound": "not bound to a track; use /utm train bind",
+  "commands.unrealtrainmod.train.state.insufficient_route": "insufficient route: both bogies must fit on the same valid route; choose another placement or binding position",
+  "commands.unrealtrainmod.train.state.degenerate_geometry": "cannot solve vehicle pose: bogie samples coincide or their chord is nearly vertical; adjust the track or bogie offsets"
 }

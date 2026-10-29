@@ -9,6 +9,8 @@ import org.slf4j.LoggerFactory;
 
 import com.unrealtrainmod.model.ModelSource;
 import com.unrealtrainmod.vehicle.VehicleDefinition;
+import com.unrealtrainmod.vehicle.VehiclePartRole;
+import com.unrealtrainmod.compat.ir.IrBogieGroups;
 import com.mojang.blaze3d.platform.NativeImage;
 import com.unrealtrainmod.client.RenderCategory;
 import com.unrealtrainmod.client.renderer.RenderBatch;
@@ -19,6 +21,7 @@ import it.unimi.dsi.fastutil.ints.IntArrayList;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.EnumMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -170,6 +173,16 @@ public final class ModelPreparer {
         }
         var partsByName = new HashMap<String, PartSelection>();
         named.forEach((name, matching) -> partsByName.put(name, new PartSelection(matching)));
+        var componentParts = new EnumMap<VehiclePartRole, PartSelection>(VehiclePartRole.class);
+        if (source.format() == ModelSource.Format.IR_OBJ) {
+            for (var role : VehiclePartRole.values()) {
+                var selection = PartSelection.grouped(visible.stream()
+                        .filter(part -> IrBogieGroups.role(part.name()) == role).toList());
+                componentParts.put(role, selection);
+                // Register these range objects before GPU upload; all alias the existing packed meshes.
+                allBatches.addAll(selection.batches());
+            }
+        }
         var mergedVisible = merged.visibleBatches().stream().filter(batch -> batch.category() == RenderCategory.CUTOUT).toList();
         LOGGER.info("Model {}: visible CUTOUT batches {} -> {}; triangles {} -> {}",
                 source.model(), originalVisible.size(), mergedVisible.size(),
@@ -178,6 +191,6 @@ public final class ModelPreparer {
         LOGGER.info("Model {}: atlas visible CUTOUT batches {} -> {}",
                 source.model(), beforeAtlas, mergedVisible.size());
         return new PreparedModel(merged.parts(), new PartSelection(visible, merged.visibleBatches()),
-                Map.copyOf(partsByName), List.copyOf(allBatches));
+                Map.copyOf(partsByName), Map.copyOf(componentParts), List.copyOf(allBatches));
     }
 }

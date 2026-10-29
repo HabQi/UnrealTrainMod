@@ -4,6 +4,8 @@
  */
 package com.unrealtrainmod.client.renderer.preview;
 
+import com.mojang.blaze3d.platform.NativeImage;
+import com.mojang.blaze3d.vertex.PoseStack;
 import com.unrealtrainmod.client.model.LoadedModel;
 import com.unrealtrainmod.client.renderer.ModelRenderQueue;
 import net.minecraft.client.gui.GuiGraphics;
@@ -18,14 +20,26 @@ public final class TrainPreviewRenderer implements AutoCloseable {
                        LoadedModel model, PreviewCamera camera) {
         queue.clear();
         try {
-            renderer.render(graphics, x, y, width, height, model.bounds(), camera, pose -> {
-                queue.submit(model, pose, LightTexture.FULL_BRIGHT);
-                queue.drawOpaque();
-                queue.drawTranslucent();
-            });
+            renderer.render(graphics, x, y, width, height, model.bounds(), camera, pose -> draw(model, pose));
         } finally {
             queue.clear();
         }
+    }
+
+    public NativeImage capture(LoadedModel model) {
+        queue.clear();
+        try {
+            return renderer.capture(model.bounds(), -90, 22, true,
+                    PreviewRenderer.VEHICLE_THUMBNAIL_SAMPLE_SCALE, pose -> draw(model, pose));
+        } finally {
+            queue.clear();
+        }
+    }
+
+    private void draw(LoadedModel model, PoseStack pose) {
+        queue.submit(model, pose, LightTexture.FULL_BRIGHT);
+        queue.drawOpaque();
+        queue.drawTranslucent();
     }
 
     @Override

@@ -5,9 +5,8 @@
 package com.unrealtrainmod.client.gui.widget;
 
 import com.mojang.blaze3d.systems.RenderSystem;
-import com.unrealtrainmod.client.ClientButtonTextureManager;
+import com.unrealtrainmod.client.gui.ListEntryImage;
 import com.unrealtrainmod.client.gui.theme.GuiTheme;
-import com.unrealtrainmod.resource.PackageAsset;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -28,33 +27,36 @@ import net.minecraft.network.chat.Component;
 
 /** Package-grouped model entries, with a retained selection independent of filtering. */
 public final class TrainListWidget<T> extends ObjectSelectionList<TrainListWidget.Row<T>> {
+    /** Extra list width reserved for the scrollbar, outside the existing row width. */
+    public static final int SCROLLBAR_GUTTER = 8;
+
     private final List<T> items;
     private final Function<T, Path> archive;
     private final Function<T, Component> label;
     private final Function<T, String> detail;
-    private final Function<T, PackageAsset> buttonTexture;
+    private final Function<T, ListEntryImage> image;
     private final Consumer<T> onSelect;
     private final Component emptyMessage;
     private T selectedValue;
 
     public TrainListWidget(Minecraft minecraft, int width, int height, List<T> items,
                            Function<T, Path> archive, Function<T, Component> label,
-                           Function<T, String> detail, Function<T, PackageAsset> buttonTexture, Consumer<T> onSelect) {
-        this(minecraft, width, height, items, archive, label, detail, buttonTexture, onSelect,
+                           Function<T, String> detail, Function<T, ListEntryImage> image, Consumer<T> onSelect) {
+        this(minecraft, width, height, items, archive, label, detail, image, onSelect,
                 Component.translatable("gui.unrealtrainmod.models.empty"));
     }
 
     public TrainListWidget(Minecraft minecraft, int width, int height, List<T> items,
                            Function<T, Path> archive, Function<T, Component> label,
-                           Function<T, String> detail, Function<T, PackageAsset> buttonTexture,
+                           Function<T, String> detail, Function<T, ListEntryImage> image,
                            Consumer<T> onSelect, Component emptyMessage) {
-        super(minecraft, width, height, 0, 34);
+        super(minecraft, width, height, 0, 40);
         this.emptyMessage = emptyMessage;
         this.items = List.copyOf(items);
         this.archive = archive;
         this.label = label;
         this.detail = detail;
-        this.buttonTexture = buttonTexture;
+        this.image = image;
         this.onSelect = onSelect;
     }
 
@@ -99,7 +101,7 @@ public final class TrainListWidget<T> extends ObjectSelectionList<TrainListWidge
         }
     }
 
-    @Override public int getRowWidth() { return getWidth() - 12; }
+    @Override public int getRowWidth() { return getWidth() - 12 - SCROLLBAR_GUTTER; }
     @Override protected int getScrollbarPosition() { return getRight() - 7; }
     @Override protected boolean isValidMouseClick(int button) { return active && super.isValidMouseClick(button); }
 
@@ -176,22 +178,26 @@ public final class TrainListWidget<T> extends ObjectSelectionList<TrainListWidge
             if (heading != null) {
                 graphics.fill(left, top + 2, left + width, top + height - 2, GuiTheme.BACKGROUND);
                 graphics.drawString(font, font.plainSubstrByWidth(heading.getString(), width - 8),
-                        left + 3, top + 9, GuiTheme.ACCENT, false);
+                        left + 3, top + (height - font.lineHeight) / 2, GuiTheme.ACCENT, false);
                 graphics.hLine(left, left + width - 1, top + height - 2, GuiTheme.BORDER);
                 return;
             }
-            var texture = ClientButtonTextureManager.INSTANCE.texture(owner.buttonTexture.apply(item));
+            var texture = owner.image.apply(item);
             if (texture != null) {
-                int imageHeight = Math.min(height - 4, (width - 8) / 5);
-                int imageWidth = imageHeight * 5;
+                int contentWidth = width - 4;
+                float scale = texture.pixelScale() > 0 ? texture.pixelScale()
+                        : Math.max((float)contentWidth / texture.width(), (float)height / texture.height());
+                int imageWidth = (int)Math.ceil(texture.width() * scale);
+                int imageHeight = (int)Math.ceil(texture.height() * scale);
+                graphics.enableScissor(left, top, left + contentWidth, top + height);
                 RenderSystem.enableBlend();
                 RenderSystem.defaultBlendFunc();
                 try {
-                    graphics.blit(texture, left + (width - imageWidth) / 2, top + (height - imageHeight) / 2,
-                            imageWidth, imageHeight, 0, 0, ClientButtonTextureManager.WIDTH, ClientButtonTextureManager.HEIGHT,
-                            ClientButtonTextureManager.WIDTH, ClientButtonTextureManager.HEIGHT);
+                    graphics.blit(texture.id(), left + (contentWidth - imageWidth) / 2, top + (height - imageHeight) / 2,
+                            imageWidth, imageHeight, 0, 0, texture.width(), texture.height(), texture.width(), texture.height());
                 } finally {
                     RenderSystem.disableBlend();
+                    graphics.disableScissor();
                 }
                 return;
             }

@@ -19,6 +19,8 @@ public final class TrackPathSampler {
         this.route = Objects.requireNonNull(route);
     }
 
+    public double getLength() { return route.getLength(); }
+
     /** Finds a route-local cursor in O(log n). Out-of-range distances are never clamped or wrapped. */
     public TrackCursor locate(double s) {
         if (!Double.isFinite(s) || s < 0 || s > route.getLength()) {

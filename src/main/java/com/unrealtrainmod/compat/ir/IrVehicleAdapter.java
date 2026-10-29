@@ -17,11 +17,14 @@ import com.unrealtrainmod.resource.PackageAsset;
 import com.unrealtrainmod.resource.ResourceIds;
 import com.unrealtrainmod.vehicle.VehicleDefinition;
 import com.unrealtrainmod.vehicle.VehicleMotionSpec;
+import com.unrealtrainmod.vehicle.VehiclePartRole;
+import com.unrealtrainmod.track.geometry.TrackVector;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
-import java.util.List;
+import java.util.ArrayList;
+import java.util.EnumMap;
 import java.util.Locale;
 import java.util.Map;
 import net.minecraft.resources.ResourceLocation;
@@ -31,7 +34,7 @@ import net.minecraft.util.GsonHelper;
 final class IrVehicleAdapter {
     private static final float STANDARD_GAUGE = 1.435f;
     private final Map<ResourceLocation, VehicleDefinition> definitions;
-    private final Map<PackageAsset, ModelBounds> boundsCache = new HashMap<>();
+    private final Map<PackageAsset, Map<String, ModelBounds>> boundsCache = new HashMap<>();
     private final LoadReport report;
 
     IrVehicleAdapter(Map<ResourceLocation, VehicleDefinition> definitions, LoadReport report) {
@@ -73,21 +76,37 @@ final class IrVehicleAdapter {
         }
         float scale = gauge / modelGauge;
         if (!Float.isFinite(scale) || scale <= 0) throw new IOException("Invalid IR model gauge scale");
-        var rawBounds = boundsCache.get(model);
-        if (rawBounds == null) {
+        var rawParts = boundsCache.get(model);
+        if (rawParts == null) {
             try (var reader = new InputStreamReader(archive.open(model.entry()), StandardCharsets.UTF_8.newDecoder())) {
-                rawBounds = ObjParser.scanBounds(reader, model.entry(), IrModelLoader::isVisible);
+                rawParts = ObjParser.scanPartBounds(reader, model.entry(), IrModelLoader::isVisible);
             }
-            boundsCache.put(model, rawBounds);
+            boundsCache.put(model, rawParts);
         }
-        // A proper Y rotation: source +X becomes +Z, source +Z becomes -X. Origin is unchanged.
-        var bounds = new ModelBounds(-rawBounds.maxZ() * scale, rawBounds.minY() * scale, rawBounds.minX() * scale,
-                -rawBounds.minZ() * scale, rawBounds.maxY() * scale, rawBounds.maxX() * scale);
+        var groups = new EnumMap<VehiclePartRole, ModelBounds.Builder>(VehiclePartRole.class);
+        var combined = new ModelBounds.Builder();
+        rawParts.forEach((part, raw) -> {
+            // Match the importer's proper Y rotation and scale, retaining the authored origin.
+            var rotated = new ModelBounds(-raw.maxZ() * scale, raw.minY() * scale, raw.minX() * scale,
+                    -raw.minZ() * scale, raw.maxY() * scale, raw.maxX() * scale);
+            combined.include(rotated);
+            groups.computeIfAbsent(IrBogieGroups.role(part), ignored -> new ModelBounds.Builder()).include(rotated);
+        });
+        var bounds = combined.build();
+        var spec = readMotionSpec(json, bounds, scale);
         var source = new ModelSource(model, Map.of(), Map.of("default", MaterialRenderMode.AUTO),
                 false, false, ModelSource.Format.IR_OBJ, scale);
-        return new VehicleDefinition(id, name, config, null, type,
-                List.of(new VehicleDefinition.Instance(source, new ModelData.Position(0, 0, 0))), bounds,
-                readMotionSpec(json, bounds, scale));
+        var parts = new ArrayList<VehicleDefinition.Instance>();
+        groups.forEach((role, builder) -> {
+            double z = switch (role) {
+                case BODY -> 0;
+                case FRONT_BOGIE -> spec.frontBogieOffset();
+                case REAR_BOGIE -> spec.rearBogieOffset();
+            };
+            parts.add(new VehicleDefinition.Instance(source, new ModelData.Position(0, 0, 0), role,
+                    new TrackVector(0, 0, z), builder.build()));
+        });
+        return new VehicleDefinition(id, name, config, null, type, parts, bounds, spec);
     }
 
     private static VehicleMotionSpec readMotionSpec(JsonObject json, ModelBounds bounds, double scale) {

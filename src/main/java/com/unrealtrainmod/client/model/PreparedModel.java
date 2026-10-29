@@ -5,9 +5,11 @@
 package com.unrealtrainmod.client.model;
 
 import com.unrealtrainmod.client.renderer.RenderBatch;
+import com.unrealtrainmod.vehicle.VehiclePartRole;
 import java.util.List;
 import java.util.Map;
 
 /** CPU geometry and selections awaiting render-thread upload. */
 public record PreparedModel(List<ModelPart> parts, PartSelection visibleParts,
-                            Map<String, PartSelection> partsByName, List<RenderBatch> batches) {}
+                            Map<String, PartSelection> partsByName, Map<VehiclePartRole, PartSelection> componentParts,
+                            List<RenderBatch> batches) {}

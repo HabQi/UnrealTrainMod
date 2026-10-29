@@ -168,12 +168,14 @@
   "commands.unrealtrainmod.train.anchor_none": "没有有效锚点，请使用 /utm train bind 显式绑定车辆。",
   "commands.unrealtrainmod.train.state.running": "运行中",
   "commands.unrealtrainmod.train.state.stopped": "已停稳",
-  "commands.unrealtrainmod.train.state.end_of_route": "已到达路线端点",
+  "commands.unrealtrainmod.train.state.end_of_route": "已到达车辆可运行边界，转向架保持在路线内",
   "commands.unrealtrainmod.train.state.unloaded_area": "车体或扫过区域尚未加载或不可进行实体 tick；加载区域后请手动启动",
-  "commands.unrealtrainmod.train.state.invalid_position": "车体或扫过区域超出世界边界或建筑高度",
+  "commands.unrealtrainmod.train.state.invalid_position": "车体或扫过区域超出世界边界或建筑高度，或目标位置无操作权限",
   "commands.unrealtrainmod.train.state.track_changed": "轨道连接已变更；启动时会重建路线，锚点轨道已删除时需重新绑定",
   "commands.unrealtrainmod.train.state.invalid_anchor": "锚点无效：轨道不存在、距离超出区段、存档字段损坏或无法构建路线；请重新绑定",
   "commands.unrealtrainmod.train.state.missing_model": "车型资源缺失，请恢复资源包后再启动",
   "commands.unrealtrainmod.train.state.storage_error": "轨道存储不可用，请检查轨道存档及日志",
-  "commands.unrealtrainmod.train.state.unbound": "尚未绑定轨道，请使用 /utm train bind"
+  "commands.unrealtrainmod.train.state.unbound": "尚未绑定轨道，请使用 /utm train bind",
+  "commands.unrealtrainmod.train.state.insufficient_route": "路线不足：前后转向架必须同时位于同一条有效路线内，请调整放置或绑定位置",
+  "commands.unrealtrainmod.train.state.degenerate_geometry": "车辆姿态无法求解：转向架采样点重合或连线近乎竖直，请调整线路或转向架参数"
 }

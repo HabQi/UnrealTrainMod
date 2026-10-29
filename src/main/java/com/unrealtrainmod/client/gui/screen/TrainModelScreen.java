@@ -8,6 +8,7 @@ import com.unrealtrainmod.vehicle.VehicleDefinition;
 import com.unrealtrainmod.vehicle.VehicleCatalog;
 import com.unrealtrainmod.UnrealTrainMod;
 import com.unrealtrainmod.client.ClientModelManager;
+import com.unrealtrainmod.client.ClientThumbnailManager;
 import com.unrealtrainmod.client.gui.base.BaseTrainScreen;
 import com.unrealtrainmod.client.gui.theme.GuiTheme;
 import com.unrealtrainmod.client.gui.widget.TrainIconButton;
@@ -66,7 +67,8 @@ public final class TrainModelScreen extends BaseTrainScreen {
         if (search == null) createWidgets();
         expanded = panelHeight >= 250;
         int gap = GuiTheme.PADDING;
-        int listWidth = Math.min(200, Math.max(90, (panelWidth - gap * 3) * 2 / 5));
+        int listWidth = Math.min(200, Math.max(90, (panelWidth - gap * 3) * 2 / 5))
+                + TrainListWidget.SCROLLBAR_GUTTER;
         int rightX = left + gap * 2 + listWidth;
         int rightWidth = panelWidth - listWidth - gap * 3;
         search.setRectangle(listWidth, 18, left + gap, top + 32);
@@ -91,7 +93,7 @@ public final class TrainModelScreen extends BaseTrainScreen {
         dimension = minecraft.level.dimension();
         list = new TrainListWidget<>(minecraft, 100, 100, VehicleCatalog.all(),
                 model -> model.config().archive(), model -> Component.literal(model.name()),
-                model -> model.id().toString(), VehicleDefinition::buttonTexture, this::selectModel);
+                model -> model.id().toString(), ClientThumbnailManager.INSTANCE::vehicleImage, this::selectModel);
         list.filter("");
         list.select(selected);
         search = new EditBox(font, 0, 0, 100, 18, Component.translatable("gui.unrealtrainmod.models.search"));

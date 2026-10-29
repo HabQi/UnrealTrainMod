@@ -12,10 +12,11 @@ import com.unrealtrainmod.track.geometry.TrackPose;
 import com.unrealtrainmod.track.geometry.TrackProjection;
 import com.unrealtrainmod.track.geometry.TrackVector;
 import com.unrealtrainmod.train.TrainAnchor;
+import com.unrealtrainmod.train.TrainManager;
 import com.unrealtrainmod.vehicle.VehicleCatalog;
 import java.util.List;
+import java.util.Locale;
 import net.minecraft.ChatFormatting;
-import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
@@ -85,29 +86,17 @@ public final class VehicleItem extends Item {
         }
         if (closest == null) return fail(level, player, "item.unrealtrainmod.vehicle.no_track");
 
-        double offset = model.motionSpec().trackDatum();
-        var position = closest.position();
-        var normal = closest.normal();
-        double x = position.x() + normal.x() * offset;
-        double y = position.y() + normal.y() * offset;
-        double z = position.z() + normal.z() * offset;
-        var target = BlockPos.containing(x, y, z);
-        if (level.isOutsideBuildHeight(target) || !level.getWorldBorder().isWithinBounds(target)
-                || !player.mayUseItemAt(target, Direction.UP, stack) || !level.mayInteract(player, target)) {
-            return fail(level, player, "item.unrealtrainmod.vehicle.invalid_position");
-        }
         var tangent = closest.tangent();
         double playerYaw = Math.toRadians(player.getYRot());
         double direction = -Math.sin(playerYaw) * tangent.x() + Math.cos(playerYaw) * tangent.z() < 0 ? -1 : 1;
-        float yaw = (float)Math.toDegrees(Math.atan2(-tangent.x() * direction, tangent.z() * direction));
-        float pitch = (float)-Math.toDegrees(Math.atan2(tangent.y() * direction,
-                Math.hypot(tangent.x(), tangent.z())));
         var entity = UnrealTrainMod.TRAIN.get().create(level);
         if (entity == null) return InteractionResult.FAIL;
         entity.setModelId(modelId);
-        entity.setRailAnchor(new TrainAnchor(closestSegment.id(), closestDistance, direction > 0));
-        entity.moveTo(x, y, z, yaw, pitch);
-        if (!serverLevel.addFreshEntity(entity)) return InteractionResult.FAIL;
+        var failure = TrainManager.get(serverLevel).place(entity,
+                new TrainAnchor(closestSegment.id(), closestDistance, direction > 0),
+                target -> player.mayUseItemAt(target, Direction.UP, stack) && level.mayInteract(player, target));
+        if (failure != null) return fail(level, player,
+                "commands.unrealtrainmod.train.state." + failure.name().toLowerCase(Locale.ROOT));
         if (!player.getAbilities().instabuild) stack.shrink(1);
         level.playSound(null, entity.blockPosition(), SoundEvents.ARMOR_STAND_PLACE, SoundSource.BLOCKS, 0.8f, 1);
         level.gameEvent(player, GameEvent.ENTITY_PLACE, entity.position());

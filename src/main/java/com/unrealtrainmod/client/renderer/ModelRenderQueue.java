@@ -47,12 +47,24 @@ public final class ModelRenderQueue implements AutoCloseable {
     public ModelRenderQueue(boolean frontLighting) { this.frontLighting = frontLighting; }
 
     public void submit(LoadedModel model, PoseStack pose, int light) {
-        for (var instance : model.instances()) submit(instance, instance.model().visibleParts(), pose, light);
+        for (var instance : model.instances()) submit(instance, instance.visibleParts(), pose, light);
     }
 
     /** Supports the existing exact-name selection API, including explicitly selected hidden parts. */
     public void submit(LoadedModel.Instance instance, PartSelection selection,
                        PoseStack pose, int light) {
+        pose.pushPose();
+        try {
+            var offset = instance.offset();
+            pose.translate(offset.x(), offset.y(), offset.z());
+            submitGeometry(instance.model(), selection, pose, light);
+        } finally {
+            pose.popPose();
+        }
+    }
+
+    /** Geometry-only submission for a caller that already applied a component's complete transform. */
+    public void submitGeometry(LoadedModel.Source source, PartSelection selection, PoseStack pose, int light) {
         RenderSystem.assertOnRenderThread();
         if (!started) {
             modelView.set(RenderSystem.getModelViewMatrix());
@@ -60,17 +72,10 @@ public final class ModelRenderQueue implements AutoCloseable {
             customShader = StaticModelShader.state() != null;
             started = true;
         }
-        pose.pushPose();
-        try {
-            var offset = instance.offset();
-            pose.translate(offset.x(), offset.y(), offset.z());
-            var snapshot = pose.last().copy();
-            var gpu = instance.model().gpu();
-            for (var batch : selection.batches()) {
-                draws.add(new Draw(batch, customShader && gpu != null ? gpu.part(batch) : null, snapshot, light));
-            }
-        } finally {
-            pose.popPose();
+        var snapshot = pose.last().copy();
+        var gpu = source.gpu();
+        for (var batch : selection.batches()) {
+            draws.add(new Draw(batch, customShader && gpu != null ? gpu.part(batch) : null, snapshot, light));
         }
     }
 

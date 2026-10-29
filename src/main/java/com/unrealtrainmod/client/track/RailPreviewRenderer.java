@@ -4,7 +4,9 @@
  */
 package com.unrealtrainmod.client.track;
 
+import com.mojang.blaze3d.platform.NativeImage;
 import com.mojang.blaze3d.systems.RenderSystem;
+import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexBuffer;
 import com.unrealtrainmod.client.renderer.preview.PreviewCamera;
 import com.unrealtrainmod.client.renderer.preview.PreviewRenderer;
@@ -22,24 +24,35 @@ public final class RailPreviewRenderer implements AutoCloseable {
 
     public void render(GuiGraphics graphics, int x, int y, int width, int height,
                        ClientRailModelManager.Model selected, PreviewCamera camera) {
-        renderer.render(graphics, x, y, width, height, selected.bounds(), camera, pose -> {
-            // Prepared model identity changes on resource reload, even when the selection keeps its ID.
-            if (model != selected) {
-                clearMesh();
-                var b = selected.bounds();
-                var batches = IntStream.range(0, selected.batches().size())
-                        .mapToObj(i -> new RailTrackMeshData.Batch(i, selected.batches().get(i).mesh())).toList();
-                mesh = new RailTrackGpuMesh(new RailTrackMeshData(new TrackVector(0, 0, 0),
-                        new TrackMeshData.Bounds(b.minX(), b.minY(), b.minZ(), b.maxX(), b.maxY(), b.maxZ()), batches), selected, true);
-                model = selected;
-            }
-            try {
-                if (!mesh.isUploaded()) mesh.upload(null, Integer.MAX_VALUE);
-                mesh.draw(pose.last().pose(), RenderSystem.getProjectionMatrix());
-            } finally {
-                VertexBuffer.unbind();
-            }
-        });
+        renderer.render(graphics, x, y, width, height, selected.bounds(), camera, pose -> draw(selected, pose));
+    }
+
+    public NativeImage capture(ClientRailModelManager.Model selected) {
+        try {
+            return renderer.capture(selected.bounds(), -180, 90, false,
+                    PreviewRenderer.RAIL_THUMBNAIL_SAMPLE_SCALE, pose -> draw(selected, pose));
+        } finally {
+            clearMesh();
+        }
+    }
+
+    private void draw(ClientRailModelManager.Model selected, PoseStack pose) {
+        // Prepared model identity changes on resource reload, even when the selection keeps its ID.
+        if (model != selected) {
+            clearMesh();
+            var b = selected.bounds();
+            var batches = IntStream.range(0, selected.batches().size())
+                    .mapToObj(i -> new RailTrackMeshData.Batch(i, selected.batches().get(i).mesh())).toList();
+            mesh = new RailTrackGpuMesh(new RailTrackMeshData(new TrackVector(0, 0, 0),
+                    new TrackMeshData.Bounds(b.minX(), b.minY(), b.minZ(), b.maxX(), b.maxY(), b.maxZ()), batches), selected, true);
+            model = selected;
+        }
+        try {
+            if (!mesh.isUploaded()) mesh.upload(null, Integer.MAX_VALUE);
+            mesh.draw(pose.last().pose(), RenderSystem.getProjectionMatrix());
+        } finally {
+            VertexBuffer.unbind();
+        }
     }
 
     public void clearMesh() {

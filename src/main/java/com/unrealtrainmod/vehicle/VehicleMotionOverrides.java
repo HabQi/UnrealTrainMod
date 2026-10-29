@@ -49,8 +49,7 @@ public final class VehicleMotionOverrides {
                     throw new IllegalArgumentException("override must be an object");
                 }
                 var spec = read(entry.getValue().getAsJsonObject(), definition.motionSpec(), file, id);
-                vehicles.put(id, new VehicleDefinition(definition.id(), definition.name(), definition.config(),
-                        definition.buttonTexture(), definition.trainType(), definition.parts(), definition.bounds(), spec));
+                vehicles.put(id, definition.withMotionSpec(spec));
             } catch (RuntimeException exception) {
                 LOGGER.error("{}: invalid vehicle motion override for {}; keeping package defaults: {}",
                         file, id, exception.getMessage());

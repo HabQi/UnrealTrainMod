@@ -18,6 +18,8 @@ import com.unrealtrainmod.resource.PackageAsset;
 import com.unrealtrainmod.resource.ResourceIds;
 import com.unrealtrainmod.vehicle.VehicleDefinition;
 import com.unrealtrainmod.vehicle.VehicleMotionSpec;
+import com.unrealtrainmod.vehicle.VehiclePartRole;
+import com.unrealtrainmod.track.geometry.TrackVector;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
@@ -58,25 +60,21 @@ final class RtmVehicleAdapter {
             boolean smoothing = GsonHelper.getAsBoolean(json, "smoothing", false);
             boolean cullFaces = GsonHelper.getAsBoolean(json, "doCulling", false);
             var parts = new ArrayList<VehicleDefinition.Instance>();
-            parts.add(new VehicleDefinition.Instance(readSource(json.getAsJsonObject("trainModel2"), archive,
-                    prefix, smoothing, cullFaces), new ModelData.Position(0, 0, 0)));
+            parts.add(readPart(readSource(json.getAsJsonObject("trainModel2"), archive,
+                    prefix, smoothing, cullFaces), new ModelData.Position(0, 0, 0), VehiclePartRole.BODY, archive));
             var bogiePositions = readBogiePositions(json);
             if (json.has("bogieModel2")) {
                 var bogie = readSource(json.getAsJsonObject("bogieModel2"), archive, prefix, smoothing, cullFaces);
                 if (bogiePositions.isEmpty()) throw new IOException("bogieModel2 requires bogiePos");
-                for (var position : bogiePositions) parts.add(new VehicleDefinition.Instance(bogie, position));
+                float frontZ = Math.max(bogiePositions.get(0).z(), bogiePositions.get(1).z());
+                for (var position : bogiePositions) {
+                    parts.add(readPart(bogie, position, position.z() == frontZ
+                            ? VehiclePartRole.FRONT_BOGIE : VehiclePartRole.REAR_BOGIE, archive));
+                }
             }
             var combined = new ModelBounds.Builder();
             for (var part : parts) {
-                var source = part.source().model();
-                var bounds = boundsCache.get(source);
-                if (bounds == null) {
-                    try (var input = archive.open(source.entry())) {
-                        bounds = MqoParser.scanBounds(input, StandardCharsets.UTF_8, ModelSource.MQO_SCALE);
-                    }
-                    boundsCache.put(source, bounds);
-                }
-                combined.include(bounds.translated(part.offset()));
+                combined.include(part.bounds().translated(part.offset()));
             }
             var bounds = combined.build();
             var definition = new VehicleDefinition(id, name, config, RtmButtonTexture.read(json, archive, prefix, config),
@@ -87,6 +85,19 @@ final class RtmVehicleAdapter {
         } catch (IOException | RuntimeException exception) {
             report.failed(LoadReport.Kind.RTM_VEHICLE, config, exception);
         }
+    }
+
+    private VehicleDefinition.Instance readPart(ModelSource source, ModelData.Position offset,
+                                                VehiclePartRole role, PackageArchive archive) throws IOException {
+        var asset = source.model();
+        var bounds = boundsCache.get(asset);
+        if (bounds == null) {
+            try (var input = archive.open(asset.entry())) {
+                bounds = MqoParser.scanBounds(input, StandardCharsets.UTF_8, ModelSource.MQO_SCALE);
+            }
+            boundsCache.put(asset, bounds);
+        }
+        return new VehicleDefinition.Instance(source, offset, role, new TrackVector(0, 0, 0), bounds);
     }
 
     private static List<ModelData.Position> readBogiePositions(JsonObject json) throws IOException {

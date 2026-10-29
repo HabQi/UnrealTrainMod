@@ -81,12 +81,17 @@ public final class ClientModelManager extends SimplePreparableReloadListener<Pre
                         LOGGER.error("Unable to upload vehicle model {}; using buffered rendering", entry.getKey().model(), e);
                     }
                 }
-                uploaded.put(entry.getKey(), new LoadedModel.Source(source.parts(), source.visibleParts(), source.partsByName(), gpu));
+                uploaded.put(entry.getKey(), new LoadedModel.Source(source.parts(), source.visibleParts(),
+                        source.partsByName(), source.componentParts(), gpu));
             }
             var loaded = new HashMap<ResourceLocation, LoadedModel>();
             for (var vehicle : prepared.vehicles()) {
                 var instances = vehicle.parts().stream()
-                        .map(instance -> new LoadedModel.Instance(uploaded.get(instance.source()), instance.offset())).toList();
+                        .map(instance -> {
+                            var source = uploaded.get(instance.source());
+                            var selection = source.componentParts().getOrDefault(instance.role(), source.visibleParts());
+                            return new LoadedModel.Instance(source, instance, selection);
+                        }).toList();
                 loaded.put(vehicle.id(), new LoadedModel(instances, vehicle.bounds()));
             }
             sources = Map.copyOf(uploaded);

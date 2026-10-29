@@ -8,6 +8,7 @@ import com.mojang.blaze3d.platform.NativeImage;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.unrealtrainmod.UnrealTrainMod;
 import com.unrealtrainmod.client.model.TextureLoader;
+import com.unrealtrainmod.client.gui.ListEntryImage;
 import com.unrealtrainmod.resource.PackageAsset;
 import com.unrealtrainmod.resource.ResourceIds;
 import com.unrealtrainmod.track.model.RailCatalog;
@@ -28,14 +29,12 @@ import org.slf4j.LoggerFactory;
 /** Shared RTM selection artwork, cropped independently of model geometry and textures. */
 public final class ClientButtonTextureManager extends SimplePreparableReloadListener<Map<PackageAsset, NativeImage>> {
     public static final ClientButtonTextureManager INSTANCE = new ClientButtonTextureManager();
-    public static final int WIDTH = 320;
-    public static final int HEIGHT = 64;
     private static final Logger LOGGER = LoggerFactory.getLogger(ClientButtonTextureManager.class);
-    private final Map<PackageAsset, ResourceLocation> textures = new HashMap<>();
+    private final Map<PackageAsset, ListEntryImage> textures = new HashMap<>();
 
     private ClientButtonTextureManager() {}
 
-    public ResourceLocation texture(PackageAsset asset) { return textures.get(asset); }
+    public ListEntryImage texture(PackageAsset asset) { return textures.get(asset); }
 
     @Override
     protected Map<PackageAsset, NativeImage> prepare(ResourceManager resources, ProfilerFiller profiler) {
@@ -61,20 +60,23 @@ public final class ClientButtonTextureManager extends SimplePreparableReloadList
 
     private static NativeImage crop(PackageAsset asset) throws IOException {
         try (var source = TextureLoader.read(asset)) {
-            if (source.getWidth() < WIDTH || source.getHeight() < HEIGHT) {
-                throw new IOException("buttonTexture must contain the fixed top-left 320x64 region");
+            // RTM's 320x64 button occupies 5/8 by 1/8 of its reference 512x512 canvas.
+            int width = (int)(source.getWidth() * 5L / 8);
+            int height = source.getHeight() / 8;
+            if (width == 0 || height == 0) {
+                throw new IOException("buttonTexture is too small for the proportional top-left crop");
             }
-            var cropped = new NativeImage(WIDTH, HEIGHT, false);
+            var cropped = new NativeImage(width, height, false);
             try {
                 boolean visible = false;
-                for (int y = 0; y < HEIGHT; y++) {
-                    for (int x = 0; x < WIDTH; x++) {
+                for (int y = 0; y < height; y++) {
+                    for (int x = 0; x < width; x++) {
                         int pixel = source.getPixelRGBA(x, y);
                         visible |= (pixel >>> 24) != 0;
                         cropped.setPixelRGBA(x, y, pixel);
                     }
                 }
-                if (!visible) throw new IOException("buttonTexture has a fully transparent 320x64 region");
+                if (!visible) throw new IOException("buttonTexture has a fully transparent proportional crop");
                 return cropped;
             } catch (IOException | RuntimeException | Error exception) {
                 cropped.close();
@@ -93,9 +95,10 @@ public final class ClientButtonTextureManager extends SimplePreparableReloadList
                 var id = ResourceLocation.fromNamespaceAndPath(UnrealTrainMod.MODID,
                         "button/" + ResourceIds.hash(asset.toString()));
                 var image = pending.remove(asset);
+                var texture = new ListEntryImage(id, image.getWidth(), image.getHeight());
                 try {
                     upload(id, image);
-                    textures.put(asset, id);
+                    textures.put(asset, texture);
                 } catch (RuntimeException exception) {
                     LOGGER.warn("Unable to upload RTM button {}; using text entry: {}", asset, exception.getMessage());
                 }
@@ -128,7 +131,7 @@ public final class ClientButtonTextureManager extends SimplePreparableReloadList
     public void close() {
         RenderSystem.assertOnRenderThread();
         var manager = Minecraft.getInstance().getTextureManager();
-        textures.values().forEach(manager::release);
+        textures.values().forEach(texture -> manager.release(texture.id()));
         textures.clear();
     }
 }

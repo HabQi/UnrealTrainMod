@@ -8,6 +8,7 @@ package com.unrealtrainmod;
 import com.unrealtrainmod.client.ClientConfig;
 import com.unrealtrainmod.client.ClientButtonTextureManager;
 import com.unrealtrainmod.client.ClientModelManager;
+import com.unrealtrainmod.client.ClientThumbnailManager;
 import com.unrealtrainmod.client.PlacedModelRenderer;
 import com.unrealtrainmod.client.TrainEntityRenderer;
 import com.unrealtrainmod.client.StaticModelShader;
@@ -52,6 +53,7 @@ public class UnrealTrainModClient {
         event.registerReloadListener(ClientModelManager.INSTANCE);
         event.registerReloadListener(ClientRailModelManager.INSTANCE);
         event.registerReloadListener(ClientButtonTextureManager.INSTANCE);
+        event.registerReloadListener(ClientThumbnailManager.INSTANCE);
         event.registerReloadListener(ClientTrackCache.INSTANCE);
     }
 
@@ -64,6 +66,8 @@ public class UnrealTrainModClient {
         NeoForge.EVENT_BUS.addListener(ClientPayloadHandlers::modelSelectionResult);
         NeoForge.EVENT_BUS.addListener(ClientPayloadHandlers::railSelectionResult);
         NeoForge.EVENT_BUS.addListener(TrainModelRenderer::onFramePre);
+        NeoForge.EVENT_BUS.addListener(ClientThumbnailManager.INSTANCE::onFramePre);
+        NeoForge.EVENT_BUS.addListener(ClientThumbnailManager.INSTANCE::onFramePost);
         NeoForge.EVENT_BUS.addListener(TrainModelRenderer::onRenderStage);
         NeoForge.EVENT_BUS.addListener(ClientTrackCache.INSTANCE::onSync);
         NeoForge.EVENT_BUS.addListener(ClientTrackCache.INSTANCE::onLevelLoad);
@@ -79,6 +83,7 @@ public class UnrealTrainModClient {
     }
 
     private static void onGameShuttingDown(GameShuttingDownEvent event) {
+        ClientThumbnailManager.INSTANCE.close();
         ClientModelManager.INSTANCE.close();
         TrainModelRenderer.closeWorld();
         ClientTrackCache.INSTANCE.close();

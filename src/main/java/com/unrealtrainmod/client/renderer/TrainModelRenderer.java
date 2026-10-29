@@ -6,6 +6,7 @@ package com.unrealtrainmod.client.renderer;
 
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.unrealtrainmod.client.model.LoadedModel;
+import com.unrealtrainmod.vehicle.VehiclePose;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.neoforged.neoforge.client.event.RenderFrameEvent;
 import net.neoforged.neoforge.client.event.RenderLevelStageEvent;
@@ -20,6 +21,22 @@ public final class TrainModelRenderer {
     public static void render(LoadedModel model, PoseStack pose,
                               MultiBufferSource buffers, int light) {
         WORLD.submit(model, pose, light);
+    }
+
+    /** The caller has applied body rotation; each source is submitted once under its own local frame. */
+    public static void render(LoadedModel model, VehiclePose vehiclePose, PoseStack pose, int light) {
+        for (var instance : model.instances()) {
+            pose.pushPose();
+            try {
+                var transform = vehiclePose.partTransform(instance.definition());
+                var p = transform.position();
+                pose.translate(p.x(), p.y(), p.z());
+                pose.mulPose(transform.rotation());
+                WORLD.submitGeometry(instance.model(), instance.visibleParts(), pose, light);
+            } finally {
+                pose.popPose();
+            }
+        }
     }
 
     /** Exact-name matches include hidden parts; submission never changes source visibility or geometry. */
