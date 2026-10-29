@@ -2,10 +2,8 @@
  * Copyright (c) 2026 HabQi
  * SPDX-License-Identifier: GPL-3.0-only
  */
-package com.unrealtrainmod.registry;
+package com.unrealtrainmod.network;
 
-import com.unrealtrainmod.network.ModelSelectionResultEvent;
-import com.unrealtrainmod.network.TrackSyncEvent;
 import com.unrealtrainmod.network.handler.ServerPayloadHandlers;
 import com.unrealtrainmod.network.payload.ModelSelectionResultPayload;
 import com.unrealtrainmod.network.payload.SelectTrainModelPayload;
@@ -25,7 +23,7 @@ public final class ModPayloads {
     private ModPayloads() {}
 
     public static void register(RegisterPayloadHandlersEvent event) {
-        var registrar = event.registrar("4");
+        var registrar = event.registrar("5");
         registrar.playToServer(SetTrackCurvePayload.TYPE, SetTrackCurvePayload.STREAM_CODEC,
                 ServerPayloadHandlers::setTrackCurve);
         registrar.playToClient(OpenTrackCurvePayload.TYPE, OpenTrackCurvePayload.STREAM_CODEC,

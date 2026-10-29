@@ -4,10 +4,12 @@
  */
 package com.unrealtrainmod.client.model;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.unrealtrainmod.model.ModelSource;
 import com.unrealtrainmod.vehicle.VehicleDefinition;
 import com.mojang.blaze3d.platform.NativeImage;
-import com.unrealtrainmod.UnrealTrainMod;
 import com.unrealtrainmod.client.RenderCategory;
 import com.unrealtrainmod.client.renderer.RenderBatch;
 import com.unrealtrainmod.model.IndexedMesh;
@@ -25,6 +27,7 @@ import net.minecraft.resources.ResourceLocation;
 
 /** Prepares vehicle geometry and pixels without registering textures or uploading GPU resources. */
 public final class ModelPreparer {
+    private static final Logger LOGGER = LoggerFactory.getLogger(ModelPreparer.class);
     /** Images belong to this reload until the manager transfers them to DynamicTextures. */
     public record PreparedReload(Map<ModelSource, PreparedModel> sources,
                                  List<VehicleDefinition> vehicles, Map<ResourceLocation, NativeImage> images) {}
@@ -57,7 +60,7 @@ public final class ModelPreparer {
                             classified.put(source, classifySource(source, textures));
                         } catch (IOException | RuntimeException e) {
                             failed.add(source);
-                            UnrealTrainMod.LOGGER.error("Unable to load vehicle model {}", source.model(), e);
+                            LOGGER.error("Unable to load vehicle model {}", source.model(), e);
                         }
                     }
                 }
@@ -70,7 +73,7 @@ public final class ModelPreparer {
                 try {
                     prepared.put(entry.getKey(), prepareSource(entry.getKey(), entry.getValue(), regions));
                 } catch (RuntimeException e) {
-                    UnrealTrainMod.LOGGER.error("Unable to prepare vehicle model {}", entry.getKey().model(), e);
+                    LOGGER.error("Unable to prepare vehicle model {}", entry.getKey().model(), e);
                 }
                 // Release each source's unmerged CUTOUT arrays as soon as its packed geometry is ready.
                 iterator.remove();
@@ -139,11 +142,11 @@ public final class ModelPreparer {
             }
             parts.add(new ModelPart(index, part.name(), part.visible(), batches));
         }
-        summaries.forEach((name, summary) -> UnrealTrainMod.LOGGER.info(
+        summaries.forEach((name, summary) -> LOGGER.info(
                 "Model {} material '{}': mode={} ({}); AlphaBlend={}, bakedAlphaBelowOne={}; CUTOUT={}, BLEND={}, MIXED={}, skipped={}",
                 source.model(), name, summary.mode == null ? "LEGACY" : summary.mode, summary.reason,
                 summary.alphaBlend, summary.reducedAlpha, summary.counts[0], summary.counts[1], summary.counts[2], summary.skipped));
-        UnrealTrainMod.LOGGER.info("Prepared {} {}: {} parts, {} triangles; CUTOUT={}, BLEND={}, MIXED={}",
+        LOGGER.info("Prepared {} {}: {} parts, {} triangles; CUTOUT={}, BLEND={}, MIXED={}",
                 source.format(), source.model(), mesh.parts().size(), mesh.triangleCount(), counts[0], counts[1], counts[2]);
         return List.copyOf(parts);
     }
@@ -168,11 +171,11 @@ public final class ModelPreparer {
         var partsByName = new HashMap<String, PartSelection>();
         named.forEach((name, matching) -> partsByName.put(name, new PartSelection(matching)));
         var mergedVisible = merged.visibleBatches().stream().filter(batch -> batch.category() == RenderCategory.CUTOUT).toList();
-        UnrealTrainMod.LOGGER.info("Model {}: visible CUTOUT batches {} -> {}; triangles {} -> {}",
+        LOGGER.info("Model {}: visible CUTOUT batches {} -> {}; triangles {} -> {}",
                 source.model(), originalVisible.size(), mergedVisible.size(),
                 originalVisible.stream().mapToInt(batch -> batch.indexCount() / 3).sum(),
                 mergedVisible.stream().mapToInt(batch -> batch.indexCount() / 3).sum());
-        UnrealTrainMod.LOGGER.info("Model {}: atlas visible CUTOUT batches {} -> {}",
+        LOGGER.info("Model {}: atlas visible CUTOUT batches {} -> {}",
                 source.model(), beforeAtlas, mergedVisible.size());
         return new PreparedModel(merged.parts(), new PartSelection(visible, merged.visibleBatches()),
                 Map.copyOf(partsByName), List.copyOf(allBatches));

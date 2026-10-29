@@ -4,6 +4,9 @@
  */
 package com.unrealtrainmod.client.track;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.unrealtrainmod.resource.PackageAsset;
 import com.unrealtrainmod.track.model.RailDefinition;
 import com.unrealtrainmod.track.model.RailCatalog;
@@ -33,6 +36,7 @@ import net.minecraft.util.profiling.ProfilerFiller;
 
 /** Rail-only prepared geometry and textures. No vehicle instances, render queues, or script evaluation. */
 public final class ClientRailModelManager extends SimplePreparableReloadListener<ClientRailModelManager.Prepared> implements AutoCloseable {
+    private static final Logger LOGGER = LoggerFactory.getLogger(ClientRailModelManager.class);
     public static final ClientRailModelManager INSTANCE = new ClientRailModelManager();
     private static final ResourceLocation WHITE = ResourceLocation.fromNamespaceAndPath(UnrealTrainMod.MODID, "textures/model/white.png");
     public record Batch(IndexedMesh mesh, ResourceLocation texture, boolean doubleSided) {}
@@ -111,7 +115,7 @@ public final class ClientRailModelManager extends SimplePreparableReloadListener
                         models.put(definition.id(), preparedSource);
                     }
                 } catch (IOException | RuntimeException exception) {
-                    UnrealTrainMod.LOGGER.error("Cannot prepare RTM rail {} from {}: {}", definition.railName(), source.model(),
+                    LOGGER.error("Cannot prepare RTM rail {} from {}: {}", definition.railName(), source.model(),
                             exception.getMessage(), exception);
                 }
             }

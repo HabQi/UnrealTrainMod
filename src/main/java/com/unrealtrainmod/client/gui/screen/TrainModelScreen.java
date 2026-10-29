@@ -16,15 +16,17 @@ import com.unrealtrainmod.client.gui.widget.TrainListWidget;
 import com.unrealtrainmod.client.gui.widget.TrainPreviewWidget;
 import com.unrealtrainmod.client.gui.widget.TrainSlider;
 import com.unrealtrainmod.client.renderer.preview.PreviewCamera;
-import com.unrealtrainmod.item.ModelPlacerItem;
+import com.unrealtrainmod.registry.ModDataComponents;
 import com.unrealtrainmod.network.payload.ModelSelectionResultPayload;
 import com.unrealtrainmod.network.payload.SelectTrainModelPayload;
 import java.util.UUID;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.EditBox;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Item;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.world.level.Level;
 import net.neoforged.neoforge.network.PacketDistributor;
@@ -33,6 +35,8 @@ public final class TrainModelScreen extends BaseTrainScreen {
     private final InteractionHand hand;
     private final int hotbarSlot;
     private final ItemStack originalStack;
+    private final Item item;
+    private final boolean trackPlacement;
     private final PreviewCamera camera = new PreviewCamera();
     private VehicleDefinition selected;
     private EditBox search;
@@ -50,11 +54,14 @@ public final class TrainModelScreen extends BaseTrainScreen {
     private ResourceKey<Level> dimension;
 
     public TrainModelScreen(InteractionHand hand, int hotbarSlot, ItemStack stack) {
-        super(Component.translatable("gui.unrealtrainmod.models.title"));
+        super(Component.translatable(stack.is(UnrealTrainMod.VEHICLE.get())
+                ? "gui.unrealtrainmod.models.vehicle_title" : "gui.unrealtrainmod.models.title"));
         this.hand = hand;
         this.hotbarSlot = hotbarSlot;
         originalStack = stack;
-        selected = VehicleCatalog.find(ModelPlacerItem.selectedModel(stack));
+        item = stack.getItem();
+        trackPlacement = stack.is(UnrealTrainMod.VEHICLE.get());
+        selected = VehicleCatalog.find(stack.get(ModDataComponents.SELECTED_MODEL.get()));
         if (selected == null && !VehicleCatalog.all().isEmpty()) selected = VehicleCatalog.all().getFirst();
     }
 
@@ -152,7 +159,8 @@ public final class TrainModelScreen extends BaseTrainScreen {
         search.setEditable(false);
         list.active = false;
         apply.active = false;
-        PacketDistributor.sendToServer(new SelectTrainModelPayload(pendingRequest, hand, hotbarSlot, selected.id()));
+        PacketDistributor.sendToServer(new SelectTrainModelPayload(pendingRequest, hand, hotbarSlot,
+                BuiltInRegistries.ITEM.getKey(item), selected.id()));
     }
 
     public void acceptResult(ModelSelectionResultPayload payload) {
@@ -179,7 +187,7 @@ public final class TrainModelScreen extends BaseTrainScreen {
         var player = minecraft.player;
         if (player == null || !player.isAlive() || minecraft.level == null || !minecraft.level.dimension().equals(dimension)
                 || (hand == InteractionHand.MAIN_HAND && player.getInventory().selected != hotbarSlot)
-                || !player.getItemInHand(hand).is(UnrealTrainMod.VEHICLE_PLACER.get())
+                || !player.getItemInHand(hand).is(item)
                 || (pendingRequest == null && player.getItemInHand(hand) != originalStack)) {
             onClose();
             return;
@@ -201,7 +209,8 @@ public final class TrainModelScreen extends BaseTrainScreen {
             graphics.drawString(font, Component.translatable("gui.unrealtrainmod.preview.yaw"),
                     yawInput.getX(), yawInput.getY() - 12, GuiTheme.MUTED, false);
         }
-        var message = status != null ? status : Component.translatable("gui.unrealtrainmod.models.count", VehicleCatalog.all().size());
+        var message = status != null ? status : Component.translatable(trackPlacement
+                ? "gui.unrealtrainmod.models.vehicle_count" : "gui.unrealtrainmod.models.count", VehicleCatalog.all().size());
         graphics.drawString(font, font.plainSubstrByWidth(message.getString(), panelWidth - 20),
                 left + 10, top + panelHeight - 48, statusError ? GuiTheme.ERROR : GuiTheme.MUTED, false);
     }

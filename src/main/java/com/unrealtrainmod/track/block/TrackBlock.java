@@ -5,7 +5,6 @@
 package com.unrealtrainmod.track.block;
 
 import com.mojang.serialization.MapCodec;
-import com.unrealtrainmod.track.persistence.TrackSavedData;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.BlockGetter;
@@ -59,7 +58,7 @@ public final class TrackBlock extends Block {
     protected void onRemove(BlockState state, Level level, BlockPos pos, BlockState newState, boolean movedByPiston) {
         super.onRemove(state, level, pos, newState, movedByPiston);
         if (level instanceof ServerLevel serverLevel && !newState.is(this)) {
-            TrackSavedData.get(serverLevel).blocks().removed(pos);
+            TrackBlockManager.get(serverLevel).removed(pos);
         }
     }
 }

@@ -4,13 +4,16 @@
  */
 package com.unrealtrainmod.compat.rtm;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonPrimitive;
 import com.unrealtrainmod.UnrealTrainMod;
 import com.unrealtrainmod.model.ModelData;
-import com.unrealtrainmod.model.MqoParser;
+import com.unrealtrainmod.model.importer.ModelImporter;
 import com.unrealtrainmod.resource.LoadReport;
 import com.unrealtrainmod.resource.PackageArchive;
 import com.unrealtrainmod.resource.PackageAsset;
@@ -31,6 +34,7 @@ import net.minecraft.util.GsonHelper;
 
 /** Startup-only raw geometry cache and RTM rail configuration conversion. */
 final class RtmRailAdapter {
+    private static final Logger LOGGER = LoggerFactory.getLogger(RtmRailAdapter.class);
     private final Map<ResourceLocation, RailDefinition> definitions;
     private final Map<PackageAsset, ModelData> models = new HashMap<>();
     private final Map<PackageAsset, IOException> failedModels = new HashMap<>();
@@ -71,7 +75,7 @@ final class RtmRailAdapter {
             ModelData data = modelData(asset, archive);
             for (String material : textures.keySet()) {
                 if (data.materials().stream().noneMatch(value -> value.name().equals(material))) {
-                    UnrealTrainMod.LOGGER.warn("RTM rail {}!{}: model.textures material '{}' matches no MQO material in {}",
+                    LOGGER.warn("RTM rail {}!{}: model.textures material '{}' matches no MQO material in {}",
                             archive.path(), entry, material, asset.entry());
                 }
             }
@@ -90,7 +94,7 @@ final class RtmRailAdapter {
         IOException previous = failedModels.get(asset);
         if (previous != null) throw new IOException("model.modelFile: previous MQO parsing failed for " + asset.entry(), previous);
         try (var input = archive.open(asset.entry())) {
-            data = MqoParser.parse(input, StandardCharsets.UTF_8);
+            data = ModelImporter.parseMqo(input);
         } catch (IOException | RuntimeException exception) {
             var failure = new IOException("model.modelFile " + asset.entry() + ": " + exception.getMessage(), exception);
             failedModels.put(asset, failure);

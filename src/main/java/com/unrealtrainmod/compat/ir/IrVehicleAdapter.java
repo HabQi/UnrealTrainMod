@@ -6,7 +6,6 @@ package com.unrealtrainmod.compat.ir;
 
 import com.google.gson.JsonObject;
 import com.unrealtrainmod.UnrealTrainMod;
-import com.unrealtrainmod.model.IrModelLoader;
 import com.unrealtrainmod.model.MaterialRenderMode;
 import com.unrealtrainmod.model.ModelBounds;
 import com.unrealtrainmod.model.ModelData;

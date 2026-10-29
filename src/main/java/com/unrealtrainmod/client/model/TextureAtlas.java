@@ -4,8 +4,10 @@
  */
 package com.unrealtrainmod.client.model;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.mojang.blaze3d.platform.NativeImage;
-import com.unrealtrainmod.UnrealTrainMod;
 import com.unrealtrainmod.client.RenderCategory;
 import com.unrealtrainmod.client.renderer.RenderBatch;
 import java.util.ArrayList;
@@ -19,6 +21,7 @@ import net.minecraft.resources.ResourceLocation;
 
 /** Reload-wide, unscaled small textures. Alpha classification always happens before atlas planning. */
 final class TextureAtlas {
+    private static final Logger LOGGER = LoggerFactory.getLogger(TextureAtlas.class);
     private static final int MAX_IMAGE_SIZE = 512, MAX_PAGE_SIZE = 2048;
 
     /** x/y point to the first content texel, after the one-texel repeating border. */
@@ -62,7 +65,7 @@ final class TextureAtlas {
             }
         }
         if (page.emit(textures, regions)) pages++;
-        UnrealTrainMod.LOGGER.info("Vehicle texture atlases: {} eligible textures, {} packed textures, {} pages",
+        LOGGER.info("Vehicle texture atlases: {} eligible textures, {} packed textures, {} pages",
                 tiles.size(), regions.size(), pages);
         return Map.copyOf(regions);
     }
@@ -123,7 +126,7 @@ final class TextureAtlas {
                     regions.put(tile.texture(), new Region(id, placement.x() + 1, placement.y() + 1,
                             tile.image().getWidth(), tile.image().getHeight(), width, height));
                 }
-                UnrealTrainMod.LOGGER.info("Vehicle texture atlas {}: {}x{}, {} source images, {} RGBA bytes",
+                LOGGER.info("Vehicle texture atlas {}: {}x{}, {} source images, {} RGBA bytes",
                         id, width, height, placements.size(), (long)width * height * Integer.BYTES);
                 return true;
             } finally {

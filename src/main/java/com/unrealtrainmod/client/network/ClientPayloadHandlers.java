@@ -25,7 +25,8 @@ public final class ClientPayloadHandlers {
             minecraft.setScreen(new RailModelScreen(event.getEntity().getInventory().selected, event.getItemStack(), minecraft.level.dimension()));
         }
         if (event.getLevel().isClientSide && event.getEntity() == minecraft.player && minecraft.screen == null
-                && event.getItemStack().is(UnrealTrainMod.VEHICLE_PLACER.get())) {
+                && (event.getItemStack().is(UnrealTrainMod.VEHICLE_PLACER.get())
+                    || event.getItemStack().is(UnrealTrainMod.VEHICLE.get()))) {
             minecraft.setScreen(new TrainModelScreen(event.getHand(), event.getEntity().getInventory().selected, event.getItemStack()));
         }
     }

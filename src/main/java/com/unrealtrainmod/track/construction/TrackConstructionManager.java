@@ -4,9 +4,12 @@
  */
 package com.unrealtrainmod.track.construction;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.unrealtrainmod.track.model.RailCatalog;
 import com.unrealtrainmod.UnrealTrainMod;
-import com.unrealtrainmod.item.RailPlacerItem;
+import com.unrealtrainmod.registry.ModDataComponents;
 import com.unrealtrainmod.network.payload.TrackConstructionPayload;
 import com.unrealtrainmod.network.payload.TrackConstructionPayload.Feedback;
 import com.unrealtrainmod.network.payload.TrackConstructionPayload.Phase;
@@ -20,7 +23,7 @@ import com.unrealtrainmod.track.TrackNode;
 import com.unrealtrainmod.track.TrackPlacementEndpoint;
 import com.unrealtrainmod.track.TrackPlacementGeometry;
 import com.unrealtrainmod.track.geometry.TrackVector;
-import com.unrealtrainmod.track.persistence.TrackSavedData;
+import com.unrealtrainmod.track.block.TrackBlockManager;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
@@ -31,9 +34,13 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.item.context.UseOnContext;
+import net.minecraft.world.level.BlockGetter;
 import net.minecraft.world.level.ClipContext;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
+import net.minecraft.world.phys.shapes.Shapes;
+import net.minecraft.world.phys.shapes.VoxelShape;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.neoforge.common.util.TriState;
 import net.neoforged.neoforge.event.entity.player.PlayerEvent;
@@ -45,6 +52,7 @@ import net.neoforged.neoforge.network.PacketDistributor;
 
 /** Server-thread-only drafts. Neither selecting nor previewing mutates the saved graph. */
 public final class TrackConstructionManager {
+    private static final Logger LOGGER = LoggerFactory.getLogger(TrackConstructionManager.class);
     private static final double DEFAULT_GAUGE = 1.435;
     private static final double SNAP_DISTANCE_SQUARED = 0.75 * 0.75;
     private static final double NODE_HIT_RADIUS = 0.2;
@@ -157,17 +165,15 @@ public final class TrackConstructionManager {
         if (graph == null || !refreshStart(player, graph, session) || !refreshEnd(player, graph, session)) return;
         Vec3 eye = player.getEyePosition();
         Vec3 rayEnd = eye.add(player.getLookAngle().scale(player.blockInteractionRange()));
-        Vec3 visibleEnd = player.serverLevel().clip(new ClipContext(eye, rayEnd,
-                ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, player)).getLocation();
-        double startHit = hitDistance(session.start, eye, visibleEnd);
-        double endHit = session.end == null ? Double.POSITIVE_INFINITY : hitDistance(session.end, eye, visibleEnd);
+        double startHit = hitDistance(session.start, eye, rayEnd);
+        double endHit = session.end == null ? Double.POSITIVE_INFINITY : hitDistance(session.end, eye, rayEnd);
         if (!Double.isFinite(Math.min(startHit, endHit))) {
             publish(player, session, Feedback.AIM_NODE);
             return;
         }
         boolean start = startHit <= endHit;
         TrackPlacementEndpoint selected = start ? session.start : session.end;
-        if (!canEditPoint(player, selected.position())) {
+        if (!canEditPoint(player, selected)) {
             publish(player, session, Feedback.INVALID_POINT);
             return;
         }
@@ -191,13 +197,24 @@ public final class TrackConstructionManager {
         return box.clip(eye, end).map(eye::distanceToSqr).orElse(Double.POSITIVE_INFINITY);
     }
 
-    private static boolean canEditPoint(ServerPlayer player, TrackVector position) {
+    private static boolean canEditPoint(ServerPlayer player, TrackPlacementEndpoint endpoint) {
+        TrackVector position = endpoint.position();
         if (!validPosition(player.serverLevel(), position)) return false;
         Vec3 eye = player.getEyePosition(), point = new Vec3(position.x(), position.y(), position.z());
         double distance = eye.distanceTo(point);
         if (distance > player.blockInteractionRange() + NODE_HIT_RADIUS) return false;
+        var manager = TrackBlockManager.get(player.serverLevel());
         var hit = player.serverLevel().clip(new ClipContext(eye, point,
-                ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, player));
+                ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, player) {
+            @Override
+            public VoxelShape getBlockShape(BlockState state, BlockGetter level, BlockPos pos) {
+                if (endpoint.nodeId() != null && state.is(UnrealTrainMod.TRACK_BLOCK.get())
+                        && manager.isNodeTrackBlock(pos, endpoint.nodeId())) {
+                    return Shapes.empty();
+                }
+                return super.getBlockShape(state, level, pos);
+            }
+        });
         return eye.distanceTo(hit.getLocation()) + 1e-6 >= distance;
     }
 
@@ -226,7 +243,7 @@ public final class TrackConstructionManager {
             return;
         }
         var endpoint = payload.start() ? session.start : session.end;
-        if (!canEditPoint(player, endpoint.position())) {
+        if (!canEditPoint(player, endpoint)) {
             curveResult(player, payload, false, Feedback.INVALID_POINT);
             return;
         }
@@ -278,7 +295,7 @@ public final class TrackConstructionManager {
             publish(player, session, Feedback.LINE_NOT_READY);
             return;
         }
-        var modelId = RailPlacerItem.selectedModel(player.getMainHandItem());
+        var modelId = player.getMainHandItem().get(ModDataComponents.SELECTED_RAIL_MODEL.get());
         if (modelId == null || RailCatalog.find(modelId) == null) {
             publish(player, session, modelId == null ? Feedback.SELECT_MODEL : Feedback.MISSING_MODEL);
             return;
@@ -288,9 +305,9 @@ public final class TrackConstructionManager {
 
     private static TrackGraph graph(ServerPlayer player) {
         try {
-            return TrackSavedData.get(player.serverLevel()).graph();
+            return TrackBlockManager.get(player.serverLevel()).graph();
         } catch (IllegalStateException exception) {
-            UnrealTrainMod.LOGGER.error("Cannot load tracks for construction in {}: {}",
+            LOGGER.error("Cannot load tracks for construction in {}: {}",
                     player.serverLevel().dimension().location(), exception.getMessage());
             clear(player, Feedback.STORAGE);
             return null;

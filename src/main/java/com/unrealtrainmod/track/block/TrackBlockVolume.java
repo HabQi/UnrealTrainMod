@@ -9,13 +9,13 @@ import com.unrealtrainmod.track.TrackPlacementGeometry;
 import com.unrealtrainmod.track.geometry.TrackGeometry;
 import com.unrealtrainmod.track.geometry.TrackPose;
 import com.unrealtrainmod.track.geometry.TrackVector;
+import com.unrealtrainmod.track.persistence.TrackSavedData;
 import java.util.HashMap;
 import java.util.Map;
 import net.minecraft.core.BlockPos;
 
 /** Follows centerline cells and adds one cell on each side, with a 0.3-block bed below the rail. */
 public final class TrackBlockVolume {
-    public static final int MAX_BLOCKS = 16_384;
     private static final double BED_DEPTH = 0.3;
     private static final double EPSILON = 1e-7;
 
@@ -81,7 +81,7 @@ public final class TrackBlockVolume {
             for (int side = -1; side <= 1; side++) {
                 blocks.merge(new BlockPos(centerX + sideX * side, y, centerZ + sideZ * side), height, Math::max);
             }
-            if (blocks.size() > MAX_BLOCKS) {
+            if (blocks.size() > TrackSavedData.MAX_VOLUME_BLOCKS) {
                 throw new TrackGraphException(TrackGraphException.Reason.VOLUME_TOO_LARGE);
             }
         }

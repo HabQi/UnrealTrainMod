@@ -2,9 +2,14 @@
  * Copyright (c) 2026 HabQi
  * SPDX-License-Identifier: GPL-3.0-only
  */
-package com.unrealtrainmod.model;
+package com.unrealtrainmod.compat.ir;
 
-import com.unrealtrainmod.UnrealTrainMod;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.unrealtrainmod.model.ModelData;
+import com.unrealtrainmod.model.ModelTexture;
+import com.unrealtrainmod.model.ObjParser;
 import com.unrealtrainmod.resource.PackageArchive;
 import com.unrealtrainmod.resource.PackageAsset;
 import java.io.IOException;
@@ -22,6 +27,7 @@ import java.util.regex.Pattern;
 
 /** Package-local OBJ/MTL lookup and orientation for a static IR vehicle. No files are extracted. */
 public final class IrModelLoader {
+    private static final Logger LOGGER = LoggerFactory.getLogger(IrModelLoader.class);
     private static final Charset LEGACY_MTL_CHARSET = Charset.forName("GB18030");
     private static final Pattern HIDDEN = Pattern.compile("(?:^|_)HIDE(?:_|$)");
 
@@ -76,13 +82,13 @@ public final class IrModelLoader {
                 .limit(2).toList();
         if (matches.size() == 1) {
             var entry = matches.getFirst();
-            UnrealTrainMod.LOGGER.warn("IR {}: texture '{}' matched ZIP entry '{}' ignoring case", model, path, entry);
+            LOGGER.warn("IR {}: texture '{}' matched ZIP entry '{}' ignoring case", model, path, entry);
             return entry;
         }
         if (matches.isEmpty()) {
-            UnrealTrainMod.LOGGER.warn("IR {}: missing texture '{}'; using material color", model, path);
+            LOGGER.warn("IR {}: missing texture '{}'; using material color", model, path);
         } else {
-            UnrealTrainMod.LOGGER.warn("IR {}: ambiguous case-insensitive texture '{}'; using material color", model, path);
+            LOGGER.warn("IR {}: ambiguous case-insensitive texture '{}'; using material color", model, path);
         }
         return null;
     }

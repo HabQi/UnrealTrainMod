@@ -4,14 +4,17 @@
  */
 package com.unrealtrainmod.model.importer;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.unrealtrainmod.model.ModelSource;
 import com.unrealtrainmod.model.ModelTexture;
-import com.unrealtrainmod.UnrealTrainMod;
-import com.unrealtrainmod.model.IrModelLoader;
+import com.unrealtrainmod.compat.ir.IrModelLoader;
 import com.unrealtrainmod.model.ModelData;
 import com.unrealtrainmod.model.ModelMesh;
 import com.unrealtrainmod.model.MqoParser;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -19,7 +22,13 @@ import java.util.Map;
 
 /** Resolves format-specific geometry and material rules before client preparation. */
 public final class ModelImporter {
+    private static final Logger LOGGER = LoggerFactory.getLogger(ModelImporter.class);
     private ModelImporter() {}
+
+    /** Parses authored MQO geometry without preparing a mesh; the caller owns the stream. */
+    public static ModelData parseMqo(InputStream input) throws IOException {
+        return MqoParser.parse(input, StandardCharsets.UTF_8);
+    }
 
     public static ImportedModel load(ModelSource source) throws IOException {
         ModelData model;
@@ -31,7 +40,7 @@ public final class ModelImporter {
             bindings = imported.textures();
         } else {
             try (var input = source.model().open()) {
-                model = MqoParser.parse(input, StandardCharsets.UTF_8);
+                model = parseMqo(input);
             }
             bindings = source.textures();
         }
@@ -40,11 +49,11 @@ public final class ModelImporter {
         unmatched.remove("default");
         for (var material : model.materials()) unmatched.remove(material.name());
         for (var name : unmatched) {
-            UnrealTrainMod.LOGGER.warn("Model {}: materialRenderModes['{}'] matches no material", source.model(), name);
+            LOGGER.warn("Model {}: materialRenderModes['{}'] matches no material", source.model(), name);
         }
         var mesh = ModelMesh.prepare(model, source.scale(), source.smoothing(), ir);
         if (mesh.fanFallbackCount() > 0) {
-            UnrealTrainMod.LOGGER.warn("IR {}: used OBJ corner-order triangle fans for {} polygon faces that could not be ear-clipped",
+            LOGGER.warn("IR {}: used OBJ corner-order triangle fans for {} polygon faces that could not be ear-clipped",
                     source.model(), mesh.fanFallbackCount());
         }
 
@@ -60,7 +69,7 @@ public final class ModelImporter {
                 if (binding != null) {
                     textures.put(material, binding);
                 } else if (!ir && warned.add(material.name())) {
-                    UnrealTrainMod.LOGGER.warn("RTM {}: no texture for material '{}'; using white", source.model(), material.name());
+                    LOGGER.warn("RTM {}: no texture for material '{}'; using white", source.model(), material.name());
                 }
             }
         }

@@ -9,7 +9,9 @@ import com.unrealtrainmod.track.TrackGraph;
 import com.unrealtrainmod.track.TrackGraphException;
 import com.unrealtrainmod.track.TrackSegment;
 import com.unrealtrainmod.track.TrackSegmentChange;
+import com.unrealtrainmod.track.persistence.TrackSavedData;
 import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -17,22 +19,64 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
+import net.neoforged.bus.api.IEventBus;
+import net.neoforged.neoforge.event.level.LevelEvent;
+import net.neoforged.neoforge.event.server.ServerStoppedEvent;
 
-/** Owned by the dimension's SavedData; all operations run on the server thread. */
+/** One runtime manager per server level; all operations run on the server thread. */
 public final class TrackBlockManager {
+    private static final Map<ServerLevel, TrackBlockManager> LEVELS = new IdentityHashMap<>();
     private final ServerLevel level;
     private final TrackGraph graph;
     private final Map<UUID, Map<BlockPos, Integer>> volumes;
     private final Map<BlockPos, Map<UUID, Integer>> owners = new HashMap<>();
     private Map<BlockPos, Integer> prepared;
 
-    public TrackBlockManager(ServerLevel level, TrackGraph graph, Map<UUID, Map<BlockPos, Integer>> volumes) {
+    public static void register(IEventBus bus) {
+        bus.addListener(TrackBlockManager::levelUnloaded);
+        bus.addListener(TrackBlockManager::serverStopped);
+    }
+
+    public static TrackBlockManager get(ServerLevel level) {
+        return LEVELS.computeIfAbsent(level, key -> new TrackBlockManager(key, TrackSavedData.get(key)));
+    }
+
+    private static void levelUnloaded(LevelEvent.Unload event) {
+        if (event.getLevel() instanceof ServerLevel level) LEVELS.remove(level);
+    }
+
+    private static void serverStopped(ServerStoppedEvent event) {
+        LEVELS.clear();
+    }
+
+    private TrackBlockManager(ServerLevel level, TrackSavedData data) {
         this.level = level;
-        this.graph = graph;
-        this.volumes = volumes;
+        this.graph = data.graph();
+        this.volumes = data.volumes();
         volumes.forEach(this::index);
         graph.setSegmentValidator(this::prepare);
         graph.addSegmentListener(this::changed);
+    }
+
+    public TrackGraph graph() {
+        return graph;
+    }
+
+    /** Snapshot of the cell's owners, sorted to resolve placement ties consistently. */
+    public List<TrackSegment> segmentsAt(BlockPos pos) {
+        Map<UUID, Integer> indexed = owners.get(pos);
+        return indexed == null ? List.of() : indexed.keySet().stream().sorted().map(graph::segment).toList();
+    }
+
+    /** True only when every indexed owner of the cell connects to this node. */
+    public boolean isNodeTrackBlock(BlockPos pos, UUID nodeId) {
+        Map<UUID, Integer> indexed = owners.get(pos);
+        if (indexed == null) return false;
+        for (UUID id : indexed.keySet()) {
+            TrackSegment segment = graph.segment(id);
+            if (!segment.startNodeId().equals(nodeId) && !segment.endNodeId().equals(nodeId)) return false;
+        }
+        return true;
     }
 
     private void index(UUID id, Map<BlockPos, Integer> volume) {

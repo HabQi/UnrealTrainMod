@@ -19,7 +19,7 @@ import com.unrealtrainmod.track.TrackSegment;
 import com.unrealtrainmod.track.geometry.BezierTrackGeometry;
 import com.unrealtrainmod.track.geometry.TrackPoint;
 import com.unrealtrainmod.track.geometry.TrackVector;
-import com.unrealtrainmod.track.persistence.TrackSavedData;
+import com.unrealtrainmod.track.block.TrackBlockManager;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
@@ -176,7 +176,7 @@ public final class TrackCommands {
 
     private static TrackGraph graph(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
         try {
-            return TrackSavedData.get(context.getSource().getLevel()).graph();
+            return TrackBlockManager.get(context.getSource().getLevel()).graph();
         } catch (IllegalStateException exception) {
             throw error("storage", exception.getMessage());
         }

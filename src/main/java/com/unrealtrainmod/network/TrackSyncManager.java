@@ -4,7 +4,9 @@
  */
 package com.unrealtrainmod.network;
 
-import com.unrealtrainmod.UnrealTrainMod;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.unrealtrainmod.network.payload.TrackChunkPayload;
 import com.unrealtrainmod.network.payload.TrackChunkUnloadPayload;
 import com.unrealtrainmod.network.payload.TrackSegmentRemovePayload;
@@ -12,7 +14,7 @@ import com.unrealtrainmod.track.TrackGraph;
 import com.unrealtrainmod.track.TrackSegment;
 import com.unrealtrainmod.track.TrackSegmentChange;
 import com.unrealtrainmod.track.TrackSegmentData;
-import com.unrealtrainmod.track.persistence.TrackSavedData;
+import com.unrealtrainmod.track.block.TrackBlockManager;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -34,6 +36,7 @@ import net.neoforged.neoforge.network.PacketDistributor;
 
 /** Subscriptions describe chunks actually sent to each player, not merely queued chunks. */
 public final class TrackSyncManager {
+    private static final Logger LOGGER = LoggerFactory.getLogger(TrackSyncManager.class);
     private static final Map<ServerLevel, LevelState> LEVELS = new IdentityHashMap<>();
 
     private TrackSyncManager() {}
@@ -121,9 +124,9 @@ public final class TrackSyncManager {
             this.level = level;
             TrackGraph loaded;
             try {
-                loaded = TrackSavedData.get(level).graph();
+                loaded = TrackBlockManager.get(level).graph();
             } catch (IllegalStateException exception) {
-                UnrealTrainMod.LOGGER.error("Track synchronization disabled for dimension {}: {}",
+                LOGGER.error("Track synchronization disabled for dimension {}: {}",
                         level.dimension().location(), exception.getMessage());
                 loaded = null;
             }

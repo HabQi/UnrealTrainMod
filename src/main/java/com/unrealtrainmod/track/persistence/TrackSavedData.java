@@ -8,8 +8,6 @@ import com.unrealtrainmod.track.TrackGraph;
 import com.unrealtrainmod.track.TrackCurveParameters;
 import com.unrealtrainmod.track.TrackNode;
 import com.unrealtrainmod.track.TrackSegment;
-import com.unrealtrainmod.track.block.TrackBlockManager;
-import com.unrealtrainmod.track.block.TrackBlockVolume;
 import com.unrealtrainmod.track.geometry.BezierTrackGeometry;
 import com.unrealtrainmod.track.geometry.TrackPoint;
 import com.unrealtrainmod.track.geometry.TrackVector;
@@ -31,23 +29,20 @@ import net.minecraft.world.level.storage.LevelResource;
 
 /** Each ServerLevel owns one instance; derived geometry and indices are rebuilt on load. */
 public final class TrackSavedData extends SavedData {
+    public static final int MAX_VOLUME_BLOCKS = 16_384;
     private static final String NAME = "unrealtrainmod_tracks";
     private static final int FORMAT_VERSION = 4;
     private static final Factory<TrackSavedData> FACTORY =
             new Factory<>(TrackSavedData::new, (tag, registries) -> load(tag));
     private final TrackGraph graph = new TrackGraph(this::setDirty);
     private final Map<UUID, Map<BlockPos, Integer>> volumes = new HashMap<>();
-    private TrackBlockManager blocks;
 
     private TrackSavedData() {}
 
     public static TrackSavedData get(ServerLevel level) {
         var storage = level.getDataStorage();
         TrackSavedData data = storage.get(FACTORY, NAME);
-        if (data != null) {
-            data.attach(level);
-            return data;
-        }
+        if (data != null) return data;
         Path file = DimensionType.getStorageFolder(level.dimension(), level.getServer().getWorldPath(LevelResource.ROOT))
                 .resolve("data").resolve(NAME + ".dat");
         // DimensionDataStorage returns null both for absent files and for deserialization/IO errors.
@@ -55,16 +50,12 @@ public final class TrackSavedData extends SavedData {
         if (!Files.notExists(file)) throw new IllegalStateException(file.toString());
         data = new TrackSavedData();
         storage.set(NAME, data);
-        data.attach(level);
         return data;
     }
 
-    private void attach(ServerLevel level) {
-        if (blocks == null) blocks = new TrackBlockManager(level, graph, volumes);
-    }
-
-    public TrackBlockManager blocks() {
-        return blocks;
+    /** Mutable occupancy shared with the server-side block manager; updated with graph changes. */
+    public Map<UUID, Map<BlockPos, Integer>> volumes() {
+        return volumes;
     }
 
     public TrackGraph graph() {
@@ -156,7 +147,7 @@ public final class TrackSavedData extends SavedData {
         }
         long[] positions = segment.getLongArray("Blocks");
         byte[] heights = segment.getByteArray("BlockHeights");
-        if (positions.length == 0 || positions.length > TrackBlockVolume.MAX_BLOCKS || positions.length != heights.length) {
+        if (positions.length == 0 || positions.length > MAX_VOLUME_BLOCKS || positions.length != heights.length) {
             throw new IllegalArgumentException("Invalid track volume size");
         }
         Map<BlockPos, Integer> volume = new HashMap<>();

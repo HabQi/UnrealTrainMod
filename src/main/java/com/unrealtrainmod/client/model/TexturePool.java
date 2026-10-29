@@ -4,6 +4,9 @@
  */
 package com.unrealtrainmod.client.model;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.mojang.blaze3d.platform.NativeImage;
 import com.unrealtrainmod.UnrealTrainMod;
 import com.unrealtrainmod.resource.PackageAsset;
@@ -18,6 +21,7 @@ import net.minecraft.resources.ResourceLocation;
 
 /** Reload-local pixel sharing. Only canonical images are owned and transferred for upload. */
 final class TexturePool implements AutoCloseable {
+    private static final Logger LOGGER = LoggerFactory.getLogger(TexturePool.class);
     record Entry(ResourceLocation id, NativeImage image, TextureAlpha alpha) {}
     private record PixelKey(int width, int height, long hash) {}
 
@@ -93,7 +97,7 @@ final class TexturePool implements AutoCloseable {
             }
         }
         long pixelCount = images.values().stream().mapToLong(image -> (long)image.getWidth() * image.getHeight()).sum();
-        UnrealTrainMod.LOGGER.info("Prepared vehicle textures: {} assets -> {} unique source images; {} atlas pages; "
+        LOGGER.info("Prepared vehicle textures: {} assets -> {} unique source images; {} atlas pages; "
                         + "{} retained for upload, {} pixels ({} RGBA bytes)",
                 assets.size(), unique, atlasPages, images.size(), pixelCount, pixelCount * Integer.BYTES);
         var transferred = new HashMap<>(images);

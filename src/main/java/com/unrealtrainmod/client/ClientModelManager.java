@@ -4,6 +4,9 @@
  */
 package com.unrealtrainmod.client;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.unrealtrainmod.model.ModelSource;
 import com.unrealtrainmod.vehicle.VehicleCatalog;
 import com.mojang.blaze3d.systems.RenderSystem;
@@ -26,6 +29,7 @@ import net.minecraft.util.profiling.ProfilerFiller;
 
 /** Owns loaded vehicle textures and GPU geometry, separate from CPU preparation. */
 public final class ClientModelManager extends SimplePreparableReloadListener<PreparedReload> {
+    private static final Logger LOGGER = LoggerFactory.getLogger(ClientModelManager.class);
     public static final ClientModelManager INSTANCE = new ClientModelManager();
     public static final ResourceLocation WHITE = TextureLoader.WHITE;
     private Map<ResourceLocation, LoadedModel> models = Map.of();
@@ -74,7 +78,7 @@ public final class ClientModelManager extends SimplePreparableReloadListener<Pre
                     try {
                         gpu = GpuModel.upload(source.batches());
                     } catch (RuntimeException e) {
-                        UnrealTrainMod.LOGGER.error("Unable to upload vehicle model {}; using buffered rendering", entry.getKey().model(), e);
+                        LOGGER.error("Unable to upload vehicle model {}; using buffered rendering", entry.getKey().model(), e);
                     }
                 }
                 uploaded.put(entry.getKey(), new LoadedModel.Source(source.parts(), source.visibleParts(), source.partsByName(), gpu));

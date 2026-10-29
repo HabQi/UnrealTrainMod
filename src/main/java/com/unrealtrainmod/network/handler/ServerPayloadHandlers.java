@@ -15,6 +15,7 @@ import com.unrealtrainmod.registry.ModDataComponents;
 import com.unrealtrainmod.network.payload.SetTrackCurvePayload;
 import com.unrealtrainmod.track.construction.TrackConstructionManager;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.world.InteractionHand;
 import net.neoforged.neoforge.network.handling.IPayloadContext;
 
@@ -51,7 +52,8 @@ public final class ServerPayloadHandlers {
             result = ModelSelectionResultPayload.Result.NO_PERMISSION;
         } else if (payload.hotbarSlot() < 0 || payload.hotbarSlot() > 8
                 || (payload.hand() == InteractionHand.MAIN_HAND && player.getInventory().selected != payload.hotbarSlot())
-                || !stack.is(UnrealTrainMod.VEHICLE_PLACER.get())) {
+                || (!stack.is(UnrealTrainMod.VEHICLE_PLACER.get()) && !stack.is(UnrealTrainMod.VEHICLE.get()))
+                || !BuiltInRegistries.ITEM.getKey(stack.getItem()).equals(payload.itemId())) {
             result = ModelSelectionResultPayload.Result.INVALID_ITEM;
         } else if (VehicleCatalog.find(payload.modelId()) == null) {
             result = ModelSelectionResultPayload.Result.UNKNOWN_MODEL;

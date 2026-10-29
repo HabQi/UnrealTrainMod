@@ -4,9 +4,11 @@
  */
 package com.unrealtrainmod.client.track;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.VertexBuffer;
-import com.unrealtrainmod.UnrealTrainMod;
 import com.unrealtrainmod.track.mesh.TrackMeshBuilder;
 import com.unrealtrainmod.track.mesh.TrackMeshData;
 import com.unrealtrainmod.track.mesh.RailTrackMeshBuilder;
@@ -18,6 +20,7 @@ import org.joml.Matrix4f;
 
 /** Independent opaque pass; static geometry is reused, with budgeted light updates. */
 public final class TrackWorldRenderer {
+    private static final Logger LOGGER = LoggerFactory.getLogger(TrackWorldRenderer.class);
     private static final int BUILDS_PER_FRAME = 4;
     private static final int UPLOADS_PER_FRAME = 4;
 
@@ -75,19 +78,19 @@ public final class TrackWorldRenderer {
                     return new RailTrackGpuMesh(RailTrackMeshBuilder.build(entry.geometry,
                             model.batches().stream().map(ClientRailModelManager.Batch::mesh).toList(), x, z), model, false);
                 } catch (IllegalArgumentException exception) {
-                    UnrealTrainMod.LOGGER.warn("Cannot build RTM rail {} using {} in chunk {}, {}: {}; using native appearance",
+                    LOGGER.warn("Cannot build RTM rail {} using {} in chunk {}, {}: {}; using native appearance",
                             id, modelId, x, z, exception.getMessage());
                 }
             } else if (!entry.missingReported) {
                 entry.missingReported = true;
-                UnrealTrainMod.LOGGER.warn("RTM rail model {} is missing or unavailable for track {}; using native appearance", modelId, id);
+                LOGGER.warn("RTM rail model {} is missing or unavailable for track {}; using native appearance", modelId, id);
             }
         }
         try {
             return new TrackGpuMesh(TrackMeshBuilder.build(entry.geometry, x, z));
         } catch (IllegalArgumentException exception) {
             // Retain an empty batch so invalid/oversized input does not retry on every frame.
-            UnrealTrainMod.LOGGER.warn("Cannot build track {} in chunk {}, {}: {}", id, x, z, exception.getMessage());
+            LOGGER.warn("Cannot build track {} in chunk {}, {}: {}", id, x, z, exception.getMessage());
             return new TrackGpuMesh(TrackMeshData.EMPTY);
         }
     }

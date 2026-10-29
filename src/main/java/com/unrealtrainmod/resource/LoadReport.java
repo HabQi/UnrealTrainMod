@@ -4,13 +4,16 @@
  */
 package com.unrealtrainmod.resource;
 
-import com.unrealtrainmod.UnrealTrainMod;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.nio.file.Path;
 import java.util.EnumMap;
 import net.minecraft.resources.ResourceLocation;
 
 /** Startup counters only; diagnostic details are logged immediately. */
 public final class LoadReport {
+    private static final Logger LOGGER = LoggerFactory.getLogger(LoadReport.class);
     public enum Kind {
         RTM_VEHICLE("RTM vehicles"), IR_VEHICLE("IR vehicles"), RTM_RAIL("RTM rails");
 
@@ -33,41 +36,41 @@ public final class LoadReport {
 
     public void failed(Kind kind, PackageAsset config, Exception exception) {
         counts.get(kind).failed++;
-        UnrealTrainMod.LOGGER.error("Unable to register {} {}!{}: {}", kind.label,
+        LOGGER.error("Unable to register {} {}!{}: {}", kind.label,
                 config.archive(), config.entry(), exception.getMessage(), exception);
     }
 
     public void duplicate(Kind kind, ResourceLocation id, PackageAsset incoming, PackageAsset retained) {
         counts.get(kind).duplicates++;
-        UnrealTrainMod.LOGGER.warn("Duplicate {} {}: skipping {}!{}; retained {}!{}", kind.label, id,
+        LOGGER.warn("Duplicate {} {}: skipping {}!{}; retained {}!{}", kind.label, id,
                 incoming.archive(), incoming.entry(), retained.archive(), retained.entry());
     }
 
     public void archiveFailed(boolean rtm, Path archive, Exception exception) {
         if (rtm) rtmArchives++;
         else irArchives++;
-        UnrealTrainMod.LOGGER.error("Unable to read {} package {}", rtm ? "RTM" : "IR", archive, exception);
+        LOGGER.error("Unable to read {} package {}", rtm ? "RTM" : "IR", archive, exception);
     }
 
     public void directoryFailed(Path directory, Exception exception) {
-        UnrealTrainMod.LOGGER.error("Unable to initialize package directory {}", directory, exception);
+        LOGGER.error("Unable to initialize package directory {}", directory, exception);
     }
 
     public void catalogFailed(PackageAsset catalog, Exception exception) {
         catalogErrors++;
-        UnrealTrainMod.LOGGER.error("Unable to read IR stock catalog {}!{}: {}",
+        LOGGER.error("Unable to read IR stock catalog {}!{}: {}",
                 catalog.archive(), catalog.entry(), exception.getMessage(), exception);
     }
 
     public void missingCatalog(Path archive) {
-        UnrealTrainMod.LOGGER.warn("IR package {} contains no JSON stock catalog", archive);
+        LOGGER.warn("IR package {} contains no JSON stock catalog", archive);
     }
 
     public void logSummary(Kind kind, Path directory, String details) {
         var value = counts.get(kind);
         String extra = kind == Kind.IR_VEHICLE ? "; " + catalogErrors + " catalog errors" : "";
         if (!details.isEmpty()) extra += "; " + details;
-        UnrealTrainMod.LOGGER.info("Registered {} {} from {}: {} failed configs, {} duplicates, {} unreadable archives{}",
+        LOGGER.info("Registered {} {} from {}: {} failed configs, {} duplicates, {} unreadable archives{}",
                 value.registered, kind.label, directory, value.failed, value.duplicates,
                 kind == Kind.IR_VEHICLE ? irArchives : rtmArchives, extra);
     }

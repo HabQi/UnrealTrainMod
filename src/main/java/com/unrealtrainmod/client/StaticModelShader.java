@@ -4,11 +4,13 @@
  */
 package com.unrealtrainmod.client;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.mojang.blaze3d.shaders.Uniform;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexFormat;
 import com.mojang.blaze3d.vertex.VertexFormatElement;
-import com.unrealtrainmod.UnrealTrainMod;
 import java.io.IOException;
 import net.minecraft.client.renderer.ShaderInstance;
 import net.minecraft.client.renderer.texture.OverlayTexture;
@@ -16,6 +18,7 @@ import net.neoforged.neoforge.client.event.RegisterShadersEvent;
 
 /** Local geometry stays on the GPU; only these per-entity uniforms change between draws. */
 public final class StaticModelShader {
+    private static final Logger LOGGER = LoggerFactory.getLogger(StaticModelShader.class);
     // AlphaPass values shared with static_model.fsh.
     public static final int LEGACY_CUTOUT = 0, MIXED_OPAQUE = 1, BLENDED = 2;
     public static final int FORCE_OPAQUE = 3, FORCE_CUTOUT = 4, FORCE_TRANSLUCENT = 5;
@@ -41,14 +44,14 @@ public final class StaticModelShader {
                         Uniform light = loaded.getUniform("LightUV"), overlay = loaded.getUniform("OverlayUV");
                         Uniform alphaPass = loaded.getUniform("AlphaPass");
                         if (model == null || normal == null || light == null || overlay == null || alphaPass == null) {
-                            UnrealTrainMod.LOGGER.error("Static model shader is missing required uniforms; using buffered rendering");
+                            LOGGER.error("Static model shader is missing required uniforms; using buffered rendering");
                         } else {
                             // Minecraft owns and closes the shader; retain only the registered callback's instance.
                             state = new State(loaded, model, normal, light, overlay, alphaPass);
                         }
                     });
         } catch (IOException e) {
-            UnrealTrainMod.LOGGER.error("Cannot load static model shader; using buffered rendering", e);
+            LOGGER.error("Cannot load static model shader; using buffered rendering", e);
         }
     }
 
@@ -58,7 +61,7 @@ public final class StaticModelShader {
     public static void warnCutoutFallback() {
         if (cutoutFallbackWarned) return;
         cutoutFallbackWarned = true;
-        UnrealTrainMod.LOGGER.warn("Static model shader unavailable: forced CUTOUT falls back to texture-alpha clipping at 0.1; "
+        LOGGER.warn("Static model shader unavailable: forced CUTOUT falls back to texture-alpha clipping at 0.1; "
                 + "material and vertex alpha no longer affect clipping");
     }
 
