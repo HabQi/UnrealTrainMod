@@ -8,12 +8,15 @@ package com.unrealtrainmod;
 import com.unrealtrainmod.loading.ResourceLoader;
 import com.unrealtrainmod.command.TrackCommands;
 import com.unrealtrainmod.command.TrainCommands;
+import com.unrealtrainmod.command.TurnoutCommands;
 import com.unrealtrainmod.train.TrainManager;
 import com.unrealtrainmod.entity.PlacedModelEntity;
 import com.unrealtrainmod.entity.TrainEntity;
 import com.unrealtrainmod.item.ModelPlacerItem;
 import com.unrealtrainmod.item.VehicleItem;
 import com.unrealtrainmod.item.TrackBuilderItem;
+import com.unrealtrainmod.item.TurnoutBuilderItem;
+import com.unrealtrainmod.track.construction.TurnoutConstructionManager;
 import com.unrealtrainmod.item.TrackWrenchItem;
 import com.unrealtrainmod.item.RailPlacerItem;
 import com.unrealtrainmod.track.construction.TrackConstructionManager;
@@ -73,6 +76,8 @@ public class UnrealTrainMod {
             "rail_placer", RailPlacerItem::new, new Item.Properties().stacksTo(1));
     public static final DeferredItem<TrackWrenchItem> TRACK_WRENCH = ITEMS.registerItem(
             "track_wrench", TrackWrenchItem::new, new Item.Properties().stacksTo(1));
+    public static final DeferredItem<TurnoutBuilderItem> TURNOUT_BUILDER = ITEMS.registerItem(
+            "turnout_builder", TurnoutBuilderItem::new, new Item.Properties().stacksTo(1));
 
     public static final DeferredHolder<CreativeModeTab, CreativeModeTab> MOD_TAB = CREATIVE_MODE_TABS.register("example_tab", () -> CreativeModeTab.builder()
             .title(Component.translatable("itemGroup.unrealtrainmod"))
@@ -83,6 +88,7 @@ public class UnrealTrainMod {
                 output.accept(TRACK_BUILDER.get());
                 output.accept(RAIL_PLACER.get());
                 output.accept(TRACK_WRENCH.get());
+                output.accept(TURNOUT_BUILDER.get());
                 output.accept(VEHICLE.get());
             }).build());
 
@@ -98,9 +104,11 @@ public class UnrealTrainMod {
 
         NeoForge.EVENT_BUS.addListener(TrackCommands::register);
         NeoForge.EVENT_BUS.addListener(TrainCommands::register);
+        NeoForge.EVENT_BUS.addListener(TurnoutCommands::register);
         TrackBlockManager.register(NeoForge.EVENT_BUS);
         TrackSyncManager.register(NeoForge.EVENT_BUS);
         TrackConstructionManager.register(NeoForge.EVENT_BUS);
+        TurnoutConstructionManager.register(NeoForge.EVENT_BUS);
         TrainManager.register(NeoForge.EVENT_BUS);
     }
 }

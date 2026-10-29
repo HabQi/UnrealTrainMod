@@ -14,6 +14,10 @@ import com.unrealtrainmod.track.TrackGraph;
 import com.unrealtrainmod.track.TrackSegment;
 import com.unrealtrainmod.track.TrackSegmentChange;
 import com.unrealtrainmod.track.TrackSegmentData;
+import com.unrealtrainmod.track.assembly.TrackAssemblyInstance;
+import com.unrealtrainmod.network.payload.TrackAssemblyPayload;
+import com.unrealtrainmod.network.payload.TrackAssemblyStatePayload;
+import com.unrealtrainmod.network.payload.TrackAssemblyRemovePayload;
 import com.unrealtrainmod.track.block.TrackBlockManager;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -119,6 +123,8 @@ public final class TrackSyncManager {
         private final TrackGraph graph;
         private final Map<UUID, Subscription> players = new HashMap<>();
         private final Consumer<TrackSegmentChange> listener = this::changed;
+        private final Consumer<TrackAssemblyInstance> assemblyListener = this::assemblyChanged;
+        private final Consumer<TrackAssemblyInstance> removeListener = this::assemblyRemoved;
 
         private LevelState(ServerLevel level) {
             this.level = level;
@@ -132,11 +138,16 @@ public final class TrackSyncManager {
             }
             graph = loaded;
             // Attach only after persistence has completely restored the graph.
-            if (graph != null) graph.addSegmentListener(listener);
+            if (graph != null) {
+                graph.addSegmentListener(listener);
+                graph.addAssemblyListener(assemblyListener);
+                graph.addAssemblyRemoveListener(removeListener);
+            }
         }
 
         private void sendSnapshot(ServerPlayer player, ChunkPos chunk) {
-            List<TrackSegment> segments = graph.segmentsInChunk(chunk.x, chunk.z);
+            List<TrackSegment> segments = graph.segmentsInChunk(chunk.x, chunk.z).stream()
+                    .filter(s -> graph.assemblyForSegment(s.id()) == null).toList();
             int offset = 0;
             do {
                 int end = Math.min(offset + TrackChunkPayload.MAX_SEGMENTS, segments.size());
@@ -146,12 +157,17 @@ public final class TrackSyncManager {
                         chunk.x, chunk.z, offset == 0, batch));
                 offset = end;
             } while (offset < segments.size());
+            for (var assembly : graph.assemblies()) {
+                if (assembly.coversChunk(chunk.x, chunk.z)) PacketDistributor.sendToPlayer(player,
+                        new TrackAssemblyPayload(level.dimension().location(), chunk.x, chunk.z, assembly));
+            }
         }
 
         private void changed(TrackSegmentChange change) {
             if (players.isEmpty()) return;
             TrackSegment segment = change.segment();
             boolean added = change.type() == TrackSegmentChange.Type.ADDED;
+            if (added && graph.assemblyForSegment(segment.id()) != null) return;
             TrackSegmentData data = added ? TrackSegmentData.from(graph, segment) : null;
             for (Subscription subscription : players.values()) {
                 if (subscription.player.serverLevel() != level) continue;
@@ -170,8 +186,38 @@ public final class TrackSyncManager {
             }
         }
 
+        private void assemblyChanged(TrackAssemblyInstance assembly) {
+            for (var subscription : players.values()) {
+                if (subscription.player.serverLevel() != level) continue;
+                for (long chunk : subscription.chunks) {
+                    int x = ChunkPos.getX(chunk), z = ChunkPos.getZ(chunk);
+                    if (!assembly.coversChunk(x, z)) continue;
+                    if (assembly.revision() == 0) {
+                        PacketDistributor.sendToPlayer(subscription.player, new TrackAssemblyPayload(level.dimension().location(), x, z, assembly));
+                    } else {
+                        PacketDistributor.sendToPlayer(subscription.player, new TrackAssemblyStatePayload(level.dimension().location(),
+                                assembly.id(), assembly.state(), assembly.revision()));
+                        break;
+                    }
+                }
+            }
+        }
+
+        private void assemblyRemoved(TrackAssemblyInstance assembly) {
+            for (var subscription : players.values()) {
+                if (subscription.player.serverLevel() == level && subscription.chunks.stream().anyMatch(chunk ->
+                        assembly.coversChunk(ChunkPos.getX(chunk), ChunkPos.getZ(chunk)))) {
+                    PacketDistributor.sendToPlayer(subscription.player, new TrackAssemblyRemovePayload(level.dimension().location(), assembly.id()));
+                }
+            }
+        }
+
         private void close() {
-            if (graph != null) graph.removeSegmentListener(listener);
+            if (graph != null) {
+                graph.removeSegmentListener(listener);
+                graph.removeAssemblyListener(assemblyListener);
+                graph.removeAssemblyRemoveListener(removeListener);
+            }
             players.clear();
         }
     }

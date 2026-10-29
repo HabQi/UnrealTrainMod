@@ -8,6 +8,7 @@ import com.unrealtrainmod.track.TrackGraph;
 import com.unrealtrainmod.track.TrackCurveParameters;
 import com.unrealtrainmod.track.TrackNode;
 import com.unrealtrainmod.track.TrackSegment;
+import com.unrealtrainmod.track.assembly.TrackAssemblyInstance;
 import com.unrealtrainmod.track.geometry.BezierTrackGeometry;
 import com.unrealtrainmod.track.geometry.TrackPoint;
 import com.unrealtrainmod.track.geometry.TrackVector;
@@ -31,7 +32,7 @@ import net.minecraft.world.level.storage.LevelResource;
 public final class TrackSavedData extends SavedData {
     public static final int MAX_VOLUME_BLOCKS = 16_384;
     private static final String NAME = "unrealtrainmod_tracks";
-    private static final int FORMAT_VERSION = 4;
+    private static final int FORMAT_VERSION = 5;
     private static final Factory<TrackSavedData> FACTORY =
             new Factory<>(TrackSavedData::new, (tag, registries) -> load(tag));
     private final TrackGraph graph = new TrackGraph(this::setDirty);
@@ -94,6 +95,11 @@ public final class TrackSavedData extends SavedData {
                 data.volumes.put(id, readVolume(segment));
             }
         }
+        if (tag.getInt("Version") >= 5) {
+            var assemblies = readList(tag, "Assemblies");
+            for (int i = 0; i < assemblies.size(); i++) data.graph.restoreAssembly(
+                    TrackAssemblyInstance.load(assemblies.getCompound(i)));
+        }
         // Do not publish a partly restored graph, or schedule a rewrite merely because it was loaded.
         data.setDirty(false);
         return data;
@@ -138,6 +144,9 @@ public final class TrackSavedData extends SavedData {
             segments.add(entry);
         }
         tag.put("Segments", segments);
+        var assemblies = new ListTag();
+        for (var assembly : graph.assemblies()) assemblies.add(assembly.save());
+        tag.put("Assemblies", assemblies);
         return tag;
     }
 

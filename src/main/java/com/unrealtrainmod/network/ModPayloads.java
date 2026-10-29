@@ -16,6 +16,14 @@ import com.unrealtrainmod.network.payload.OpenTrackCurvePayload;
 import com.unrealtrainmod.network.payload.SetTrackCurvePayload;
 import com.unrealtrainmod.network.payload.TrackCurveResultPayload;
 import com.unrealtrainmod.network.payload.TrackSegmentRemovePayload;
+import com.unrealtrainmod.network.payload.TrackAssemblyPayload;
+import com.unrealtrainmod.network.payload.TrackAssemblyStatePayload;
+import com.unrealtrainmod.network.payload.TrackAssemblyRemovePayload;
+import com.unrealtrainmod.network.payload.OpenTurnoutPayload;
+import com.unrealtrainmod.network.payload.TurnoutActionPayload;
+import com.unrealtrainmod.network.payload.TurnoutResultPayload;
+import com.unrealtrainmod.track.construction.TurnoutConstructionManager;
+import net.minecraft.server.level.ServerPlayer;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
 
@@ -23,7 +31,20 @@ public final class ModPayloads {
     private ModPayloads() {}
 
     public static void register(RegisterPayloadHandlersEvent event) {
-        var registrar = event.registrar("6");
+        var registrar = event.registrar("8");
+        registrar.playToClient(OpenTurnoutPayload.TYPE, OpenTurnoutPayload.STREAM_CODEC,
+                (payload, context) -> NeoForge.EVENT_BUS.post(new TrackSyncEvent(payload)));
+        registrar.playToClient(TurnoutResultPayload.TYPE, TurnoutResultPayload.STREAM_CODEC,
+                (payload, context) -> NeoForge.EVENT_BUS.post(new TrackSyncEvent(payload)));
+        registrar.playToServer(TurnoutActionPayload.TYPE, TurnoutActionPayload.STREAM_CODEC, (payload, context) -> {
+            if (context.player() instanceof ServerPlayer player) TurnoutConstructionManager.handle(player, payload);
+        });
+        registrar.playToClient(TrackAssemblyPayload.TYPE, TrackAssemblyPayload.STREAM_CODEC,
+                (payload, context) -> NeoForge.EVENT_BUS.post(new TrackSyncEvent(payload)));
+        registrar.playToClient(TrackAssemblyStatePayload.TYPE, TrackAssemblyStatePayload.STREAM_CODEC,
+                (payload, context) -> NeoForge.EVENT_BUS.post(new TrackSyncEvent(payload)));
+        registrar.playToClient(TrackAssemblyRemovePayload.TYPE, TrackAssemblyRemovePayload.STREAM_CODEC,
+                (payload, context) -> NeoForge.EVENT_BUS.post(new TrackSyncEvent(payload)));
         registrar.playToServer(SetTrackCurvePayload.TYPE, SetTrackCurvePayload.STREAM_CODEC,
                 ServerPayloadHandlers::setTrackCurve);
         registrar.playToClient(OpenTrackCurvePayload.TYPE, OpenTrackCurvePayload.STREAM_CODEC,

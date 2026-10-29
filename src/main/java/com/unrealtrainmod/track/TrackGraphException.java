@@ -9,7 +9,7 @@ public final class TrackGraphException extends IllegalArgumentException {
     public enum Reason {
         UNKNOWN_NODE, UNKNOWN_SEGMENT, DUPLICATE_ID, SAME_NODE, GAUGE_MISMATCH,
         NODE_CONNECTED, INVALID_POSITION, INVALID_GAUGE, INDEX_RANGE, INDEX_TOO_LARGE,
-        BLOCKED_VOLUME, UNLOADED_VOLUME, VOLUME_TOO_LARGE
+        BLOCKED_VOLUME, UNLOADED_VOLUME, VOLUME_TOO_LARGE, VEHICLE_PRESENT
     }
 
     private final Reason reason;

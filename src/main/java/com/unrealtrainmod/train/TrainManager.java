@@ -8,25 +8,32 @@ import com.unrealtrainmod.entity.TrainEntity;
 import com.unrealtrainmod.track.TrackConnection;
 import com.unrealtrainmod.track.TrackGraph;
 import com.unrealtrainmod.track.TrackSegmentChange;
+import com.unrealtrainmod.track.assembly.TrackAssemblyInstance;
+import com.unrealtrainmod.track.assembly.TrackReservationManager;
+import com.unrealtrainmod.track.assembly.TrackTransitionResolver;
 import com.unrealtrainmod.track.block.TrackBlockManager;
-import com.unrealtrainmod.track.path.TrackCursor;
+import com.unrealtrainmod.track.geometry.TrackVector;
 import com.unrealtrainmod.track.path.TrackPathSampler;
 import com.unrealtrainmod.track.path.TrackRoute;
 import com.unrealtrainmod.train.TrainConsist.StopReason;
 import com.unrealtrainmod.vehicle.VehicleCatalog;
+import com.unrealtrainmod.vehicle.VehicleMotionSpec;
 import com.unrealtrainmod.vehicle.VehiclePose;
 import com.unrealtrainmod.vehicle.VehiclePoseSolver;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.phys.AABB;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.neoforge.event.entity.EntityJoinLevelEvent;
@@ -34,19 +41,34 @@ import net.neoforged.neoforge.event.entity.EntityLeaveLevelEvent;
 import net.neoforged.neoforge.event.level.LevelEvent;
 import net.neoforged.neoforge.event.server.ServerStoppedEvent;
 import net.neoforged.neoforge.event.tick.LevelTickEvent;
+import org.joml.Vector3f;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-/** One authority per server level. Entity registration, commands and simulation use the server thread. */
+/** One authority per level. Membership, candidate checks and commits all use the server thread. */
 public final class TrainManager {
     private static final Logger LOGGER = LoggerFactory.getLogger(TrainManager.class);
     private static final Map<ServerLevel, TrainManager> LEVELS = new IdentityHashMap<>();
-    private static final double SAMPLE_STEP = 0.25;
     private final ServerLevel level;
     private final Map<UUID, TrainConsist> trains = new HashMap<>();
+    private final Map<UUID, UUID> entityTrains = new HashMap<>();
+    private final Set<UUID> attached = new HashSet<>();
+    // Recovery belongs to the consist, independently of individual entity tick ages.
+    private final Set<UUID> restored = new HashSet<>();
     private final Set<UUID> pending = new HashSet<>();
-    private final Consumer<TrackSegmentChange> listener = this::trackChanged;
+    private TrainSavedData savedData;
+    private StateException storageFailure;
     private TrackGraph graph;
+    private TrackReservationManager reservations;
+    private final Consumer<TrackSegmentChange> listener = this::trackChanged;
+    private final Map<UUID, Long> assemblyRevisions = new HashMap<>();
+    private final Consumer<TrackAssemblyInstance> assemblyListener = this::assemblyChanged;
+    private final Consumer<TrackAssemblyInstance> assemblyRemoveListener = assembly -> assemblyRevisions.remove(assembly.id());
+
+    private record CarCandidate(TrainCarState member, TrainEntity entity, VehiclePose pose, TrainAnchor anchor, AABB bounds) {}
+    private record Candidate(double progress, List<CarCandidate> cars) {
+        List<AABB> areas() { return cars.stream().map(CarCandidate::bounds).toList(); }
+    }
 
     private TrainManager(ServerLevel level) { this.level = level; }
 
@@ -63,9 +85,8 @@ public final class TrainManager {
     }
 
     private static void entityJoined(EntityJoinLevelEvent event) {
-        if (event.getLevel() instanceof ServerLevel level && event.getEntity() instanceof TrainEntity entity
-                && (entity.getRailAnchor() != null || entity.hasInvalidAnchor())) {
-            // Joining can precede FULL chunk promotion. Do not touch the graph/world here.
+        if (event.getLevel() instanceof ServerLevel level && event.getEntity() instanceof TrainEntity entity) {
+            // Joining can precede FULL chunk promotion. Do not access the world or data storage here.
             get(level).pending.add(entity.getUUID());
         }
     }
@@ -74,8 +95,11 @@ public final class TrainManager {
         if (event.getLevel() instanceof ServerLevel level && event.getEntity() instanceof TrainEntity entity) {
             var manager = LEVELS.get(level);
             if (manager != null) {
-                manager.pending.remove(entity.getUUID());
-                manager.trains.remove(entity.getUUID());
+                try {
+                    manager.detach(entity);
+                } catch (StateException exception) {
+                    LOGGER.error("Cannot detach vehicle {}: {}", entity.getUUID(), exception.reason(), exception);
+                }
             }
         }
     }
@@ -100,100 +124,453 @@ public final class TrainManager {
     }
 
     private void close() {
-        if (graph != null) graph.removeSegmentListener(listener);
+        if (graph != null) {
+            graph.removeSegmentListener(listener);
+            graph.removeAssemblyListener(assemblyListener);
+            graph.removeAssemblyRemoveListener(assemblyRemoveListener);
+        }
         pending.clear();
+        attached.clear();
+        restored.clear();
+        entityTrains.clear();
+        for (var train : trains.values()) {
+            train.stop(StopReason.STOPPED);
+            train.clearRoute();
+        }
         trains.clear();
     }
 
     private TrackGraph graph() {
         if (graph == null) {
             graph = TrackBlockManager.get(level).graph();
+            reservations = new TrackReservationManager(level, graph, this::reservationMembers, this::reservationMemberConfirmed);
             graph.addSegmentListener(listener);
+            for (var assembly : graph.assemblies()) assemblyRevisions.put(assembly.id(), assembly.revision());
+            graph.addAssemblyListener(assemblyListener);
+            graph.addAssemblyRemoveListener(assemblyRemoveListener);
         }
         return graph;
     }
 
-    private TrainConsist state(TrainEntity entity) {
-        return trains.computeIfAbsent(entity.getUUID(), TrainConsist::new);
+    /** Expected storage/identity failures are translated at command and item boundaries. */
+    public static final class StateException extends IllegalStateException {
+        private final StopReason reason;
+
+        private StateException(StopReason reason) {
+            super(reason.name());
+            this.reason = reason;
+        }
+
+        private StateException(StopReason reason, Throwable cause) {
+            super(reason.name(), cause);
+            this.reason = reason;
+        }
+
+        public StopReason reason() { return reason; }
     }
 
-    public TrainConsist info(TrainEntity entity) {
-        var train = state(entity);
-        if (train.route() == null) {
-            var failure = prepare(entity, entity.getRailAnchor(), train);
-            if (failure != null) stop(entity, train, failure);
+    private TrainSavedData data() {
+        if (storageFailure != null) throw storageFailure;
+        if (savedData == null) {
+            try {
+                savedData = TrainSavedData.get(level);
+            } catch (IllegalStateException exception) {
+                storageFailure = new StateException(StopReason.STORAGE_ERROR, exception);
+                LOGGER.error("Train storage unavailable in {}", level.dimension().location(), exception);
+                throw storageFailure;
+            }
+            trains.putAll(savedData.trains());
+            for (var train : trains.values()) {
+                for (var car : train.cars()) entityTrains.put(car.entityId(), train.id());
+            }
+        }
+        return savedData;
+    }
+
+    private void put(TrainConsist train) {
+        trains.put(train.id(), train);
+        for (var car : train.cars()) entityTrains.put(car.entityId(), train.id());
+        savedData.put(train);
+    }
+
+    private void remove(TrainConsist train) {
+        trains.remove(train.id());
+        restored.remove(train.id());
+        for (var car : train.cars()) entityTrains.remove(car.entityId());
+        savedData.remove(train.id());
+    }
+
+    private static List<UUID> memberIds(TrainConsist train) {
+        return train.cars().stream().map(TrainCarState::entityId).toList();
+    }
+
+    private List<UUID> reservationMembers(UUID owner) {
+        var train = trains.get(entityTrains.get(owner));
+        return train == null ? List.of(owner) : memberIds(train);
+    }
+
+    private boolean reservationMemberConfirmed(UUID id) {
+        var train = trains.get(entityTrains.get(id));
+        if (train == null || !attached.contains(id) || !(level.getEntity(id) instanceof TrainEntity entity)) return false;
+        var car = train.member(id);
+        return matches(entity, train, car) && !entity.hasInvalidAnchor() && Objects.equals(car.anchor(), entity.getRailAnchor());
+    }
+
+    private TrainConsist single(TrainEntity entity, UUID id, TrainAnchor anchor, double speed) {
+        var modelId = entity.getModelId();
+        if (modelId == null) throw new StateException(StopReason.MISSING_MODEL);
+        return new TrainConsist(id, List.of(new TrainCarState(entity.getUUID(), modelId, 0, anchor)), speed);
+    }
+
+    private static boolean matches(TrainEntity entity, TrainConsist train, TrainCarState car) {
+        return !entity.hasInvalidTrainId() && (entity.getTrainId() == null || entity.getTrainId().equals(train.id()))
+                && car.modelId().equals(entity.getModelId());
+    }
+
+    private TrainConsist state(TrainEntity entity) {
+        data();
+        var train = trains.get(entityTrains.get(entity.getUUID()));
+        if (entity.hasInvalidTrainId() || (train == null && entity.getTrainId() != null)
+                || (train != null && !matches(entity, train, train.member(entity.getUUID())))) {
+            if (train != null) stop(train, StopReason.MEMBER_MISMATCH);
+            throw new StateException(StopReason.MEMBER_MISMATCH);
+        }
+        if (train == null) {
+            train = single(entity, UUID.randomUUID(), entity.getRailAnchor(), TrainConsist.DEFAULT_SPEED);
+            put(train);
+        }
+        if (entity.getTrainId() == null) entity.setTrainId(train.id());
+        return train;
+    }
+
+    /** Membership-changing commands must not trigger migration or relocation during validation. */
+    private TrainConsist registered(TrainEntity entity) {
+        data();
+        var train = trains.get(entityTrains.get(entity.getUUID()));
+        if (train == null || entity.getTrainId() == null || !matches(entity, train, train.member(entity.getUUID()))) {
+            throw new StateException(StopReason.MEMBER_MISMATCH);
         }
         return train;
     }
 
-    /** Returns a failure reason, or null after an atomic stopped binding. */
+    private List<TrainEntity> loadedMembers(TrainConsist train) {
+        var entities = new ArrayList<TrainEntity>(train.cars().size());
+        for (var car : train.cars()) {
+            if (!(level.getEntity(car.entityId()) instanceof TrainEntity entity) || entity.isRemoved()
+                    || !attached.contains(car.entityId())) throw new StateException(StopReason.INCOMPLETE_CONSIST);
+            if (!matches(entity, train, car)) throw new StateException(StopReason.MEMBER_MISMATCH);
+            if (VehicleCatalog.find(car.modelId()) == null) throw new StateException(StopReason.MISSING_MODEL);
+            entities.add(entity);
+        }
+        return entities;
+    }
+
+    public boolean memberLoaded(UUID entityId) {
+        return level.getEntity(entityId) instanceof TrainEntity entity && !entity.isRemoved();
+    }
+
+    public boolean isRestored(TrainConsist train) { return restored.contains(train.id()); }
+
+    private List<TrainEntity> requireReady(TrainConsist train) {
+        if (train.running()) throw new StateException(StopReason.CONSIST_NOT_STOPPED);
+        var entities = loadedMembers(train);
+        if (!isRestored(train) || train.routeDirty()) throw new StateException(StopReason.CONSIST_NOT_READY);
+        for (int i = 0; i < entities.size(); i++) {
+            if (entities.get(i).hasInvalidAnchor()
+                    || !Objects.equals(entities.get(i).getRailAnchor(), train.cars().get(i).anchor())) {
+                throw new StateException(StopReason.CONSIST_NOT_READY);
+            }
+        }
+        return entities;
+    }
+
+    private void detach(TrainEntity entity) {
+        UUID entityId = entity.getUUID();
+        pending.remove(entityId);
+        attached.remove(entityId);
+        data();
+        var train = trains.get(entityTrains.get(entityId));
+        var reason = entity.getRemovalReason();
+        boolean destroyed = reason != null && (reason.shouldDestroy() || reason == Entity.RemovalReason.CHANGED_DIMENSION);
+        if (train != null) {
+            stop(train, StopReason.INCOMPLETE_CONSIST);
+            train.clearRoute();
+        }
+        if (!destroyed) return;
+        if (train == null || train.cars().size() == 1) {
+            if (train != null) remove(train);
+            try {
+                graph();
+                reservations.release(entityId);
+            } catch (IllegalStateException exception) {
+                LOGGER.error("Cannot release turnout occupancy for vehicle {}", entityId, exception);
+            }
+            return;
+        }
+        var survivor = train.cars().stream().filter(car -> !car.entityId().equals(entityId)).findFirst().orElseThrow().asSingle();
+        remove(train);
+        var remaining = new TrainConsist(train.id(), List.of(survivor), train.configuredSpeed());
+        put(remaining);
+        try {
+            graph();
+            for (var car : train.cars()) reservations.transfer(car.entityId(), survivor.entityId());
+            reservations.refreshLoaded();
+        } catch (IllegalStateException exception) {
+            LOGGER.error("Cannot transfer turnout occupancy to vehicle {}", survivor.entityId(), exception);
+        }
+        sync(remaining);
+    }
+
+    public TrainConsist info(TrainEntity entity) {
+        var train = state(entity);
+        if (attached.add(entity.getUUID())) restore(train);
+        return train;
+    }
+
+    private void prepare(TrainConsist train, List<TrainEntity> entities) {
+        var anchor = train.anchor();
+        if (anchor == null) {
+            throw new StateException(entities.getFirst().hasInvalidAnchor() ? StopReason.INVALID_ANCHOR : StopReason.UNBOUND);
+        }
+        for (var car : train.cars()) {
+            if (VehicleCatalog.find(car.modelId()) == null) throw new StateException(StopReason.MISSING_MODEL);
+        }
+        TrackGraph tracks;
+        try {
+            tracks = graph();
+        } catch (IllegalStateException exception) {
+            throw new StateException(StopReason.STORAGE_ERROR, exception);
+        }
+        try {
+            if (anchor.distance() > tracks.segment(anchor.segmentId()).geometry().getLength()) {
+                throw new StateException(StopReason.INVALID_ANCHOR);
+            }
+            if (!TrackTransitionResolver.active(tracks, anchor.segmentId())) {
+                throw new StateException(StopReason.TURNOUT_ROUTE_UNAVAILABLE);
+            }
+            var route = TrackRoute.trace(tracks, new TrackConnection(anchor.segmentId(), anchor.fromStart()));
+            var sampler = new TrackPathSampler(route);
+            double progress = TrainMotion.distance(route, sampler, anchor);
+            var nodes = new HashSet<UUID>();
+            for (var connection : route.connections()) {
+                var segment = tracks.segment(connection.segmentId());
+                nodes.add(segment.startNodeId());
+                nodes.add(segment.endNodeId());
+            }
+            train.setRoute(route, sampler, progress, nodes);
+        } catch (IllegalArgumentException exception) {
+            throw new StateException(StopReason.INVALID_ANCHOR, exception);
+        }
+    }
+
+    private CarCandidate solveCar(TrainConsist train, TrainCarState car, TrainEntity entity, double progress) {
+        var spec = VehicleCatalog.find(car.modelId()).motionSpec();
+        var solved = VehiclePoseSolver.solve(train.sampler(), progress, spec);
+        if (solved.failure() != null) throw new StateException(poseFailure(solved.failure()));
+        var pose = solved.pose();
+        return new CarCandidate(car, entity, pose, TrainMotion.anchor(train.route(), train.sampler(), progress),
+                protectedArea(entity, train, progress, spec, pose));
+    }
+
+    private Candidate calculate(TrainConsist train, List<TrainEntity> entities, double progress) {
+        if (!TrainMotion.range(train).contains(progress)) throw new StateException(StopReason.INSUFFICIENT_ROUTE);
+        var cars = new ArrayList<CarCandidate>(train.cars().size());
+        for (int i = 0; i < train.cars().size(); i++) {
+            var car = train.cars().get(i);
+            var range = VehiclePoseSolver.range(train.route().getLength(), VehicleCatalog.find(car.modelId()).motionSpec());
+            double local = TrainMotion.carProgress(progress, car.offset(), range);
+            cars.add(solveCar(train, car, entities.get(i), local));
+        }
+        return new Candidate(progress, List.copyOf(cars));
+    }
+
+    private static List<AABB> currentAreas(List<TrainEntity> entities) {
+        return entities.stream().map(TrackReservationManager::area).toList();
+    }
+
+    private static List<AABB> swept(List<AABB> previous, List<AABB> next) {
+        var areas = new ArrayList<AABB>(previous.size());
+        for (int i = 0; i < previous.size(); i++) areas.add(previous.get(i).minmax(next.get(i)));
+        return areas;
+    }
+
+    private void check(TrainConsist train, List<AABB> areas) {
+        for (var area : areas) {
+            var failure = areaFailure(area);
+            if (failure != null) throw new StateException(failure);
+        }
+        for (var assembly : graph.assemblies()) {
+            if (areas.stream().anyMatch(area -> area.intersects(assembly.bounds()))
+                    && !train.usesSegment(assembly.activeSegment())) throw new StateException(StopReason.TURNOUT_ROUTE_UNAVAILABLE);
+        }
+        if (!reservations.available(memberIds(train), areas)) throw new StateException(StopReason.TURNOUT_OCCUPIED);
+    }
+
+    private void saveCandidate(TrainConsist train, Candidate candidate) {
+        var members = candidate.cars().stream().map(car -> car.member().withAnchor(car.anchor())).toList();
+        if (!members.equals(train.cars())) {
+            train.setCars(members);
+            savedData.setDirty();
+        }
+        train.setProgress(candidate.progress());
+    }
+
+    private void commit(TrainConsist train, Candidate candidate, boolean publish) {
+        saveCandidate(train, candidate);
+        for (var car : candidate.cars()) {
+            car.entity().setRailAnchor(car.anchor());
+            car.entity().advanceRailPose(car.pose());
+        }
+        if (publish) sync(train);
+    }
+
+    private void sync(TrainConsist train) {
+        for (var car : train.cars()) {
+            if (level.getEntity(car.entityId()) instanceof TrainEntity entity && !entity.isRemoved()) entity.syncRailPose();
+        }
+    }
+
+    private void stop(TrainConsist train, StopReason reason) {
+        if (reason == StopReason.INCOMPLETE_CONSIST || reason == StopReason.MEMBER_MISMATCH || reason == StopReason.MISSING_MODEL) {
+            restored.remove(train.id());
+        }
+        train.stop(reason);
+        sync(train);
+    }
+
+    /** Recovery never moves a subset of the consist, and is not retried by the normal tick loop. */
+    private StopReason restore(TrainConsist train) {
+        restored.remove(train.id());
+        train.stop(StopReason.STOPPED);
+        train.clearRoute();
+        try {
+            var entities = loadedMembers(train);
+            prepare(train, entities);
+            var candidate = calculate(train, entities, train.progress());
+            checkCheckpoint(train, candidate);
+            var areas = new ArrayList<AABB>(entities.size());
+            var relocate = new ArrayList<Boolean>(entities.size());
+            for (var car : candidate.cars()) {
+                boolean move = car.entity().hasInvalidAnchor() || !sameRoutePosition(train, car.anchor(), car.entity().getRailAnchor());
+                relocate.add(move);
+                areas.add(move ? car.bounds() : TrackReservationManager.area(car.entity()));
+            }
+            reservations.refreshLoaded();
+            check(train, areas);
+            reservations.acquire(memberIds(train), areas);
+            saveCandidate(train, candidate);
+            for (int i = 0; i < candidate.cars().size(); i++) {
+                var car = candidate.cars().get(i);
+                car.entity().setRailAnchor(car.anchor());
+                if (relocate.get(i)) {
+                    LOGGER.info("Restoring vehicle {} of consist {} to {}", car.member().entityId(), train.id(), car.anchor());
+                    car.entity().advanceRailPose(car.pose());
+                    car.entity().setOldPosAndRot();
+                }
+            }
+            reservations.releaseOutside(memberIds(train), areas);
+            restored.add(train.id());
+            sync(train);
+            return null;
+        } catch (StateException exception) {
+            stop(train, exception.reason());
+            return exception.reason();
+        }
+    }
+
+    private static boolean sameRoutePosition(TrainConsist train, TrainAnchor first, TrainAnchor second) {
+        if (Objects.equals(first, second)) return true;
+        if (second == null) return false;
+        try {
+            // A joint can be saved as either the previous segment's end or the next one's start.
+            double a = TrainMotion.distance(train.route(), train.sampler(), first);
+            double b = TrainMotion.distance(train.route(), train.sampler(), second);
+            return Math.abs(a - b) <= Math.max(1e-9, 4 * Math.max(Math.ulp(a), Math.ulp(b)));
+        } catch (IllegalArgumentException exception) {
+            return false;
+        }
+    }
+
+    private static void checkCheckpoint(TrainConsist train, Candidate candidate) {
+        for (var car : candidate.cars()) {
+            if (!sameRoutePosition(train, car.anchor(), car.member().anchor())) {
+                throw new StateException(StopReason.INVALID_ANCHOR);
+            }
+        }
+    }
+
     public StopReason bind(TrainEntity entity, TrainAnchor anchor) {
         return bind(entity, anchor, ignored -> true, false);
     }
 
-    /** Placement validates geometry, all occupied chunks and player permissions before spawning. */
     public StopReason place(TrainEntity entity, TrainAnchor anchor, Predicate<BlockPos> allowed) {
         return bind(entity, anchor, allowed, true);
     }
 
     private StopReason bind(TrainEntity entity, TrainAnchor anchor, Predicate<BlockPos> allowed, boolean spawn) {
-        var candidate = new TrainConsist(entity.getUUID());
-        var failure = prepare(entity, anchor, candidate);
-        if (failure != null) return failure;
-        var solved = VehiclePoseSolver.solve(candidate.sampler(), candidate.progress(),
-                VehicleCatalog.find(entity.getModelId()).motionSpec());
-        if (solved.failure() != null) return poseFailure(solved.failure());
-        var pose = solved.pose();
-        failure = areaFailure(entity.boundsAt(pose));
-        if (failure != null) return failure;
-        var position = pose.body().position();
-        if (!allowed.test(BlockPos.containing(position.x(), position.y(), position.z()))) return StopReason.INVALID_POSITION;
-        entity.setRailAnchor(anchor);
-        entity.setRailPose(pose);
-        entity.setOldPosAndRot();
-        if (spawn && !level.addFreshEntity(entity)) {
-            pending.remove(candidate.id());
-            return StopReason.INVALID_POSITION;
+        data();
+        var previous = trains.get(entityTrains.get(entity.getUUID()));
+        if (previous != null && previous.cars().size() > 1) return StopReason.UNCOUPLE_REQUIRED;
+        var train = single(entity, previous == null ? UUID.randomUUID() : previous.id(), anchor,
+                previous == null ? TrainConsist.DEFAULT_SPEED : previous.configuredSpeed());
+        try {
+            prepare(train, List.of(entity));
+            var candidate = calculate(train, List.of(entity), train.progress());
+            var car = candidate.cars().getFirst();
+            reservations.refreshLoaded();
+            check(train, candidate.areas());
+            var p = car.pose().body().position();
+            if (!allowed.test(BlockPos.containing(p.x(), p.y(), p.z()))) return StopReason.INVALID_POSITION;
+            entity.setTrainId(train.id());
+            entity.setRailAnchor(car.anchor());
+            entity.setRailPose(car.pose());
+            entity.setOldPosAndRot();
+            if (spawn && !level.addFreshEntity(entity)) {
+                pending.remove(entity.getUUID());
+                return StopReason.INVALID_POSITION;
+            }
+            put(train);
+            saveCandidate(train, candidate);
+            attached.add(entity.getUUID());
+            restored.add(train.id());
+            pending.remove(entity.getUUID());
+            reservations.acquire(memberIds(train), candidate.areas());
+            reservations.releaseOutside(memberIds(train), candidate.areas());
+            return null;
+        } catch (StateException exception) {
+            return exception.reason();
         }
-        trains.put(candidate.id(), candidate);
-        pending.remove(candidate.id());
-        return null;
     }
 
-    /** Rebuilds a stale route before starting; it never moves the vehicle during validation. */
     public StopReason start(TrainEntity entity) {
         var train = state(entity);
-        var model = VehicleCatalog.find(entity.getModelId());
-        if (model == null) {
-            stop(entity, train, StopReason.MISSING_MODEL);
-            return StopReason.MISSING_MODEL;
+        attached.add(entity.getUUID());
+        if (!isRestored(train)) {
+            var failure = restore(train);
+            if (failure != null) return failure;
         }
-        StopReason failure = null;
-        VehiclePose pose = null;
-        if (train.routeDirty()) failure = prepare(entity, entity.getRailAnchor(), train);
-        if (failure == null) {
-            var solved = VehiclePoseSolver.solve(train.sampler(), train.progress(), model.motionSpec());
-            if (solved.failure() != null) failure = poseFailure(solved.failure());
-            else {
-                pose = solved.pose();
-                failure = areaFailure(currentArea(entity).minmax(entity.boundsAt(pose)));
-            }
+        try {
+            var entities = loadedMembers(train);
+            if (train.routeDirty()) prepare(train, entities);
+            var candidate = calculate(train, entities, train.progress());
+            checkCheckpoint(train, candidate);
+            var areas = swept(currentAreas(entities), candidate.areas());
+            reservations.refreshLoaded();
+            check(train, areas);
+            reservations.acquire(memberIds(train), areas);
+            commit(train, candidate, true);
+            reservations.releaseOutside(memberIds(train), candidate.areas());
+            train.start();
+            return null;
+        } catch (StateException exception) {
+            stop(train, exception.reason());
+            return exception.reason();
         }
-        if (failure != null) {
-            stop(entity, train, failure);
-            return failure;
-        }
-        entity.setRailPose(pose);
-        train.start();
-        return null;
     }
 
-    public void stop(TrainEntity entity) { stop(entity, state(entity), StopReason.STOPPED); }
-
-    private static void stop(TrainEntity entity, TrainConsist train, StopReason reason) {
-        train.stop(reason);
-        // Flush a final odd-tick sample too, so stopping never leaves the client one sample behind.
-        entity.syncRailPose();
+    public void stop(TrainEntity entity) {
+        var train = info(entity);
+        stop(train, isRestored(train) ? StopReason.STOPPED : train.stopReason());
     }
 
     public StopReason setSpeed(TrainEntity entity, double speed) {
@@ -204,45 +581,121 @@ public final class TrainManager {
             stop(entity);
             return null;
         }
-        state(entity).setConfiguredSpeed(speed);
+        var train = state(entity);
+        train.setConfiguredSpeed(speed);
+        savedData.setDirty();
         return start(entity);
     }
 
     public StopReason reverse(TrainEntity entity) {
-        var train = state(entity);
+        var train = info(entity);
         train.setConfiguredSpeed(-train.configuredSpeed());
+        savedData.setDirty();
         return train.running() ? start(entity) : null;
     }
 
-    private StopReason prepare(TrainEntity entity, TrainAnchor anchor, TrainConsist train) {
-        if (anchor == null) return entity.hasInvalidAnchor() ? StopReason.INVALID_ANCHOR : StopReason.UNBOUND;
-        if (VehicleCatalog.find(entity.getModelId()) == null) return StopReason.MISSING_MODEL;
-        TrackGraph tracks;
+    public StopReason dismantleFailure(TrainEntity entity) {
+        data();
+        var train = trains.get(entityTrains.get(entity.getUUID()));
+        return train != null && train.cars().size() > 1 ? StopReason.UNCOUPLE_REQUIRED : null;
+    }
+
+    public StopReason couple(TrainEntity front, TrainEntity rear) {
+        if (front == rear || front.level() != level || rear.level() != level) return StopReason.COUPLING_REJECTED;
         try {
-            tracks = graph();
-        } catch (IllegalStateException exception) {
-            return StopReason.STORAGE_ERROR;
-        }
-        try {
-            double length = tracks.segment(anchor.segmentId()).geometry().getLength();
-            if (anchor.distance() > length) return StopReason.INVALID_ANCHOR;
-            var seed = new TrackConnection(anchor.segmentId(), anchor.fromStart());
-            var route = TrackRoute.trace(tracks, seed);
-            var sampler = new TrackPathSampler(route);
-            int index = route.connections().indexOf(seed);
-            double progress = sampler.distance(new TrackCursor(index,
-                    anchor.fromStart() ? anchor.distance() : length - anchor.distance()));
-            var nodes = new HashSet<UUID>();
-            for (var connection : route.connections()) {
-                var segment = tracks.segment(connection.segmentId());
-                nodes.add(segment.startNodeId());
-                nodes.add(segment.endNodeId());
+            var first = registered(front);
+            var second = registered(rear);
+            if (first == second || first.cars().size() != 1 || second.cars().size() != 1) return StopReason.UNCOUPLE_REQUIRED;
+            requireReady(first);
+            requireReady(second);
+            var firstSpec = VehicleCatalog.find(front.getModelId()).motionSpec();
+            var rearSpec = VehicleCatalog.find(rear.getModelId()).motionSpec();
+            double gap = Math.max(firstSpec.defaultCouplerGap(), rearSpec.defaultCouplerGap());
+            double offset = firstSpec.rearCouplerOffset() - rearSpec.frontCouplerOffset() - gap;
+            if (!Double.isFinite(offset)) return StopReason.COUPLING_REJECTED;
+            var members = List.of(first.cars().getFirst(),
+                    new TrainCarState(rear.getUUID(), rear.getModelId(), offset, second.anchor()));
+            var combined = new TrainConsist(first.id(), members, first.configuredSpeed());
+            prepare(combined, List.of(front, rear));
+            double from;
+            try {
+                from = TrainMotion.distance(combined.route(), combined.sampler(), second.anchor());
+            } catch (IllegalArgumentException exception) {
+                return StopReason.COUPLING_REJECTED;
             }
-            train.setRoute(route, sampler, progress, nodes);
+            var candidate = calculate(combined, List.of(front, rear), combined.progress());
+            double target = TrainMotion.carProgress(combined.progress(), offset,
+                    VehiclePoseSolver.range(combined.route().getLength(), rearSpec));
+            if (Math.abs(target - from) > 0.5) return StopReason.COUPLING_REJECTED;
+            var a = coupler(front, firstSpec.rearCouplerOffset());
+            var b = coupler(rear, rearSpec.frontCouplerOffset());
+            double couplerDistance = Math.hypot(Math.hypot(a.x() - b.x(), a.z() - b.z()), a.y() - b.y());
+            if (!Double.isFinite(couplerDistance) || couplerDistance > gap + 1) {
+                return StopReason.COUPLING_REJECTED;
+            }
+            var actual = currentAreas(List.of(front, rear));
+            // Include old saved poses even when the along-route adjustment is zero.
+            var alignment = swept(actual, candidate.areas());
+            if (reservations.touchesTurnout(alignment)) return StopReason.TURNOUT_OPERATION_BLOCKED;
+            check(combined, alignment);
+            var previous = actual.get(1);
+            double accepted = from;
+            var sampleOffsets = TrainMotion.sampleOffsets(rearSpec);
+            while (accepted != target) {
+                double next = TrainMotion.nextStep(combined.route(), combined.sampler(), sampleOffsets, accepted, target);
+                var car = solveCar(combined, members.get(1), rear, next);
+                var sweep = previous.minmax(car.bounds());
+                if (reservations.touchesTurnout(List.of(sweep))) return StopReason.TURNOUT_OPERATION_BLOCKED;
+                check(combined, List.of(sweep));
+                previous = car.bounds();
+                accepted = next;
+            }
+            remove(second);
+            put(combined);
+            saveCandidate(combined, candidate);
+            front.setRailAnchor(candidate.cars().getFirst().anchor());
+            rear.setTrainId(combined.id());
+            rear.setRailAnchor(candidate.cars().get(1).anchor());
+            rear.advanceRailPose(candidate.cars().get(1).pose());
+            rear.setOldPosAndRot();
+            restored.add(combined.id());
+            sync(combined);
             return null;
-        } catch (IllegalArgumentException exception) {
-            return StopReason.INVALID_ANCHOR;
+        } catch (StateException exception) {
+            return exception.reason();
         }
+    }
+
+    public StopReason uncouple(TrainEntity member) {
+        try {
+            var train = registered(member);
+            if (train.cars().size() != 2) return StopReason.NOT_COUPLED;
+            var entities = requireReady(train);
+            if (reservations.touchesTurnout(currentAreas(entities))) return StopReason.TURNOUT_OPERATION_BLOCKED;
+            var first = new TrainConsist(train.id(), List.of(train.cars().getFirst().asSingle()), train.configuredSpeed());
+            var second = new TrainConsist(UUID.randomUUID(), List.of(train.cars().get(1).asSingle()), train.configuredSpeed());
+            first.setRoute(train.route(), train.sampler(), train.progress(), train.routeNodes());
+            double rearProgress = TrainMotion.carProgress(train.progress(), train.cars().get(1).offset(),
+                    VehiclePoseSolver.range(train.route().getLength(), VehicleCatalog.find(train.cars().get(1).modelId()).motionSpec()));
+            second.setRoute(train.route(), train.sampler(), rearProgress, train.routeNodes());
+            remove(train);
+            put(first);
+            put(second);
+            entities.get(0).setTrainId(first.id());
+            entities.get(1).setTrainId(second.id());
+            restored.add(first.id());
+            restored.add(second.id());
+            sync(first);
+            sync(second);
+            return null;
+        } catch (StateException exception) {
+            return exception.reason();
+        }
+    }
+
+    private static TrackVector coupler(TrainEntity entity, double offset) {
+        var local = VehiclePose.Body.rotation(entity.getYRot(), entity.getXRot()).transform(new Vector3f(0, 0, (float) offset));
+        return new TrackVector(entity.getX() + local.x, entity.getY() + local.y, entity.getZ() + local.z);
     }
 
     private void trackChanged(TrackSegmentChange change) {
@@ -250,104 +703,124 @@ public final class TrainManager {
         for (var train : trains.values()) {
             if (train.usesNode(segment.startNodeId()) || train.usesNode(segment.endNodeId())) {
                 train.invalidate();
-                if (level.getEntity(train.id()) instanceof TrainEntity entity) entity.syncRailPose();
+                sync(train);
             }
         }
     }
 
+    private void assemblyChanged(TrackAssemblyInstance assembly) {
+        Long previous = assemblyRevisions.put(assembly.id(), assembly.revision());
+        if (previous == null || previous == assembly.revision()) return;
+        for (var train : List.copyOf(trains.values())) {
+            if (assembly.ports().stream().noneMatch(train::usesNode) || !isRestored(train)) continue;
+            boolean running = train.running();
+            train.invalidate();
+            try {
+                var entities = loadedMembers(train);
+                var candidate = new TrainConsist(train.id(), train.cars(), train.configuredSpeed());
+                prepare(candidate, entities);
+                checkCheckpoint(candidate, calculate(candidate, entities, candidate.progress()));
+                // Rebase the whole consist without changing any proxy's current position or pose.
+                train.setRoute(candidate.route(), candidate.sampler(), candidate.progress(), candidate.routeNodes());
+                if (running) train.start();
+                else train.stop(StopReason.STOPPED);
+            } catch (StateException exception) {
+                var failure = exception.reason() == StopReason.INVALID_ANCHOR ? StopReason.TURNOUT_ROUTE_UNAVAILABLE : exception.reason();
+                stop(train, failure);
+                LOGGER.warn("Consist {} stopped after turnout {} changed: {}", train.id(), assembly.id(), failure);
+            }
+        }
+    }
+
+    public void refreshTurnoutOccupancy() {
+        data();
+        graph();
+        reservations.refreshLoaded();
+    }
+
     private void tick() {
+        if (graph != null) reservations.refreshLoaded();
         for (UUID id : Set.copyOf(pending)) {
             pending.remove(id);
-            if (!trains.containsKey(id) && level.getEntity(id) instanceof TrainEntity entity) {
-                var train = info(entity);
-                if (train.stopReason() != StopReason.STOPPED) {
-                    LOGGER.warn("Vehicle {} restored stopped: {}", id, train.stopReason());
+            if (level.getEntity(id) instanceof TrainEntity entity) {
+                try {
+                    var train = info(entity);
+                    if (train.stopReason() != StopReason.STOPPED && train.stopReason() != StopReason.INCOMPLETE_CONSIST) {
+                        LOGGER.warn("Consist {} restored stopped: {}", train.id(), train.stopReason());
+                    }
+                } catch (StateException exception) {
+                    LOGGER.warn("Vehicle {} could not be registered: {}", id, exception.reason());
                 }
             }
         }
         if (!level.tickRateManager().runsNormally()) return;
         for (var train : List.copyOf(trains.values())) {
-            if (!(level.getEntity(train.id()) instanceof TrainEntity entity) || entity.isRemoved()) {
-                trains.remove(train.id());
-            } else if (train.running()) {
-                advance(entity, train);
-            }
+            if (train.running()) advance(train);
         }
     }
 
-    private void advance(TrainEntity entity, TrainConsist train) {
-        var model = VehicleCatalog.find(entity.getModelId());
-        if (model == null) {
-            stop(entity, train, StopReason.MISSING_MODEL);
+    private void advance(TrainConsist train) {
+        Candidate accepted = null;
+        StopReason failure = null;
+        List<AABB> previous;
+        List<TrainEntity> entities;
+        double target;
+        var owners = memberIds(train);
+        try {
+            entities = loadedMembers(train);
+            previous = currentAreas(entities);
+            check(train, previous);
+            var range = TrainMotion.range(train);
+            if (!range.contains(train.progress())) throw new StateException(StopReason.INSUFFICIENT_ROUTE);
+            target = Math.clamp(train.progress() + train.actualSpeed() / 20, range.min(), range.max());
+        } catch (StateException exception) {
+            stop(train, exception.reason());
             return;
         }
-        AABB previous = currentArea(entity);
-        var failure = areaFailure(previous);
-        if (failure != null) {
-            stop(entity, train, failure);
-            return;
-        }
-        double from = train.progress();
-        var range = VehiclePoseSolver.range(train.route().getLength(), model.motionSpec());
-        if (!range.contains(from)) {
-            stop(entity, train, StopReason.INSUFFICIENT_ROUTE);
-            return;
-        }
-        double requested = from + train.actualSpeed() / 20;
-        double target = Math.clamp(requested, range.min(), range.max());
-        boolean forward = train.actualSpeed() > 0;
-        double accepted = from;
-        VehiclePose acceptedPose = null;
-        while (accepted != target) {
-            var cursor = train.sampler().locate(accepted);
-            int index = cursor.segmentIndex();
-            if (!forward && cursor.distance() == 0 && index > 0) index--;
-            double boundary = train.sampler().distance(new TrackCursor(index,
-                    forward ? train.route().segmentLength(index) : 0));
-            double next = forward ? Math.min(target, Math.min(accepted + SAMPLE_STEP, boundary))
-                    : Math.max(target, Math.max(accepted - SAMPLE_STEP, boundary));
-            var solved = VehiclePoseSolver.solve(train.sampler(), next, model.motionSpec());
-            if (solved.failure() != null) {
-                failure = poseFailure(solved.failure());
+        double progress = train.progress();
+        var sampleOffsets = TrainMotion.sampleOffsets(train);
+        while (progress != target) {
+            try {
+                double next = TrainMotion.nextStep(train.route(), train.sampler(), sampleOffsets, progress, target);
+                var candidate = calculate(train, entities, next);
+                var areas = swept(previous, candidate.areas());
+                check(train, areas);
+                reservations.acquire(owners, areas);
+                accepted = candidate;
+                progress = next;
+                previous = candidate.areas();
+            } catch (StateException exception) {
+                failure = exception.reason();
                 break;
             }
-            var pose = solved.pose();
-            var bounds = entity.boundsAt(pose);
-            failure = areaFailure(previous.minmax(bounds));
-            if (failure != null) break;
-            accepted = next;
-            previous = bounds;
-            acceptedPose = pose;
         }
-        if (acceptedPose != null) {
-            var cursor = train.sampler().locate(accepted);
-            var connection = train.route().connections().get(cursor.segmentIndex());
-            double local = connection.fromStart() ? cursor.distance()
-                    : train.route().segmentLength(cursor.segmentIndex()) - cursor.distance();
-            entity.setRailAnchor(new TrainAnchor(connection.segmentId(), local, connection.fromStart()));
-            train.setProgress(accepted);
-            entity.advanceRailPose(acceptedPose);
-        }
-        if (failure != null) stop(entity, train, failure);
-        else if (accepted == range.min() || accepted == range.max()) stop(entity, train, StopReason.END_OF_ROUTE);
+        if (accepted != null) commit(train, accepted, level.getGameTime() % 2 == 0);
+        reservations.releaseOutside(owners, previous);
+        var range = TrainMotion.range(train);
+        if (failure != null) stop(train, failure);
+        else if (progress == range.min() || progress == range.max()) stop(train, StopReason.END_OF_ROUTE);
     }
 
-    private static AABB currentArea(TrainEntity entity) {
-        // The authored origin may lie outside the mesh bounds, but its chunk owns the entity proxy.
-        return entity.getBoundingBox().minmax(new AABB(entity.getX(), entity.getY(), entity.getZ(),
-                entity.getX(), entity.getY(), entity.getZ()));
+    private static AABB protectedArea(TrainEntity entity, TrainConsist train, double progress, VehicleMotionSpec spec, VehiclePose pose) {
+        AABB bounds = entity.boundsAt(pose);
+        var range = VehiclePoseSolver.range(train.route().getLength(), spec);
+        double front = progress == range.max() && spec.frontBogieOffset() >= 0 ? train.route().getLength() : progress + spec.frontBogieOffset();
+        double rear = progress == range.min() && spec.rearBogieOffset() <= 0 ? 0 : progress + spec.rearBogieOffset();
+        for (double s : new double[] {front, rear}) {
+            var p = train.sampler().sample(s).position();
+            bounds = bounds.minmax(new AABB(p.x(), p.y(), p.z(), p.x(), p.y(), p.z()));
+        }
+        return bounds.inflate(0.01);
     }
 
-    /** Only non-loading visibility/status queries; bounds include the entire authored car. */
+    /** Only non-loading status queries; include the complete body, bogies and entity-owning origin. */
     private StopReason areaFailure(AABB bounds) {
         var border = level.getWorldBorder();
         if (bounds.minY < level.getMinBuildHeight() || bounds.maxY > level.getMaxBuildHeight()
                 || bounds.minX < border.getMinX() || bounds.maxX > border.getMaxX()
-                || bounds.minZ < border.getMinZ() || bounds.maxZ > border.getMaxZ()) {
-            return StopReason.INVALID_POSITION;
-        }
-        int minX = (int)Math.floor(bounds.minX / 16), maxX = (int)Math.floor(Math.nextDown(bounds.maxX) / 16);
-        int minZ = (int)Math.floor(bounds.minZ / 16), maxZ = (int)Math.floor(Math.nextDown(bounds.maxZ) / 16);
+                || bounds.minZ < border.getMinZ() || bounds.maxZ > border.getMaxZ()) return StopReason.INVALID_POSITION;
+        int minX = (int) Math.floor(bounds.minX / 16), maxX = (int) Math.floor(Math.nextDown(bounds.maxX) / 16);
+        int minZ = (int) Math.floor(bounds.minZ / 16), maxZ = (int) Math.floor(Math.nextDown(bounds.maxZ) / 16);
         for (int x = minX; x <= maxX; x++) {
             for (int z = minZ; z <= maxZ; z++) {
                 if (!level.getChunkSource().hasChunk(x, z)

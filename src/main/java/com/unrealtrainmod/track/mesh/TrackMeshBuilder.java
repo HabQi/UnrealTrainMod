@@ -8,6 +8,7 @@ import com.unrealtrainmod.track.geometry.TrackGeometry;
 import com.unrealtrainmod.track.geometry.TrackPose;
 import com.unrealtrainmod.track.geometry.TrackVector;
 import java.util.Arrays;
+import com.unrealtrainmod.track.assembly.TrackAssemblyInstance;
 
 /** Chunk-owned primitives use global distance grids, so adjacent chunks never duplicate a face. */
 public final class TrackMeshBuilder {
@@ -45,6 +46,80 @@ public final class TrackMeshBuilder {
             builder.ties(0, ties);
         }
         return builder.mesh.finish();
+    }
+
+    /** Shared sleepers/stock rails and a separately cached two-state tongue region. */
+    public static TrackMeshData buildTurnout(TrackAssemblyInstance assembly, int chunkX, int chunkZ, boolean tongues) {
+        var geometry = assembly.geometry();
+        var direct = geometry.straight();
+        var branch = geometry.diverging();
+        double length = direct.getLength();
+        var mesh = new Builder((double)chunkX * 16, (double)chunkZ * 16);
+        int count = (int)Math.ceil(length / RAIL_STEP);
+        double offset = (assembly.gauge() + RAIL_WIDTH) / 2;
+        for (int i = 0; i < count; i++) {
+            double from = (double)i / count, to = (double)(i + 1) / count, middle = (from + to) / 2;
+            boolean inTongue = middle < 0.35;
+            if (tongues && !inTongue) continue;
+            TrackPose[] a = {direct.sample(length * from), branch.sample(branch.getLength() * from)};
+            TrackPose[] b = {direct.sample(length * to), branch.sample(branch.getLength() * to)};
+            TrackPose[] mid = {direct.sample(length * middle), branch.sample(branch.getLength() * middle)};
+            TrackVector[] centers = new TrackVector[4];
+            for (int rail = 0; rail < 4; rail++) centers[rail] = point(mid[rail / 2], (rail % 2 == 0 ? -1 : 1) * offset, 0, 0);
+            int low = 0, high = 0;
+            for (int rail = 1; rail < 4; rail++) {
+                if (lateralDistance(centers[rail], mid[0]) < lateralDistance(centers[low], mid[0])) low = rail;
+                if (lateralDistance(centers[rail], mid[0]) > lateralDistance(centers[high], mid[0])) high = rail;
+            }
+            for (int rail = 0; rail < 4; rail++) {
+                if (tongues) {
+                    int active = assembly.state() == TrackAssemblyInstance.State.STRAIGHT ? 0 : 1;
+                    if (rail / 2 != active || rail == low || rail == high) continue;
+                    if (horizontalDistanceSquared(centers[rail], centers[low]) < RAIL_WIDTH * RAIL_WIDTH
+                            || horizontalDistanceSquared(centers[rail], centers[high]) < RAIL_WIDTH * RAIL_WIDTH) continue;
+                } else if (inTongue && rail != low && rail != high) continue;
+                // Coincident toe rails belong to the shared structure only once.
+                boolean duplicate = false;
+                for (int earlier = 0; earlier < rail; earlier++) {
+                    if (!tongues && inTongue && earlier != low && earlier != high) continue;
+                    if (tongues && earlier / 2 != rail / 2) continue;
+                    double dx = centers[rail].x() - centers[earlier].x(), dz = centers[rail].z() - centers[earlier].z();
+                    if (dx * dx + dz * dz < RAIL_WIDTH * RAIL_WIDTH) duplicate = true;
+                }
+                if (duplicate || !ownsChunk(centers[rail], chunkX, chunkZ)) continue;
+                double lateral = (rail % 2 == 0 ? -1 : 1) * offset;
+                double half = tongues ? RAIL_WIDTH * (0.15 + 0.35 * middle / 0.35) : RAIL_WIDTH / 2;
+                mesh.box(section(a[rail / 2], lateral, half, -RAIL_HEIGHT, 0, 0),
+                        section(b[rail / 2], lateral, half, -RAIL_HEIGHT, 0, 0), RAIL_COLOR, i == 0, i + 1 == count);
+            }
+        }
+        if (!tongues) {
+            for (double s = FIRST_TIE; s < length; s += TIE_SPACING) {
+                var a = direct.sample(s);
+                var b = branch.sample(branch.getLength() * s / length);
+                double shift = lateralDistance(b.position(), a);
+                var center = point(a, shift / 2, 0, 0);
+                if (!ownsChunk(center, chunkX, chunkZ)) continue;
+                double half = (assembly.gauge() + 0.9 + Math.abs(shift)) / 2;
+                mesh.box(section(a, shift / 2, half, -RAIL_HEIGHT - TIE_HEIGHT, -RAIL_HEIGHT, -TIE_WIDTH / 2),
+                        section(a, shift / 2, half, -RAIL_HEIGHT - TIE_HEIGHT, -RAIL_HEIGHT, TIE_WIDTH / 2), TIE_COLOR, true, true);
+            }
+        }
+        return mesh.finish();
+    }
+
+    private static double lateralDistance(TrackVector point, TrackPose frame) {
+        return (point.x() - frame.position().x()) * frame.lateral().x()
+                + (point.z() - frame.position().z()) * frame.lateral().z();
+    }
+
+    private static double horizontalDistanceSquared(TrackVector a, TrackVector b) {
+        double x = a.x() - b.x(), z = a.z() - b.z();
+        return x * x + z * z;
+    }
+
+    private static boolean ownsChunk(TrackVector point, int chunkX, int chunkZ) {
+        return Math.floor(point.x() / 16) == chunkX && Math.floor(point.z() / 16) == chunkZ;
     }
 
     private void rails(long first, long end) {

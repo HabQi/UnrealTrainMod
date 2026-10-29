@@ -19,6 +19,8 @@ import com.unrealtrainmod.client.track.ClientTrackCache;
 import com.unrealtrainmod.client.track.ClientRailModelManager;
 import com.unrealtrainmod.client.track.ClientTrackConstruction;
 import com.unrealtrainmod.client.track.TrackConstructionRenderer;
+import com.unrealtrainmod.client.track.ClientTurnoutConstruction;
+import com.unrealtrainmod.client.track.TurnoutConstructionRenderer;
 import com.unrealtrainmod.client.track.TrackWorldRenderer;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.GameShuttingDownEvent;
@@ -56,6 +58,7 @@ public class UnrealTrainModClient {
         event.registerReloadListener(ClientButtonTextureManager.INSTANCE);
         event.registerReloadListener(ClientThumbnailManager.INSTANCE);
         event.registerReloadListener(ClientTrackCache.INSTANCE);
+        event.registerReloadListener(ClientTurnoutConstruction.INSTANCE);
     }
 
     public UnrealTrainModClient(ModContainer container) {
@@ -82,6 +85,12 @@ public class UnrealTrainModClient {
         NeoForge.EVENT_BUS.addListener(ClientTrackConstruction.INSTANCE::onClone);
         NeoForge.EVENT_BUS.addListener(ClientTrackConstruction.INSTANCE::onLogout);
         NeoForge.EVENT_BUS.addListener(TrackConstructionRenderer::render);
+        NeoForge.EVENT_BUS.addListener(ClientTurnoutConstruction.INSTANCE::onSync);
+        NeoForge.EVENT_BUS.addListener(ClientTurnoutConstruction.INSTANCE::onTick);
+        NeoForge.EVENT_BUS.addListener(ClientTurnoutConstruction.INSTANCE::onUnload);
+        NeoForge.EVENT_BUS.addListener(ClientTurnoutConstruction.INSTANCE::onLogout);
+        NeoForge.EVENT_BUS.addListener(ClientTurnoutConstruction.INSTANCE::onClone);
+        NeoForge.EVENT_BUS.addListener(TurnoutConstructionRenderer::render);
     }
 
     private static void onGameShuttingDown(GameShuttingDownEvent event) {
@@ -92,5 +101,6 @@ public class UnrealTrainModClient {
         ClientRailModelManager.INSTANCE.close();
         ClientButtonTextureManager.INSTANCE.close();
         ClientTrackConstruction.INSTANCE.clear();
+        ClientTurnoutConstruction.INSTANCE.clear();
     }
 }

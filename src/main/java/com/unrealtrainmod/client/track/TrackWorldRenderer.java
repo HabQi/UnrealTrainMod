@@ -30,7 +30,7 @@ public final class TrackWorldRenderer {
         if (event.getStage() != RenderLevelStageEvent.Stage.AFTER_SOLID_BLOCKS) return;
         ClientTrackCache cache = ClientTrackCache.INSTANCE;
         var level = Minecraft.getInstance().level;
-        if (level == null || cache.world() != level || cache.entries.isEmpty()) return;
+        if (level == null || cache.world() != level || (cache.entries.isEmpty() && cache.assemblies.isEmpty())) return;
         RenderSystem.assertOnRenderThread();
         var previousShader = RenderSystem.getShader();
         float[] previousColor = RenderSystem.getShaderColor().clone();
@@ -60,6 +60,34 @@ public final class TrackWorldRenderer {
                     modelView.set(event.getModelViewMatrix()).translate((float)(origin.x() - camera.x),
                             (float)(origin.y() - camera.y), (float)(origin.z() - camera.z));
                     mesh.draw(modelView, event.getProjectionMatrix());
+                }
+            }
+            for (var entry : cache.assemblies.values()) {
+                if (!event.getFrustum().isVisible(entry.data.bounds())) continue;
+                for (long chunk : entry.chunks) {
+                    int x = ChunkPos.getX(chunk), z = ChunkPos.getZ(chunk);
+                    if (!level.hasChunk(x, z)) continue;
+                    for (int pass = 0; pass < 2; pass++) {
+                        boolean tongue = pass == 1;
+                        var meshes = tongue ? entry.tongues : entry.meshes;
+                        var mesh = meshes.get(chunk);
+                        if (mesh == null) {
+                            if (builds == 0) continue;
+                            try { mesh = new TrackGpuMesh(TrackMeshBuilder.buildTurnout(entry.data, x, z, tongue)); }
+                            catch (IllegalArgumentException exception) {
+                                LOGGER.warn("Cannot build turnout {} in chunk {}, {}: {}", entry.data.id(), x, z, exception.getMessage());
+                                mesh = new TrackGpuMesh(TrackMeshData.EMPTY);
+                            }
+                            meshes.put(chunk, mesh); builds--;
+                        }
+                        if (mesh.isEmpty() || !event.getFrustum().isVisible(mesh.bounds())) continue;
+                        uploads -= mesh.upload(level, uploads);
+                        if (!mesh.isUploaded()) continue;
+                        var origin = mesh.origin();
+                        modelView.set(event.getModelViewMatrix()).translate((float)(origin.x() - camera.x),
+                                (float)(origin.y() - camera.y), (float)(origin.z() - camera.z));
+                        mesh.draw(modelView, event.getProjectionMatrix());
+                    }
                 }
             }
         } finally {

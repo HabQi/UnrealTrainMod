@@ -54,7 +54,7 @@ public final class ClientThumbnailManager extends SimplePreparableReloadListener
     public static final ClientThumbnailManager INSTANCE = new ClientThumbnailManager();
     private static final Logger LOGGER = LoggerFactory.getLogger(ClientThumbnailManager.class);
     private static final float VEHICLE_GUI_PIXELS_PER_BLOCK = 8;
-    private static final float RAIL_GUI_PIXELS_PER_BLOCK = 24;
+    private static final float RAIL_GUI_PIXELS_PER_BLOCK = 27.6f;
     // Bump when framing, lighting, import appearance or alpha processing changes.
     private static final String RECIPE = "6:" + PreviewRenderer.THUMBNAIL_WIDTH + "x" + PreviewRenderer.THUMBNAIL_HEIGHT
             + ":capture-ppb=" + PreviewRenderer.THUMBNAIL_PIXELS_PER_BLOCK

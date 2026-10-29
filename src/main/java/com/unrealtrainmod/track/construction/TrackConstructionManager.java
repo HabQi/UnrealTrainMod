@@ -75,6 +75,7 @@ public final class TrackConstructionManager {
         if (event.getHand() == InteractionHand.MAIN_HAND
                 && (event.getItemStack().is(UnrealTrainMod.TRACK_BUILDER.get())
                 || event.getItemStack().is(UnrealTrainMod.RAIL_PLACER.get())
+                || event.getItemStack().is(UnrealTrainMod.TURNOUT_BUILDER.get())
                 || event.getItemStack().is(UnrealTrainMod.TRACK_WRENCH.get()))) {
             event.setUseBlock(TriState.FALSE);
         }
@@ -189,6 +190,15 @@ public final class TrackConstructionManager {
                 session.revision, session.editorId, start, curve == null, initial));
     }
 
+    public static void editOrSwitch(ServerPlayer player, UseOnContext context) {
+        Session session = SESSIONS.get(player.getUUID());
+        if (player.isShiftKeyDown() || context == null || (session != null && session.matches(player))) {
+            edit(player);
+        } else {
+            TurnoutConstructionManager.switchAt(player, context);
+        }
+    }
+
     private static double hitDistance(TrackPlacementEndpoint endpoint, Vec3 eye, Vec3 end) {
         var p = endpoint.position();
         AABB box = new AABB(p.x() - NODE_HIT_RADIUS, p.y() - NODE_HIT_RADIUS, p.z() - NODE_HIT_RADIUS,
@@ -197,7 +207,7 @@ public final class TrackConstructionManager {
         return box.clip(eye, end).map(eye::distanceToSqr).orElse(Double.POSITIVE_INFINITY);
     }
 
-    private static boolean canEditPoint(ServerPlayer player, TrackPlacementEndpoint endpoint) {
+    static boolean canEditPoint(ServerPlayer player, TrackPlacementEndpoint endpoint) {
         TrackVector position = endpoint.position();
         if (!validPosition(player.serverLevel(), position)) return false;
         Vec3 eye = player.getEyePosition(), point = new Vec3(position.x(), position.y(), position.z());
@@ -314,7 +324,7 @@ public final class TrackConstructionManager {
         }
     }
 
-    private static TrackPlacementEndpoint snap(TrackGraph graph, TrackVector point) {
+    static TrackPlacementEndpoint snap(TrackGraph graph, TrackVector point) {
         TrackNode nearest = null;
         double best = SNAP_DISTANCE_SQUARED;
         for (TrackNode node : graph.nodes()) {
@@ -333,7 +343,7 @@ public final class TrackConstructionManager {
         return x * x + y * y + z * z;
     }
 
-    private static boolean validPosition(ServerLevel level, TrackVector point) {
+    static boolean validPosition(ServerLevel level, TrackVector point) {
         if (!Double.isFinite(point.x()) || !Double.isFinite(point.y()) || !Double.isFinite(point.z())
                 || point.y() < level.getMinBuildHeight() || point.y() >= level.getMaxBuildHeight()
                 || !level.getWorldBorder().isWithinBounds(point.x(), point.z())) return false;

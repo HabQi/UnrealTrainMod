@@ -25,7 +25,7 @@ public final class TrackWrenchItem extends Item {
     @Override
     public InteractionResult useOn(UseOnContext context) {
         if (context.getHand() != InteractionHand.MAIN_HAND) return InteractionResult.FAIL;
-        if (context.getPlayer() instanceof ServerPlayer player) TrackConstructionManager.edit(player);
+        if (context.getPlayer() instanceof ServerPlayer player) TrackConstructionManager.editOrSwitch(player, context);
         return InteractionResult.sidedSuccess(context.getLevel().isClientSide);
     }
 
@@ -38,7 +38,7 @@ public final class TrackWrenchItem extends Item {
 
     @Override
     public void appendHoverText(ItemStack stack, TooltipContext context, List<Component> lines, TooltipFlag flags) {
-        for (String key : List.of("edit", "preview", "cancel", "permission")) {
+        for (String key : List.of("edit", "preview", "turnout", "cancel", "permission")) {
             lines.add(Component.translatable("item.unrealtrainmod.track_wrench." + key).withStyle(ChatFormatting.GRAY));
         }
     }

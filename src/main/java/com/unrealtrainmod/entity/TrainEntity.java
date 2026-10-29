@@ -8,16 +8,21 @@ import com.unrealtrainmod.UnrealTrainMod;
 import com.unrealtrainmod.model.ModelBounds;
 import com.unrealtrainmod.registry.ModDataComponents;
 import com.unrealtrainmod.train.TrainAnchor;
+import com.unrealtrainmod.train.TrainManager;
 import com.unrealtrainmod.vehicle.VehicleCatalog;
 import com.unrealtrainmod.vehicle.VehiclePose;
 import com.unrealtrainmod.track.geometry.TrackVector;
+import java.util.UUID;
+import java.util.Locale;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.Tag;
+import net.minecraft.network.chat.Component;
 import net.minecraft.network.protocol.game.ClientboundAddEntityPacket;
 import net.minecraft.network.syncher.EntityDataAccessor;
 import net.minecraft.network.syncher.EntityDataSerializers;
 import net.minecraft.network.syncher.SynchedEntityData;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.util.Mth;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
@@ -40,6 +45,8 @@ public final class TrainEntity extends Entity {
     private static final EntityDataAccessor<CompoundTag> RAIL_POSE =
             SynchedEntityData.defineId(TrainEntity.class, EntityDataSerializers.COMPOUND_TAG);
     private TrainAnchor railAnchor;
+    private UUID trainId;
+    private Tag invalidTrainId;
     private boolean invalidAnchor;
     private int lerpSteps;
     private double targetX, targetY, targetZ;
@@ -68,6 +75,14 @@ public final class TrainEntity extends Entity {
     }
 
     public TrainAnchor getRailAnchor() { return railAnchor; }
+    public UUID getTrainId() { return trainId; }
+    public boolean hasInvalidTrainId() { return invalidTrainId != null; }
+
+    public void setTrainId(UUID id) {
+        trainId = id;
+        invalidTrainId = null;
+    }
+    public VehiclePose getRailPose() { return railPose; }
     public boolean hasInvalidAnchor() { return invalidAnchor; }
 
     public void setRailAnchor(TrainAnchor anchor) {
@@ -88,10 +103,9 @@ public final class TrainEntity extends Entity {
         syncRailPose();
     }
 
-    /** Dirty entity data bypasses the vanilla tracking interval, so moving snapshots are throttled here. */
+    /** Apply a committed pose; the consist manager publishes all members on the same server tick. */
     public void advanceRailPose(VehiclePose pose) {
         applyPose(pose);
-        if (tickCount % POSE_INTERVAL == 0) syncRailPose();
     }
 
     public void syncRailPose() {
@@ -202,6 +216,15 @@ public final class TrainEntity extends Entity {
         entityData.set(RAIL_POSE, new CompoundTag());
         railAnchor = null;
         invalidAnchor = false;
+        trainId = null;
+        invalidTrainId = null;
+        if (tag.contains("TrainId")) {
+            if (tag.hasUUID("TrainId")) trainId = tag.getUUID("TrainId");
+            else {
+                invalidTrainId = tag.get("TrainId").copy();
+                LOGGER.warn("Invalid train ID for vehicle {}", getUUID());
+            }
+        }
         if (tag.contains("RailAnchor")) {
             try {
                 if (!tag.contains("RailAnchor", Tag.TAG_COMPOUND)) {
@@ -231,8 +254,24 @@ public final class TrainEntity extends Entity {
     @Override
     protected void addAdditionalSaveData(CompoundTag tag) {
         tag.putString("ModelId", entityData.get(MODEL_ID));
+        if (trainId != null) tag.putUUID("TrainId", trainId);
+        else if (invalidTrainId != null) tag.put("TrainId", invalidTrainId.copy());
         if (railAnchor != null) tag.put("RailAnchor", railAnchor.save());
         if (railPose != null) tag.put("BogiePose", railPose.saveBogies());
+    }
+
+    /** A dimension transfer copies NBT before removing the source entity. Do not copy its rail binding. */
+    @Override
+    public void restoreFrom(Entity source) {
+        super.restoreFrom(source);
+        if (source.level().dimension() != level().dimension()) {
+            setTrainId(null);
+            setRailAnchor(null);
+            railPose = previousRailPose = targetRailPose = null;
+            lerpSteps = 0;
+            entityData.set(RAIL_POSE, new CompoundTag());
+            setBoundingBox(makeBoundingBox());
+        }
     }
 
     @Override
@@ -278,8 +317,7 @@ public final class TrainEntity extends Entity {
     @Override
     public InteractionResult interact(Player player, InteractionHand hand) {
         if (player.isShiftKeyDown() && player.getItemInHand(hand).is(UnrealTrainMod.VEHICLE.get()) && player.mayBuild()) {
-            dismantle(player);
-            return InteractionResult.sidedSuccess(level().isClientSide);
+            return dismantle(player) ? InteractionResult.sidedSuccess(level().isClientSide) : InteractionResult.FAIL;
         }
         return InteractionResult.PASS;
     }
@@ -287,14 +325,26 @@ public final class TrainEntity extends Entity {
     @Override
     public boolean hurt(DamageSource source, float amount) {
         if (source.getEntity() instanceof Player player && player.mayBuild()) {
-            dismantle(player);
-            return true;
+            return dismantle(player);
         }
         return false;
     }
 
-    private void dismantle(Player player) {
-        if (level().isClientSide || isRemoved()) return;
+    private boolean dismantle(Player player) {
+        if (level().isClientSide) return true;
+        if (isRemoved()) return false;
+        try {
+            var failure = TrainManager.get((ServerLevel) level()).dismantleFailure(this);
+            if (failure != null) {
+                player.displayClientMessage(Component.translatable("commands.unrealtrainmod.train.state."
+                        + failure.name().toLowerCase(Locale.ROOT)), true);
+                return false;
+            }
+        } catch (TrainManager.StateException exception) {
+            player.displayClientMessage(Component.translatable("commands.unrealtrainmod.train.state."
+                    + exception.reason().name().toLowerCase(Locale.ROOT)), true);
+            return false;
+        }
         if (!player.getAbilities().instabuild) {
             var stack = new ItemStack(UnrealTrainMod.VEHICLE.get());
             var modelId = getModelId();
@@ -302,5 +352,6 @@ public final class TrainEntity extends Entity {
             spawnAtLocation(stack);
         }
         discard();
+        return true;
     }
 }

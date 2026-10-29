@@ -7,6 +7,7 @@ package com.unrealtrainmod.track.path;
 import com.unrealtrainmod.track.TrackConnection;
 import com.unrealtrainmod.track.TrackGraph;
 import com.unrealtrainmod.track.geometry.TrackGeometry;
+import com.unrealtrainmod.track.assembly.TrackTransitionResolver;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -46,9 +47,13 @@ public final class TrackRoute {
         for (int i = 0; i < steps.size(); i++) {
             var connection = steps.get(i);
             var segment = graph.segment(connection.segmentId());
+            if (!TrackTransitionResolver.active(graph, segment.id())) throw new IllegalArgumentException("Turnout path is closed");
             UUID entrance = connection.fromStart() ? segment.startNodeId() : segment.endNodeId();
             if (previousExit != null && !previousExit.equals(entrance)) {
                 throw new IllegalArgumentException("Route segments " + (i - 1) + " and " + i + " do not share an exit/entrance node");
+            }
+            if (i > 0 && !TrackTransitionResolver.permits(graph, entrance, steps.get(i - 1).segmentId(), segment.id())) {
+                throw new IllegalArgumentException("Illegal turnout transition");
             }
             previousExit = connection.fromStart() ? segment.endNodeId() : segment.startNodeId();
             var geometry = segment.geometry();
@@ -79,6 +84,7 @@ public final class TrackRoute {
             TrackConnection next = null;
             for (var candidate : graph.connections(exit)) {
                 if (candidate.segmentId().equals(current.segmentId())) continue;
+                if (!TrackTransitionResolver.permits(graph, exit, current.segmentId(), candidate.segmentId())) continue;
                 // Count all choices before checking visited IDs: a branch must never select a side.
                 if (next != null) return;
                 next = candidate;

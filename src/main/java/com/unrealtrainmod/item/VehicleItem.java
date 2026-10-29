@@ -92,11 +92,16 @@ public final class VehicleItem extends Item {
         var entity = UnrealTrainMod.TRAIN.get().create(level);
         if (entity == null) return InteractionResult.FAIL;
         entity.setModelId(modelId);
-        var failure = TrainManager.get(serverLevel).place(entity,
-                new TrainAnchor(closestSegment.id(), closestDistance, direction > 0),
-                target -> player.mayUseItemAt(target, Direction.UP, stack) && level.mayInteract(player, target));
-        if (failure != null) return fail(level, player,
-                "commands.unrealtrainmod.train.state." + failure.name().toLowerCase(Locale.ROOT));
+        try {
+            var failure = TrainManager.get(serverLevel).place(entity,
+                    new TrainAnchor(closestSegment.id(), closestDistance, direction > 0),
+                    target -> player.mayUseItemAt(target, Direction.UP, stack) && level.mayInteract(player, target));
+            if (failure != null) return fail(level, player,
+                    "commands.unrealtrainmod.train.state." + failure.name().toLowerCase(Locale.ROOT));
+        } catch (TrainManager.StateException exception) {
+            return fail(level, player,
+                    "commands.unrealtrainmod.train.state." + exception.reason().name().toLowerCase(Locale.ROOT));
+        }
         if (!player.getAbilities().instabuild) stack.shrink(1);
         level.playSound(null, entity.blockPosition(), SoundEvents.ARMOR_STAND_PLACE, SoundSource.BLOCKS, 0.8f, 1);
         level.gameEvent(player, GameEvent.ENTITY_PLACE, entity.position());
