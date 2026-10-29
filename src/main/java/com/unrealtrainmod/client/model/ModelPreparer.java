@@ -4,7 +4,6 @@
  */
 package com.unrealtrainmod.client.model;
 
-import com.unrealtrainmod.resource.PackageAsset;
 import com.unrealtrainmod.model.ModelSource;
 import com.unrealtrainmod.vehicle.VehicleDefinition;
 import com.mojang.blaze3d.platform.NativeImage;
@@ -28,7 +27,7 @@ import net.minecraft.resources.ResourceLocation;
 public final class ModelPreparer {
     /** Images belong to this reload until the manager transfers them to DynamicTextures. */
     public record PreparedReload(Map<ModelSource, PreparedModel> sources,
-                                 List<VehicleDefinition> vehicles, Map<PackageAsset, NativeImage> images) {}
+                                 List<VehicleDefinition> vehicles, Map<ResourceLocation, NativeImage> images) {}
 
     private ModelPreparer() {}
 
@@ -47,31 +46,42 @@ public final class ModelPreparer {
     }
 
     public static PreparedReload prepare(List<VehicleDefinition> definitions) {
-        var prepared = new HashMap<ModelSource, PreparedModel>();
+        var classified = new LinkedHashMap<ModelSource, List<ModelPart>>();
         var failed = new HashSet<ModelSource>();
-        var vehicles = new ArrayList<VehicleDefinition>();
         try (var textures = new TexturePool()) {
             for (var definition : definitions) {
-                boolean complete = true;
                 for (var instance : definition.parts()) {
                     var source = instance.source();
-                    if (!prepared.containsKey(source) && !failed.contains(source)) {
+                    if (!classified.containsKey(source) && !failed.contains(source)) {
                         try {
-                            prepared.put(source, prepareSource(source, textures));
+                            classified.put(source, classifySource(source, textures));
                         } catch (IOException | RuntimeException e) {
                             failed.add(source);
                             UnrealTrainMod.LOGGER.error("Unable to load vehicle model {}", source.model(), e);
                         }
                     }
-                    if (failed.contains(source)) complete = false;
                 }
-                if (complete) vehicles.add(definition);
             }
-            return new PreparedReload(Map.copyOf(prepared), List.copyOf(vehicles), textures.takeImages(prepared.values()));
+            var regions = TextureAtlas.build(classified.values(), textures);
+            var prepared = new HashMap<ModelSource, PreparedModel>();
+            var iterator = classified.entrySet().iterator();
+            while (iterator.hasNext()) {
+                var entry = iterator.next();
+                try {
+                    prepared.put(entry.getKey(), prepareSource(entry.getKey(), entry.getValue(), regions));
+                } catch (RuntimeException e) {
+                    UnrealTrainMod.LOGGER.error("Unable to prepare vehicle model {}", entry.getKey().model(), e);
+                }
+                // Release each source's unmerged CUTOUT arrays as soon as its packed geometry is ready.
+                iterator.remove();
+            }
+            var vehicles = definitions.stream().filter(definition -> definition.parts().stream()
+                    .allMatch(instance -> prepared.containsKey(instance.source()))).toList();
+            return new PreparedReload(Map.copyOf(prepared), vehicles, textures.takeImages(prepared.values()));
         }
     }
 
-    private static PreparedModel prepareSource(ModelSource source, TexturePool textures) throws IOException {
+    private static List<ModelPart> classifySource(ModelSource source, TexturePool textures) throws IOException {
         var imported = ModelImporter.load(source);
         var mesh = imported.mesh();
         var parts = new ArrayList<ModelPart>();
@@ -129,9 +139,21 @@ public final class ModelPreparer {
             }
             parts.add(new ModelPart(index, part.name(), part.visible(), batches));
         }
+        summaries.forEach((name, summary) -> UnrealTrainMod.LOGGER.info(
+                "Model {} material '{}': mode={} ({}); AlphaBlend={}, bakedAlphaBelowOne={}; CUTOUT={}, BLEND={}, MIXED={}, skipped={}",
+                source.model(), name, summary.mode == null ? "LEGACY" : summary.mode, summary.reason,
+                summary.alphaBlend, summary.reducedAlpha, summary.counts[0], summary.counts[1], summary.counts[2], summary.skipped));
+        UnrealTrainMod.LOGGER.info("Prepared {} {}: {} parts, {} triangles; CUTOUT={}, BLEND={}, MIXED={}",
+                source.format(), source.model(), mesh.parts().size(), mesh.triangleCount(), counts[0], counts[1], counts[2]);
+        return List.copyOf(parts);
+    }
+
+    private static PreparedModel prepareSource(ModelSource source, List<ModelPart> parts,
+                                               Map<ResourceLocation, TextureAtlas.Region> regions) {
         var originalVisible = parts.stream().filter(ModelPart::visible).flatMap(part -> part.batches().stream())
                 .filter(batch -> batch.category() == RenderCategory.CUTOUT).toList();
-        var merged = OpaqueBatchMerger.merge(parts);
+        int beforeAtlas = OpaqueBatchMerger.visibleBatchCount(parts);
+        var merged = OpaqueBatchMerger.merge(parts, regions);
         var visible = merged.parts().stream().filter(ModelPart::visible).toList();
         var named = new HashMap<String, List<ModelPart>>();
         var allBatches = new ArrayList<RenderBatch>();
@@ -145,17 +167,13 @@ public final class ModelPreparer {
         }
         var partsByName = new HashMap<String, PartSelection>();
         named.forEach((name, matching) -> partsByName.put(name, new PartSelection(matching)));
-        summaries.forEach((name, summary) -> UnrealTrainMod.LOGGER.info(
-                "Model {} material '{}': mode={} ({}); AlphaBlend={}, bakedAlphaBelowOne={}; CUTOUT={}, BLEND={}, MIXED={}, skipped={}",
-                source.model(), name, summary.mode == null ? "LEGACY" : summary.mode, summary.reason,
-                summary.alphaBlend, summary.reducedAlpha, summary.counts[0], summary.counts[1], summary.counts[2], summary.skipped));
-        UnrealTrainMod.LOGGER.info("Prepared {} {}: {} parts, {} triangles; CUTOUT={}, BLEND={}, MIXED={}",
-                source.format(), source.model(), mesh.parts().size(), mesh.triangleCount(), counts[0], counts[1], counts[2]);
         var mergedVisible = merged.visibleBatches().stream().filter(batch -> batch.category() == RenderCategory.CUTOUT).toList();
         UnrealTrainMod.LOGGER.info("Model {}: visible CUTOUT batches {} -> {}; triangles {} -> {}",
                 source.model(), originalVisible.size(), mergedVisible.size(),
                 originalVisible.stream().mapToInt(batch -> batch.indexCount() / 3).sum(),
                 mergedVisible.stream().mapToInt(batch -> batch.indexCount() / 3).sum());
+        UnrealTrainMod.LOGGER.info("Model {}: atlas visible CUTOUT batches {} -> {}",
+                source.model(), beforeAtlas, mergedVisible.size());
         return new PreparedModel(merged.parts(), new PartSelection(visible, merged.visibleBatches()),
                 Map.copyOf(partsByName), List.copyOf(allBatches));
     }

@@ -50,7 +50,7 @@ public final class ClientModelManager extends SimplePreparableReloadListener<Pre
         try {
             close();
             for (var entry : prepared.images().entrySet()) {
-                var textureId = TextureLoader.textureId(entry.getKey());
+                var textureId = entry.getKey();
                 var pixels = pending.remove(entry.getKey());
                 DynamicTexture texture;
                 try {
