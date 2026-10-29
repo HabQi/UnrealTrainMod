@@ -40,16 +40,17 @@ public final class IrModelLoader {
 
     public static Imported load(PackageAsset asset) throws IOException {
         try (var archive = new PackageArchive(asset.archive())) {
-            return load(archive, asset, IrModelLoader::isVisible);
+            return load(archive, asset, IrModelLoader::isVisible, true);
         }
     }
 
-    /** Uses the startup scan's archive; track objects do not inherit vehicle visibility rules. */
+    /** Retains the track orientation and uses the startup scan's archive without vehicle visibility rules. */
     public static Imported loadRail(PackageArchive archive, PackageAsset asset) throws IOException {
-        return load(archive, asset, ignored -> true);
+        return load(archive, asset, ignored -> true, false);
     }
 
-    private static Imported load(PackageArchive archive, PackageAsset asset, Predicate<String> visible) throws IOException {
+    private static Imported load(PackageArchive archive, PackageAsset asset, Predicate<String> visible,
+                                 boolean vehicle) throws IOException {
         try (var reader = new InputStreamReader(archive.open(asset.entry()), StandardCharsets.UTF_8.newDecoder())) {
             var raw = ObjParser.parse(reader, asset.entry(), path -> openMaterial(archive, path));
             var textures = new HashMap<String, ModelTexture>();
@@ -65,15 +66,18 @@ public final class IrModelLoader {
                 }
             }
             var parts = new ArrayList<ModelData.Part>();
+            // Vehicle front (-X) maps to +Z; rails retain their existing opposite Y rotation.
+            float direction = vehicle ? 1 : -1;
             for (var part : raw.parts()) {
-                var positions = part.positions().stream().map(p -> new ModelData.Position(-p.z(), p.y(), p.x())).toList();
+                var positions = part.positions().stream()
+                        .map(p -> new ModelData.Position(direction * p.z(), p.y(), -direction * p.x())).toList();
                 for (var face : part.faces()) {
                     // These arrays are owned by this fresh parse. Rotate normals with positions, without reflection.
                     float[] normals = face.normals();
                     for (int n = 0; n < normals.length; n += 3) {
                         float x = normals[n];
-                        normals[n] = -normals[n + 2];
-                        normals[n + 2] = x;
+                        normals[n] = direction * normals[n + 2];
+                        normals[n + 2] = -direction * x;
                     }
                 }
                 parts.add(new ModelData.Part(part.name(), visible.test(part.name()), false, 0, positions, part.faces()));

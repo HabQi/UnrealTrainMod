@@ -87,8 +87,8 @@ final class IrVehicleAdapter {
         var combined = new ModelBounds.Builder();
         rawParts.forEach((part, raw) -> {
             // Match the importer's proper Y rotation and scale, retaining the authored origin.
-            var rotated = new ModelBounds(-raw.maxZ() * scale, raw.minY() * scale, raw.minX() * scale,
-                    -raw.minZ() * scale, raw.maxY() * scale, raw.maxX() * scale);
+            var rotated = new ModelBounds(raw.minZ() * scale, raw.minY() * scale, -raw.maxX() * scale,
+                    raw.maxZ() * scale, raw.maxY() * scale, -raw.minX() * scale);
             combined.include(rotated);
             groups.computeIfAbsent(IrBogieGroups.role(part), ignored -> new ModelBounds.Builder()).include(rotated);
         });
@@ -113,12 +113,12 @@ final class IrVehicleAdapter {
         var base = VehicleMotionSpec.fromBounds(bounds, 0);
         var pivot = json.has("trucks") ? GsonHelper.getAsJsonObject(json, "trucks")
                 : GsonHelper.getAsJsonObject(json, "pivot", new JsonObject());
-        // IR's named front is source -X, hence imported -Z. Swap ends and negate pivot coordinates.
-        double frontBogie = pivot.has("rear") ? -GsonHelper.getAsDouble(pivot, "rear") * scale : base.frontBogieOffset();
-        double rearBogie = pivot.has("front") ? -GsonHelper.getAsDouble(pivot, "front") * scale : base.rearBogieOffset();
+        // IR's signed pivot distances already use front-positive, matching imported +Z.
+        double frontBogie = pivot.has("front") ? GsonHelper.getAsDouble(pivot, "front") * scale : base.frontBogieOffset();
+        double rearBogie = pivot.has("rear") ? GsonHelper.getAsDouble(pivot, "rear") * scale : base.rearBogieOffset();
         var couplers = GsonHelper.getAsJsonObject(json, "couplers", new JsonObject());
-        double frontCoupler = bounds.maxZ() + GsonHelper.getAsDouble(couplers, "rear_offset", 0) * scale;
-        double rearCoupler = bounds.minZ() - GsonHelper.getAsDouble(couplers, "front_offset", 0) * scale;
+        double frontCoupler = bounds.maxZ() + GsonHelper.getAsDouble(couplers, "front_offset", 0) * scale;
+        double rearCoupler = bounds.minZ() - GsonHelper.getAsDouble(couplers, "rear_offset", 0) * scale;
         return new VehicleMotionSpec(base.length(), base.width(), base.height(), base.trackDatum(),
                 frontCoupler, rearCoupler, frontBogie, rearBogie, 0);
     }

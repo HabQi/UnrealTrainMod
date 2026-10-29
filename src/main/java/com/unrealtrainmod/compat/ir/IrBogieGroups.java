@@ -6,13 +6,13 @@ package com.unrealtrainmod.compat.ir;
 
 import com.unrealtrainmod.vehicle.VehiclePartRole;
 
-/** IR's source front (-X) becomes the imported model's rear (-Z). */
+/** IR's source front (-X) becomes the imported model's front (+Z). */
 public final class IrBogieGroups {
     private IrBogieGroups() {}
 
     public static VehiclePartRole role(String name) {
-        if (matches(name, "BOGEY_FRONT")) return VehiclePartRole.REAR_BOGIE;
-        if (matches(name, "BOGEY_REAR")) return VehiclePartRole.FRONT_BOGIE;
+        if (matches(name, "BOGEY_FRONT")) return VehiclePartRole.FRONT_BOGIE;
+        if (matches(name, "BOGEY_REAR")) return VehiclePartRole.REAR_BOGIE;
         return VehiclePartRole.BODY;
     }
 
