@@ -5,12 +5,13 @@
 package com.unrealtrainmod.item;
 
 import com.unrealtrainmod.UnrealTrainMod;
-import com.unrealtrainmod.model.ModelSource;
 import com.unrealtrainmod.registry.ModDataComponents;
 import com.unrealtrainmod.track.block.TrackBlockManager;
+import com.unrealtrainmod.track.TrackSegment;
 import com.unrealtrainmod.track.geometry.TrackPose;
 import com.unrealtrainmod.track.geometry.TrackProjection;
 import com.unrealtrainmod.track.geometry.TrackVector;
+import com.unrealtrainmod.train.TrainAnchor;
 import com.unrealtrainmod.vehicle.VehicleCatalog;
 import java.util.List;
 import net.minecraft.ChatFormatting;
@@ -67,19 +68,24 @@ public final class VehicleItem extends Item {
         var hit = context.getClickLocation();
         var point = new TrackVector(hit.x, hit.y, hit.z);
         TrackPose closest = null;
+        TrackSegment closestSegment = null;
+        double closestDistance = 0;
         double bestError = Double.POSITIVE_INFINITY;
         for (var segment : TrackBlockManager.get(serverLevel).segmentsAt(clicked)) {
             var geometry = segment.geometry();
-            var pose = geometry.sample(TrackProjection.closestDistance(geometry, point));
+            double distance = TrackProjection.closestDistance(geometry, point);
+            var pose = geometry.sample(distance);
             double error = TrackProjection.squaredDistance(pose.position(), point);
             if (error < bestError) {
                 closest = pose;
+                closestSegment = segment;
+                closestDistance = distance;
                 bestError = error;
             }
         }
         if (closest == null) return fail(level, player, "item.unrealtrainmod.vehicle.no_track");
 
-        double offset = model.parts().getFirst().source().format() == ModelSource.Format.MQO ? 1 : 0;
+        double offset = model.motionSpec().trackDatum();
         var position = closest.position();
         var normal = closest.normal();
         double x = position.x() + normal.x() * offset;
@@ -99,6 +105,7 @@ public final class VehicleItem extends Item {
         var entity = UnrealTrainMod.TRAIN.get().create(level);
         if (entity == null) return InteractionResult.FAIL;
         entity.setModelId(modelId);
+        entity.setRailAnchor(new TrainAnchor(closestSegment.id(), closestDistance, direction > 0));
         entity.moveTo(x, y, z, yaw, pitch);
         if (!serverLevel.addFreshEntity(entity)) return InteractionResult.FAIL;
         if (!player.getAbilities().instabuild) stack.shrink(1);

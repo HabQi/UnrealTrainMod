@@ -6,6 +6,7 @@
 package com.unrealtrainmod;
 
 import com.unrealtrainmod.client.ClientConfig;
+import com.unrealtrainmod.client.ClientButtonTextureManager;
 import com.unrealtrainmod.client.ClientModelManager;
 import com.unrealtrainmod.client.PlacedModelRenderer;
 import com.unrealtrainmod.client.TrainEntityRenderer;
@@ -50,6 +51,7 @@ public class UnrealTrainModClient {
     static void registerReloadListeners(RegisterClientReloadListenersEvent event) {
         event.registerReloadListener(ClientModelManager.INSTANCE);
         event.registerReloadListener(ClientRailModelManager.INSTANCE);
+        event.registerReloadListener(ClientButtonTextureManager.INSTANCE);
         event.registerReloadListener(ClientTrackCache.INSTANCE);
     }
 
@@ -81,6 +83,7 @@ public class UnrealTrainModClient {
         TrainModelRenderer.closeWorld();
         ClientTrackCache.INSTANCE.close();
         ClientRailModelManager.INSTANCE.close();
+        ClientButtonTextureManager.INSTANCE.close();
         ClientTrackConstruction.INSTANCE.clear();
     }
 }

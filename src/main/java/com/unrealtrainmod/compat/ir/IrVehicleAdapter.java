@@ -16,6 +16,7 @@ import com.unrealtrainmod.resource.PackageArchive;
 import com.unrealtrainmod.resource.PackageAsset;
 import com.unrealtrainmod.resource.ResourceIds;
 import com.unrealtrainmod.vehicle.VehicleDefinition;
+import com.unrealtrainmod.vehicle.VehicleMotionSpec;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
@@ -84,8 +85,23 @@ final class IrVehicleAdapter {
                 -rawBounds.minZ() * scale, rawBounds.maxY() * scale, rawBounds.maxX() * scale);
         var source = new ModelSource(model, Map.of(), Map.of("default", MaterialRenderMode.AUTO),
                 false, false, ModelSource.Format.IR_OBJ, scale);
-        return new VehicleDefinition(id, name, config, type,
-                List.of(new VehicleDefinition.Instance(source, new ModelData.Position(0, 0, 0))), bounds);
+        return new VehicleDefinition(id, name, config, null, type,
+                List.of(new VehicleDefinition.Instance(source, new ModelData.Position(0, 0, 0))), bounds,
+                readMotionSpec(json, bounds, scale));
+    }
+
+    private static VehicleMotionSpec readMotionSpec(JsonObject json, ModelBounds bounds, double scale) {
+        var base = VehicleMotionSpec.fromBounds(bounds, 0);
+        var pivot = json.has("trucks") ? GsonHelper.getAsJsonObject(json, "trucks")
+                : GsonHelper.getAsJsonObject(json, "pivot", new JsonObject());
+        // IR's named front is source -X, hence imported -Z. Swap ends and negate pivot coordinates.
+        double frontBogie = pivot.has("rear") ? -GsonHelper.getAsDouble(pivot, "rear") * scale : base.frontBogieOffset();
+        double rearBogie = pivot.has("front") ? -GsonHelper.getAsDouble(pivot, "front") * scale : base.rearBogieOffset();
+        var couplers = GsonHelper.getAsJsonObject(json, "couplers", new JsonObject());
+        double frontCoupler = bounds.maxZ() + GsonHelper.getAsDouble(couplers, "rear_offset", 0) * scale;
+        double rearCoupler = bounds.minZ() - GsonHelper.getAsDouble(couplers, "front_offset", 0) * scale;
+        return new VehicleMotionSpec(base.length(), base.width(), base.height(), base.trackDatum(),
+                frontCoupler, rearCoupler, frontBogie, rearBogie, 0);
     }
 
     static JsonObject readJson(PackageArchive archive, String entry) throws IOException {

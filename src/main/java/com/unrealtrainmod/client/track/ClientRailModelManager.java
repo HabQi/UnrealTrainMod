@@ -16,7 +16,6 @@ import com.unrealtrainmod.UnrealTrainMod;
 import com.unrealtrainmod.model.IndexedMesh;
 import com.unrealtrainmod.model.ModelBounds;
 import com.unrealtrainmod.model.ModelMesh;
-import com.unrealtrainmod.track.mesh.RailTrackMeshBuilder;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -41,8 +40,12 @@ public final class ClientRailModelManager extends SimplePreparableReloadListener
     private static final ResourceLocation WHITE = ResourceLocation.fromNamespaceAndPath(UnrealTrainMod.MODID, "textures/model/white.png");
     public record Batch(IndexedMesh mesh, ResourceLocation texture, boolean doubleSided) {}
     private record MaterialKey(ResourceLocation texture, boolean doubleSided) {}
-    public record Model(List<Batch> batches, double padding, ModelBounds bounds) {
+    private record MeshKey(PackageAsset model, RailDefinition.Format format, float scale) {}
+    /** Reference-gauge geometry with the rail top already translated to Y=0. */
+    public record Model(List<Batch> batches, double padding, ModelBounds bounds, RailDefinition.Format format, double period) {
         public Model { batches = List.copyOf(batches); }
+
+        public double scaleForGauge(double gauge) { return format.scaleForGauge(gauge); }
     }
     public record Prepared(Map<ResourceLocation, Model> models, Map<PackageAsset, NativeImage> images) {}
     private Map<ResourceLocation, Model> models = Map.of();
@@ -70,7 +73,7 @@ public final class ClientRailModelManager extends SimplePreparableReloadListener
     protected Prepared prepare(ResourceManager resources, ProfilerFiller profiler) {
         var models = new HashMap<ResourceLocation, Model>();
         var images = new HashMap<PackageAsset, NativeImage>();
-        var meshes = new HashMap<PackageAsset, ModelMesh>();
+        var meshes = new HashMap<MeshKey, ModelMesh>();
         var sources = new HashMap<RailDefinition.Source, Model>();
         try {
             for (var definition : RailCatalog.all()) {
@@ -80,10 +83,16 @@ public final class ClientRailModelManager extends SimplePreparableReloadListener
                     if (preparedSource != null) {
                         models.put(definition.id(), preparedSource);
                     } else {
-                        ModelMesh mesh = meshes.get(source.model());
+                        var key = new MeshKey(source.model(), source.format(), source.scale());
+                        ModelMesh mesh = meshes.get(key);
                         if (mesh == null) {
-                            mesh = ModelMesh.prepare(source.data(), (float)RailTrackMeshBuilder.MODEL_SCALE, true);
-                            meshes.put(source.model(), mesh);
+                            boolean ir = source.format() == RailDefinition.Format.IR_OBJ;
+                            mesh = ModelMesh.prepare(source.data(), source.scale(), !ir, ir);
+                            if (mesh.fanFallbackCount() > 0) {
+                                LOGGER.warn("IR rail {}: used OBJ corner-order triangle fans for {} polygon faces",
+                                        source.model(), mesh.fanFallbackCount());
+                            }
+                            meshes.put(key, mesh);
                         }
                         var grouped = new LinkedHashMap<MaterialKey, List<IndexedMesh>>();
                         var bounds = new ModelBounds.Builder();
@@ -93,7 +102,8 @@ public final class ClientRailModelManager extends SimplePreparableReloadListener
                             for (var batch : part.batches()) {
                                 if (batch.mesh().indices().length == 0) continue;
                                 var material = batch.material();
-                                var binding = source.textures().get(material.name());
+                                var binding = source.format() == RailDefinition.Format.IR_OBJ && material.texture() == null
+                                        ? null : source.textures().get(material.name());
                                 ResourceLocation texture = WHITE;
                                 if (binding != null) {
                                     image(binding.asset(), images);
@@ -102,20 +112,24 @@ public final class ClientRailModelManager extends SimplePreparableReloadListener
                                 grouped.computeIfAbsent(new MaterialKey(texture, material.doubleSided()), ignored -> new ArrayList<>()).add(batch.mesh());
                                 float[] v = batch.mesh().vertices();
                                 for (int i = 0; i < v.length; i += 8) {
-                                    bounds.include(v[i], v[i + 1], v[i + 2]);
-                                    double y = v[i + 1] - RailTrackMeshBuilder.TOP_OFFSET;
-                                    padding = Math.max(padding, Math.sqrt(v[i] * (double)v[i] + y * y) + Math.abs(v[i + 2]));
+                                    float y = (float)(v[i + 1] - source.topOffset());
+                                    if (!Float.isFinite(v[i]) || !Float.isFinite(y) || !Float.isFinite(v[i + 2])) {
+                                        throw new IOException("Non-finite prepared rail vertex");
+                                    }
+                                    bounds.include(v[i], y, v[i + 2]);
+                                    padding = Math.max(padding, Math.sqrt(v[i] * (double)v[i] + y * (double)y) + Math.abs(v[i + 2]));
                                 }
                             }
                         }
                         var batches = new ArrayList<Batch>();
-                        grouped.forEach((key, values) -> batches.add(new Batch(merge(values), key.texture(), key.doubleSided())));
-                        preparedSource = new Model(batches, padding + RailTrackMeshBuilder.PERIOD, bounds.build());
+                        grouped.forEach((material, values) -> batches.add(new Batch(merge(values, source.topOffset()),
+                                material.texture(), material.doubleSided())));
+                        preparedSource = new Model(batches, padding + source.period(), bounds.build(), source.format(), source.period());
                         sources.put(source, preparedSource);
                         models.put(definition.id(), preparedSource);
                     }
                 } catch (IOException | RuntimeException exception) {
-                    LOGGER.error("Cannot prepare RTM rail {} from {}: {}", definition.railName(), source.model(),
+                    LOGGER.error("Cannot prepare rail {} from {}: {}", definition.railName(), source.model(),
                             exception.getMessage(), exception);
                 }
             }
@@ -126,8 +140,8 @@ public final class ClientRailModelManager extends SimplePreparableReloadListener
         }
     }
 
-    private static IndexedMesh merge(List<IndexedMesh> meshes) {
-        if (meshes.size() == 1) return meshes.getFirst();
+    private static IndexedMesh merge(List<IndexedMesh> meshes, double topOffset) {
+        if (meshes.size() == 1 && topOffset == 0) return meshes.getFirst();
         int vertices = 0, indices = 0;
         for (var mesh : meshes) {
             vertices = Math.addExact(vertices, mesh.colors().length);
@@ -142,6 +156,7 @@ public final class ClientRailModelManager extends SimplePreparableReloadListener
             for (int index : mesh.indices()) elements[indexOffset++] = vertexOffset + index;
             vertexOffset += mesh.colors().length;
         }
+        for (int i = 1; i < data.length; i += 8) data[i] = (float)(data[i] - topOffset);
         return new IndexedMesh(data, colors, elements);
     }
 

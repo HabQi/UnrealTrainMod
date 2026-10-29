@@ -60,7 +60,8 @@ public final class RailModelScreen extends BaseTrainScreen {
             list = new TrainListWidget<>(minecraft, listWidth, 100, RailCatalog.all(),
                     model -> model.config().archive(),
                     model -> Component.literal(model.railName()),
-                    model -> model.tags().isBlank() ? model.id().toString() : model.tags() + " · " + model.id(), this::selectModel,
+                    model -> model.tags().isBlank() ? model.id().toString() : model.tags() + " · " + model.id(),
+                    RailDefinition::buttonTexture, this::selectModel,
                     Component.translatable("gui.unrealtrainmod.rail_models.empty"));
             list.select(selected);
             list.filter("");

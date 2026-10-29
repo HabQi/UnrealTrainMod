@@ -4,7 +4,10 @@
  */
 package com.unrealtrainmod.client.gui.widget;
 
+import com.mojang.blaze3d.systems.RenderSystem;
+import com.unrealtrainmod.client.ClientButtonTextureManager;
 import com.unrealtrainmod.client.gui.theme.GuiTheme;
+import com.unrealtrainmod.resource.PackageAsset;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -29,26 +32,29 @@ public final class TrainListWidget<T> extends ObjectSelectionList<TrainListWidge
     private final Function<T, Path> archive;
     private final Function<T, Component> label;
     private final Function<T, String> detail;
+    private final Function<T, PackageAsset> buttonTexture;
     private final Consumer<T> onSelect;
     private final Component emptyMessage;
     private T selectedValue;
 
     public TrainListWidget(Minecraft minecraft, int width, int height, List<T> items,
                            Function<T, Path> archive, Function<T, Component> label,
-                           Function<T, String> detail, Consumer<T> onSelect) {
-        this(minecraft, width, height, items, archive, label, detail, onSelect,
+                           Function<T, String> detail, Function<T, PackageAsset> buttonTexture, Consumer<T> onSelect) {
+        this(minecraft, width, height, items, archive, label, detail, buttonTexture, onSelect,
                 Component.translatable("gui.unrealtrainmod.models.empty"));
     }
 
     public TrainListWidget(Minecraft minecraft, int width, int height, List<T> items,
                            Function<T, Path> archive, Function<T, Component> label,
-                           Function<T, String> detail, Consumer<T> onSelect, Component emptyMessage) {
+                           Function<T, String> detail, Function<T, PackageAsset> buttonTexture,
+                           Consumer<T> onSelect, Component emptyMessage) {
         super(minecraft, width, height, 0, 34);
         this.emptyMessage = emptyMessage;
         this.items = List.copyOf(items);
         this.archive = archive;
         this.label = label;
         this.detail = detail;
+        this.buttonTexture = buttonTexture;
         this.onSelect = onSelect;
     }
 
@@ -136,8 +142,10 @@ public final class TrainListWidget<T> extends ObjectSelectionList<TrainListWidge
                     getX() + 6, getY() + 8, width - 12, GuiTheme.MUTED);
         }
         var hovered = getHovered();
-        if (hovered != null && hovered.heading != null) {
-            minecraft.screen.setTooltipForNextRenderPass(hovered.heading);
+        if (hovered != null) {
+            Component tooltip = hovered.heading != null ? hovered.heading
+                    : label.apply(hovered.item).copy().append("\n").append(detail.apply(hovered.item));
+            minecraft.screen.setTooltipForNextRenderPass(tooltip);
         }
     }
 
@@ -170,6 +178,21 @@ public final class TrainListWidget<T> extends ObjectSelectionList<TrainListWidge
                 graphics.drawString(font, font.plainSubstrByWidth(heading.getString(), width - 8),
                         left + 3, top + 9, GuiTheme.ACCENT, false);
                 graphics.hLine(left, left + width - 1, top + height - 2, GuiTheme.BORDER);
+                return;
+            }
+            var texture = ClientButtonTextureManager.INSTANCE.texture(owner.buttonTexture.apply(item));
+            if (texture != null) {
+                int imageHeight = Math.min(height - 4, (width - 8) / 5);
+                int imageWidth = imageHeight * 5;
+                RenderSystem.enableBlend();
+                RenderSystem.defaultBlendFunc();
+                try {
+                    graphics.blit(texture, left + (width - imageWidth) / 2, top + (height - imageHeight) / 2,
+                            imageWidth, imageHeight, 0, 0, ClientButtonTextureManager.WIDTH, ClientButtonTextureManager.HEIGHT,
+                            ClientButtonTextureManager.WIDTH, ClientButtonTextureManager.HEIGHT);
+                } finally {
+                    RenderSystem.disableBlend();
+                }
                 return;
             }
             graphics.drawString(font, font.plainSubstrByWidth(owner.label.apply(item).getString(), width - 8),

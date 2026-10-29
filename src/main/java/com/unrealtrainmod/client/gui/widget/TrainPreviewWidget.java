@@ -22,14 +22,12 @@ import org.lwjgl.glfw.GLFW;
 public final class TrainPreviewWidget extends AbstractWidget implements AutoCloseable {
     private final PreviewCamera camera;
     private final TrainPreviewRenderer renderer = new TrainPreviewRenderer();
-    private final Runnable onCameraChanged;
     private ResourceLocation modelId;
 
-    public TrainPreviewWidget(PreviewCamera camera, ResourceLocation modelId, Runnable onCameraChanged) {
+    public TrainPreviewWidget(PreviewCamera camera, ResourceLocation modelId) {
         super(0, 0, 100, 100, Component.translatable("gui.unrealtrainmod.preview.title"));
         this.camera = camera;
         this.modelId = modelId;
-        this.onCameraChanged = onCameraChanged;
         setTooltip(Tooltip.create(Component.translatable("gui.unrealtrainmod.preview.help")));
     }
 
@@ -53,14 +51,12 @@ public final class TrainPreviewWidget extends AbstractWidget implements AutoClos
     protected void onDrag(double mouseX, double mouseY, double dragX, double dragY) {
         if (Screen.hasShiftDown()) camera.pan((float)(dragX / width * 2), (float)(-dragY / height * 2));
         else camera.rotate(dragX * 0.8, dragY * 0.8);
-        onCameraChanged.run();
     }
 
     @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
         if (!active || !visible || !isMouseOver(mouseX, mouseY)) return false;
         camera.setZoom(camera.zoom() * Math.pow(1.1, scrollY));
-        onCameraChanged.run();
         return true;
     }
 
@@ -76,7 +72,6 @@ public final class TrainPreviewWidget extends AbstractWidget implements AutoClos
             case GLFW.GLFW_KEY_HOME -> camera.reset();
             default -> { return false; }
         }
-        onCameraChanged.run();
         return true;
     }
 

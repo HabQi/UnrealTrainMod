@@ -16,6 +16,7 @@ import net.minecraft.client.renderer.RenderType;
 import net.minecraft.client.renderer.entity.EntityRenderer;
 import net.minecraft.client.renderer.entity.EntityRendererProvider;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.util.Mth;
 
 public final class TrainEntityRenderer extends EntityRenderer<TrainEntity> {
     public TrainEntityRenderer(EntityRendererProvider.Context context) { super(context); }
@@ -26,9 +27,8 @@ public final class TrainEntityRenderer extends EntityRenderer<TrainEntity> {
         var model = ClientModelManager.INSTANCE.model(entity.getModelId());
         pose.pushPose();
         try {
-            // The vehicle is stationary, so use the synchronized placement angles directly.
-            pose.mulPose(Axis.YP.rotationDegrees(-entity.getYRot()));
-            pose.mulPose(Axis.XP.rotationDegrees(entity.getXRot()));
+            pose.mulPose(Axis.YP.rotationDegrees(-Mth.rotLerp(partialTick, entity.yRotO, entity.getYRot())));
+            pose.mulPose(Axis.XP.rotationDegrees(Mth.lerp(partialTick, entity.xRotO, entity.getXRot())));
             if (model == null) {
                 var definition = VehicleCatalog.find(entity.getModelId());
                 var bounds = definition == null ? ModelBounds.MISSING : definition.bounds();

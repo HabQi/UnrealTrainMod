@@ -13,6 +13,7 @@ import com.unrealtrainmod.track.model.RailCatalog;
 import com.unrealtrainmod.track.model.RailDefinition;
 import com.unrealtrainmod.vehicle.VehicleCatalog;
 import com.unrealtrainmod.vehicle.VehicleDefinition;
+import com.unrealtrainmod.vehicle.VehicleMotionOverrides;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -27,14 +28,14 @@ import net.minecraft.resources.ResourceLocation;
 public final class ResourceLoader {
     private ResourceLoader() {}
 
-    public static void load(Path modsDirectory) {
+    public static void load(Path modsDirectory, Path configDirectory) {
         var report = new LoadReport();
         var vehicles = new LinkedHashMap<ResourceLocation, VehicleDefinition>();
         var rails = new LinkedHashMap<ResourceLocation, RailDefinition>();
         Path rtmDirectory = modsDirectory.resolve("Packages_RTM");
         Path irDirectory = modsDirectory.resolve("Packages_IR");
         var rtm = new RtmPackageReader(vehicles, rails, report);
-        var ir = new IrPackageReader(vehicles, report);
+        var ir = new IrPackageReader(vehicles, rails, report);
         for (var path : archives(rtmDirectory, report)) {
             try (var archive = new PackageArchive(path)) {
                 rtm.read(archive);
@@ -49,18 +50,23 @@ public final class ResourceLoader {
                 report.archiveFailed(false, path, exception);
             }
         }
+        VehicleMotionOverrides.apply(configDirectory.resolve("unrealtrainmod/vehicle-motion.json"), vehicles);
         VehicleCatalog.register(List.copyOf(vehicles.values()));
         var railDefinitions = List.copyOf(rails.values());
         RailCatalog.register(railDefinitions);
         report.logSummary(LoadReport.Kind.RTM_VEHICLE, rtmDirectory, "");
         report.logSummary(LoadReport.Kind.IR_VEHICLE, irDirectory, "");
+        var rtmRails = railDefinitions.stream().filter(definition -> definition.source().format() == RailDefinition.Format.MQO).toList();
         var usage = new HashMap<PackageAsset, Integer>();
-        for (var definition : railDefinitions) usage.merge(definition.source().model(), 1, Integer::sum);
+        for (var definition : rtmRails) usage.merge(definition.source().model(), 1, Integer::sum);
         long shared = usage.values().stream().filter(count -> count > 1).count();
-        long scripts = railDefinitions.stream().filter(definition -> definition.source().rendererPath() != null).count();
+        long scripts = rtmRails.stream().filter(definition -> definition.source().rendererPath() != null).count();
         report.logSummary(LoadReport.Kind.RTM_RAIL, rtmDirectory, usage.size() + " unique MQO models (" + shared
-                + " shared, " + (railDefinitions.size() - usage.size()) + " reused references), "
+                + " shared, " + (rtmRails.size() - usage.size()) + " reused references), "
                 + scripts + " declared scripts (not executed)");
+        long irModels = railDefinitions.stream().filter(definition -> definition.source().format() == RailDefinition.Format.IR_OBJ)
+                .map(definition -> definition.source().model()).distinct().count();
+        report.logSummary(LoadReport.Kind.IR_RAIL, irDirectory, irModels + " unique OBJ models; name must contain rail or Rail");
     }
 
     private static List<Path> archives(Path directory, LoadReport report) {

@@ -4,11 +4,11 @@
  */
 package com.unrealtrainmod.item;
 
-import com.unrealtrainmod.model.ModelSource;
 import com.unrealtrainmod.vehicle.VehicleCatalog;
 import com.unrealtrainmod.UnrealTrainMod;
 import com.unrealtrainmod.registry.ModDataComponents;
 import net.minecraft.ChatFormatting;
+import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.network.chat.Component;
 import net.minecraft.sounds.SoundEvents;
@@ -54,16 +54,17 @@ public final class ModelPlacerItem extends Item {
             return InteractionResult.FAIL;
         }
         var hit = context.getClickLocation();
-        var target = context.getClickedPos().above();
+        double placementY = hit.y + model.motionSpec().trackDatum();
+        var target = BlockPos.containing(context.getClickedPos().getX() + 0.5, placementY,
+                context.getClickedPos().getZ() + 0.5);
         if (!player.mayUseItemAt(target, context.getClickedFace(), context.getItemInHand())
+                || level.isOutsideBuildHeight(target)
                 || !level.getWorldBorder().isWithinBounds(target)) return InteractionResult.FAIL;
         if (!level.isClientSide) {
             var entity = UnrealTrainMod.PLACED_MODEL.get().create(level);
             if (entity == null) return InteractionResult.FAIL;
             entity.setModelId(modelId);
             float yaw = Math.round(player.getYRot() / 90f) * 90f;
-            // Raise the entire RTM assembly without changing source geometry or bogie offsets.
-            double placementY = hit.y + (model.parts().getFirst().source().format() == ModelSource.Format.MQO ? 1.0 : 0.0);
             entity.moveTo(context.getClickedPos().getX() + 0.5, placementY,
                     context.getClickedPos().getZ() + 0.5, yaw, 0);
             if (!level.addFreshEntity(entity)) return InteractionResult.FAIL;

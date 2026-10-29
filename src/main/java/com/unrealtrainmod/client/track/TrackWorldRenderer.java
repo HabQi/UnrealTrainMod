@@ -76,14 +76,15 @@ public final class TrackWorldRenderer {
             if (model != null) {
                 try {
                     return new RailTrackGpuMesh(RailTrackMeshBuilder.build(entry.geometry,
-                            model.batches().stream().map(ClientRailModelManager.Batch::mesh).toList(), x, z), model, false);
+                            model.batches().stream().map(ClientRailModelManager.Batch::mesh).toList(), x, z,
+                            model.scaleForGauge(entry.data.gauge()), model.period()), model, false);
                 } catch (IllegalArgumentException exception) {
-                    LOGGER.warn("Cannot build RTM rail {} using {} in chunk {}, {}: {}; using native appearance",
+                    LOGGER.warn("Cannot build rail {} using {} in chunk {}, {}: {}; using native appearance",
                             id, modelId, x, z, exception.getMessage());
                 }
             } else if (!entry.missingReported) {
                 entry.missingReported = true;
-                LOGGER.warn("RTM rail model {} is missing or unavailable for track {}; using native appearance", modelId, id);
+                LOGGER.warn("Rail model {} is missing or unavailable for track {}; using native appearance", modelId, id);
             }
         }
         try {

@@ -11,8 +11,8 @@ import com.unrealtrainmod.resource.PackageAsset;
 import java.util.List;
 import net.minecraft.resources.ResourceLocation;
 
-public record VehicleDefinition(ResourceLocation id, String name, PackageAsset config, String trainType,
-                                List<Instance> parts, ModelBounds bounds) {
+public record VehicleDefinition(ResourceLocation id, String name, PackageAsset config, PackageAsset buttonTexture, String trainType,
+                                List<Instance> parts, ModelBounds bounds, VehicleMotionSpec motionSpec) {
     public VehicleDefinition { parts = List.copyOf(parts); }
     public record Instance(ModelSource source, ModelData.Position offset) {}
 

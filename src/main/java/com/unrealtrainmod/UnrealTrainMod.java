@@ -7,6 +7,8 @@ package com.unrealtrainmod;
 
 import com.unrealtrainmod.loading.ResourceLoader;
 import com.unrealtrainmod.command.TrackCommands;
+import com.unrealtrainmod.command.TrainCommands;
+import com.unrealtrainmod.train.TrainManager;
 import com.unrealtrainmod.entity.PlacedModelEntity;
 import com.unrealtrainmod.entity.TrainEntity;
 import com.unrealtrainmod.item.ModelPlacerItem;
@@ -53,7 +55,7 @@ public class UnrealTrainMod {
     public static final DeferredHolder<EntityType<?>, EntityType<TrainEntity>> TRAIN = ENTITY_TYPES.register(
             "train", () -> EntityType.Builder.<TrainEntity>of(TrainEntity::new, MobCategory.MISC)
                     .sized(1, 1)
-                    .clientTrackingRange(16).updateInterval(20).fireImmune().build(MODID + ":train"));
+                    .clientTrackingRange(16).updateInterval(2).fireImmune().build(MODID + ":train"));
     public static final DeferredRegister<CreativeModeTab> CREATIVE_MODE_TABS = DeferredRegister.create(Registries.CREATIVE_MODE_TAB, MODID);
 
     public static final DeferredBlock<TrackBlock> TRACK_BLOCK = BLOCKS.registerBlock("track", TrackBlock::new,
@@ -85,7 +87,7 @@ public class UnrealTrainMod {
             }).build());
 
     public UnrealTrainMod(IEventBus modEventBus) {
-        ResourceLoader.load(FMLPaths.MODSDIR.get());
+        ResourceLoader.load(FMLPaths.MODSDIR.get(), FMLPaths.CONFIGDIR.get());
 
         BLOCKS.register(modEventBus);
         ITEMS.register(modEventBus);
@@ -95,8 +97,10 @@ public class UnrealTrainMod {
         CREATIVE_MODE_TABS.register(modEventBus);
 
         NeoForge.EVENT_BUS.addListener(TrackCommands::register);
+        NeoForge.EVENT_BUS.addListener(TrainCommands::register);
         TrackBlockManager.register(NeoForge.EVENT_BUS);
         TrackSyncManager.register(NeoForge.EVENT_BUS);
         TrackConstructionManager.register(NeoForge.EVENT_BUS);
+        TrainManager.register(NeoForge.EVENT_BUS);
     }
 }

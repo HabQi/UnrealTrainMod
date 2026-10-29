@@ -68,7 +68,7 @@ final class RtmRailAdapter {
             PackageAsset asset = asset(archive, prefix, "minecraft:models/" + modelFile, "model.modelFile");
             Map<String, RailDefinition.Texture> textures = textures(model, archive, prefix);
             PackageAsset renderer = optionalAsset(model, "rendererPath", "model.rendererPath", archive, prefix);
-            PackageAsset button = optionalAsset(json, "buttonTexture", "buttonTexture", archive, prefix);
+            PackageAsset button = RtmButtonTexture.read(json, archive, prefix, config);
             String accuracy = optionalString(json, "accuracy"), tags = optionalString(json, "tags");
             List<RailDefinition.Ballast> ballast = ballast(json);
             // Read geometry last so invalid metadata cannot retain an otherwise unused model in the cache.
@@ -79,7 +79,8 @@ final class RtmRailAdapter {
                             archive.path(), entry, material, asset.entry());
                 }
             }
-            var source = new RailDefinition.Source(asset, data, textures, renderer);
+            var source = new RailDefinition.Source(asset, data, textures, renderer,
+                    RailDefinition.Format.MQO, 0.01f, 0.25, 0.5);
             definitions.put(id, new RailDefinition(id, name, config,
                     source, button, accuracy, tags, ballast));
             report.registered(LoadReport.Kind.RTM_RAIL);

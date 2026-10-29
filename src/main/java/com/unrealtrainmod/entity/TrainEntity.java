@@ -7,12 +7,16 @@ package com.unrealtrainmod.entity;
 import com.unrealtrainmod.UnrealTrainMod;
 import com.unrealtrainmod.model.ModelBounds;
 import com.unrealtrainmod.registry.ModDataComponents;
+import com.unrealtrainmod.train.TrainAnchor;
 import com.unrealtrainmod.vehicle.VehicleCatalog;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.Tag;
+import net.minecraft.network.protocol.game.ClientboundAddEntityPacket;
 import net.minecraft.network.syncher.EntityDataAccessor;
 import net.minecraft.network.syncher.EntityDataSerializers;
 import net.minecraft.network.syncher.SynchedEntityData;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.util.Mth;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.damagesource.DamageSource;
@@ -22,11 +26,19 @@ import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.AABB;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-/** A saved rail vehicle with a fixed placement pose; driving and animation are separate future work. */
+/** Saved interaction/render proxy. Authoritative motion belongs to the level's TrainManager. */
 public final class TrainEntity extends Entity {
+    private static final Logger LOGGER = LoggerFactory.getLogger(TrainEntity.class);
     private static final EntityDataAccessor<String> MODEL_ID =
             SynchedEntityData.defineId(TrainEntity.class, EntityDataSerializers.STRING);
+    private TrainAnchor railAnchor;
+    private boolean invalidAnchor;
+    private int lerpSteps;
+    private double targetX, targetY, targetZ;
+    private float targetYaw, targetPitch;
 
     public TrainEntity(EntityType<? extends TrainEntity> type, Level level) {
         super(type, level);
@@ -48,6 +60,63 @@ public final class TrainEntity extends Entity {
         entityData.set(MODEL_ID, id.toString());
     }
 
+    public TrainAnchor getRailAnchor() { return railAnchor; }
+    public boolean hasInvalidAnchor() { return invalidAnchor; }
+
+    public void setRailAnchor(TrainAnchor anchor) {
+        railAnchor = anchor;
+        invalidAnchor = false;
+    }
+
+    /** Updates a running proxy without resetting interpolation history or recomputing bounds per angle. */
+    public void setRailPose(double x, double y, double z, float yaw, float pitch) {
+        super.setYRot(yaw);
+        super.setXRot(pitch);
+        setPos(x, y, z);
+    }
+
+    @Override
+    public void tick() {
+        super.tick();
+        if (level().isClientSide && lerpSteps > 0) {
+            double fraction = 1.0 / lerpSteps;
+            setRailPose(Mth.lerp(fraction, getX(), targetX), Mth.lerp(fraction, getY(), targetY),
+                    Mth.lerp(fraction, getZ(), targetZ),
+                    (float)Mth.rotLerp(fraction, (double)getYRot(), targetYaw),
+                    (float)Mth.lerp(fraction, (double)getXRot(), targetPitch));
+            lerpSteps--;
+        }
+    }
+
+    @Override
+    public void lerpTo(double x, double y, double z, float yaw, float pitch, int steps) {
+        if (steps <= 0 || !level().isClientSide) {
+            setRailPose(x, y, z, yaw, pitch);
+            setOldPosAndRot();
+            lerpSteps = 0;
+            return;
+        }
+        targetX = x;
+        targetY = y;
+        targetZ = z;
+        targetYaw = yaw;
+        targetPitch = pitch;
+        lerpSteps = steps;
+    }
+
+    @Override public double lerpTargetX() { return lerpSteps > 0 ? targetX : getX(); }
+    @Override public double lerpTargetY() { return lerpSteps > 0 ? targetY : getY(); }
+    @Override public double lerpTargetZ() { return lerpSteps > 0 ? targetZ : getZ(); }
+    @Override public float lerpTargetYRot() { return lerpSteps > 0 ? targetYaw : getYRot(); }
+    @Override public float lerpTargetXRot() { return lerpSteps > 0 ? targetPitch : getXRot(); }
+
+    @Override
+    public void recreateFromPacket(ClientboundAddEntityPacket packet) {
+        super.recreateFromPacket(packet);
+        lerpSteps = 0;
+        setOldPosAndRot();
+    }
+
     @Override
     public void onSyncedDataUpdated(EntityDataAccessor<?> key) {
         super.onSyncedDataUpdated(key);
@@ -58,6 +127,19 @@ public final class TrainEntity extends Entity {
     protected void readAdditionalSaveData(CompoundTag tag) {
         var id = ResourceLocation.tryParse(tag.getString("ModelId"));
         entityData.set(MODEL_ID, id == null ? "" : id.toString());
+        railAnchor = null;
+        invalidAnchor = false;
+        if (tag.contains("RailAnchor")) {
+            try {
+                if (!tag.contains("RailAnchor", Tag.TAG_COMPOUND)) {
+                    throw new IllegalArgumentException("RailAnchor must be a compound");
+                }
+                railAnchor = TrainAnchor.load(tag.getCompound("RailAnchor"));
+            } catch (IllegalArgumentException exception) {
+                invalidAnchor = true;
+                LOGGER.warn("Invalid rail anchor for vehicle {}: {}", getUUID(), exception.getMessage());
+            }
+        }
         setNoGravity(true);
         setBoundingBox(makeBoundingBox());
     }
@@ -65,6 +147,7 @@ public final class TrainEntity extends Entity {
     @Override
     protected void addAdditionalSaveData(CompoundTag tag) {
         tag.putString("ModelId", entityData.get(MODEL_ID));
+        if (railAnchor != null) tag.put("RailAnchor", railAnchor.save());
     }
 
     @Override
@@ -81,9 +164,14 @@ public final class TrainEntity extends Entity {
 
     @Override
     protected AABB makeBoundingBox() {
+        return boundsAt(getX(), getY(), getZ(), getYRot(), getXRot());
+    }
+
+    /** The same authored-model bounds used by selection and by server motion-area checks. */
+    public AABB boundsAt(double worldX, double worldY, double worldZ, float yawDegrees, float pitchDegrees) {
         var model = VehicleCatalog.find(getModelId());
         var bounds = model == null ? ModelBounds.MISSING : model.bounds();
-        double yaw = Math.toRadians(getYRot()), pitch = Math.toRadians(getXRot());
+        double yaw = Math.toRadians(yawDegrees), pitch = Math.toRadians(pitchDegrees);
         double cy = Math.cos(yaw), sy = Math.sin(yaw), cp = Math.cos(pitch), sp = Math.sin(pitch);
         double minX = Double.POSITIVE_INFINITY, minY = minX, minZ = minX;
         double maxX = Double.NEGATIVE_INFINITY, maxY = maxX, maxZ = maxX;
@@ -98,8 +186,8 @@ public final class TrainEntity extends Entity {
             minY = Math.min(minY, tiltedY); maxY = Math.max(maxY, tiltedY);
             minZ = Math.min(minZ, rotatedZ); maxZ = Math.max(maxZ, rotatedZ);
         }
-        return new AABB(getX() + minX, getY() + minY, getZ() + minZ,
-                getX() + maxX, getY() + maxY, getZ() + maxZ);
+        return new AABB(worldX + minX, worldY + minY, worldZ + minZ,
+                worldX + maxX, worldY + maxY, worldZ + maxZ);
     }
 
     @Override public boolean isPickable() { return !isRemoved(); }

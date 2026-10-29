@@ -15,31 +15,35 @@ import java.util.stream.IntStream;
 
 /** Rail-only static repetition with endpoint tangent extension. No textures, Minecraft classes, or GPU resources. */
 public final class RailTrackMeshBuilder {
-    public static final double MODEL_SCALE = 0.01;
-    public static final double TOP_OFFSET = 0.25;
-    public static final double PERIOD = 0.5;
     private static final int MAX_VERTICES = 262_144;
     private final TrackGeometry geometry;
     private final int chunkX, chunkZ;
     private final double length;
+    private final double scale, period;
     private final long count;
     private final TrackVector origin;
     private double minX = Double.POSITIVE_INFINITY, minY = minX, minZ = minX;
     private double maxX = Double.NEGATIVE_INFINITY, maxY = maxX, maxZ = maxX;
     private int vertexCount;
 
-    private RailTrackMeshBuilder(TrackGeometry geometry, int chunkX, int chunkZ) {
+    private RailTrackMeshBuilder(TrackGeometry geometry, int chunkX, int chunkZ, double scale, double referencePeriod) {
         this.geometry = geometry;
         this.chunkX = chunkX;
         this.chunkZ = chunkZ;
+        this.scale = scale;
+        period = referencePeriod * scale;
+        if (!Double.isFinite(scale) || scale <= 0 || !Double.isFinite(period) || period <= 0) {
+            throw new IllegalArgumentException("Rail model scale and period must be finite and positive");
+        }
         length = geometry.getLength();
-        if (length / PERIOD >= Long.MAX_VALUE) throw new IllegalArgumentException("Rail model repetition count is too large");
-        count = (long)Math.ceil(length / PERIOD);
+        if (length / period >= Long.MAX_VALUE) throw new IllegalArgumentException("Rail model repetition count is too large");
+        count = (long)Math.ceil(length / period);
         origin = new TrackVector((double)chunkX * 16, Math.floor(geometry.sample(0).position().y() / 16) * 16, (double)chunkZ * 16);
     }
 
-    public static RailTrackMeshData build(TrackGeometry geometry, List<IndexedMesh> sources, int chunkX, int chunkZ) {
-        var builder = new RailTrackMeshBuilder(geometry, chunkX, chunkZ);
+    public static RailTrackMeshData build(TrackGeometry geometry, List<IndexedMesh> sources, int chunkX, int chunkZ,
+                                          double scale, double referencePeriod) {
+        var builder = new RailTrackMeshBuilder(geometry, chunkX, chunkZ, scale, referencePeriod);
         var batches = new ArrayList<RailTrackMeshData.Batch>();
         for (int i = 0; i < sources.size(); i++) {
             var vertices = new FloatArrayList();
@@ -54,7 +58,7 @@ public final class RailTrackMeshBuilder {
     }
 
     private void cells(IndexedMesh source, long first, long end, FloatArrayList vertices, IntArrayList colors) {
-        double a = first * PERIOD, b = Math.min(length, end * PERIOD);
+        double a = first * period, b = Math.min(length, end * period);
         TrackVector middle = geometry.sample(a + (b - a) / 2).position();
         double radius = (b - a) / 2 + 0.001, x = (double)chunkX * 16, z = (double)chunkZ * 16;
         if (middle.x() + radius < x || middle.x() - radius >= x + 16
@@ -67,22 +71,22 @@ public final class RailTrackMeshBuilder {
         }
         // Own an entire repeated module by its within-track interval midpoint, never by individual faces.
         if (Math.floor(middle.x() / 16) != chunkX || Math.floor(middle.z() / 16) != chunkZ) return;
-        double center = first * PERIOD + PERIOD / 2;
+        double center = first * period + period / 2;
         int[] indices = source.indices();
         for (int index : indices) emit(source, index, center, vertices, colors);
     }
 
     private void emit(IndexedMesh mesh, int index, double center, FloatArrayList vertices, IntArrayList colors) {
-        if (++vertexCount > MAX_VERTICES) throw new IllegalArgumentException("RTM rail chunk mesh exceeds 262,144 vertices");
+        if (++vertexCount > MAX_VERTICES) throw new IllegalArgumentException("Rail chunk mesh exceeds 262,144 vertices");
         float[] v = mesh.vertices();
         int offset = index * 8;
-        double distance = v[offset + 2] + center;
+        double distance = v[offset + 2] * scale + center;
         double sampledDistance = Math.clamp(distance, 0, length);
         var pose = geometry.sample(sampledDistance);
         var p = pose.position(); var l = pose.lateral(); var n = pose.normal(); var t = pose.tangent();
         // Preserve overhanging geometry by extending the centerline along its endpoint tangent.
         double extension = distance - sampledDistance;
-        double x = v[offset], y = v[offset + 1] - TOP_OFFSET;
+        double x = v[offset] * scale, y = v[offset + 1] * scale;
         double xw = p.x() + l.x() * x + n.x() * y + t.x() * extension;
         double yw = p.y() + l.y() * x + n.y() * y + t.y() * extension;
         double zw = p.z() + l.z() * x + n.z() * y + t.z() * extension;
@@ -93,7 +97,7 @@ public final class RailTrackMeshBuilder {
         if (normalLength > 0) { nx /= normalLength; ny /= normalLength; nz /= normalLength; }
         for (double value : new double[]{xw - origin.x(), yw - origin.y(), zw - origin.z(), v[offset + 3], v[offset + 4], nx, ny, nz}) {
             float component = (float)value;
-            if (!Float.isFinite(component)) throw new IllegalArgumentException("Non-finite RTM rail vertex");
+            if (!Float.isFinite(component)) throw new IllegalArgumentException("Non-finite rail vertex");
             vertices.add(component);
         }
         colors.add(mesh.colors()[index]);

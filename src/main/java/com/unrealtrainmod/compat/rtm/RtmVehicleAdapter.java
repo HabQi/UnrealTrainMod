@@ -17,6 +17,7 @@ import com.unrealtrainmod.resource.PackageArchive;
 import com.unrealtrainmod.resource.PackageAsset;
 import com.unrealtrainmod.resource.ResourceIds;
 import com.unrealtrainmod.vehicle.VehicleDefinition;
+import com.unrealtrainmod.vehicle.VehicleMotionSpec;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
@@ -59,19 +60,11 @@ final class RtmVehicleAdapter {
             var parts = new ArrayList<VehicleDefinition.Instance>();
             parts.add(new VehicleDefinition.Instance(readSource(json.getAsJsonObject("trainModel2"), archive,
                     prefix, smoothing, cullFaces), new ModelData.Position(0, 0, 0)));
+            var bogiePositions = readBogiePositions(json);
             if (json.has("bogieModel2")) {
                 var bogie = readSource(json.getAsJsonObject("bogieModel2"), archive, prefix, smoothing, cullFaces);
-                var positions = GsonHelper.getAsJsonArray(json, "bogiePos");
-                if (positions.size() != 2) throw new IOException("bogiePos must contain two XYZ positions");
-                for (var position : positions) {
-                    var xyz = position.getAsJsonArray();
-                    if (xyz.size() != 3) throw new IOException("Expected XYZ bogie position");
-                    float x = xyz.get(0).getAsFloat(), y = xyz.get(1).getAsFloat(), z = xyz.get(2).getAsFloat();
-                    if (!Float.isFinite(x) || !Float.isFinite(y) || !Float.isFinite(z)) {
-                        throw new IOException("Non-finite bogie position");
-                    }
-                    parts.add(new VehicleDefinition.Instance(bogie, new ModelData.Position(x, y, z)));
-                }
+                if (bogiePositions.isEmpty()) throw new IOException("bogieModel2 requires bogiePos");
+                for (var position : bogiePositions) parts.add(new VehicleDefinition.Instance(bogie, position));
             }
             var combined = new ModelBounds.Builder();
             for (var part : parts) {
@@ -85,13 +78,48 @@ final class RtmVehicleAdapter {
                 }
                 combined.include(bounds.translated(part.offset()));
             }
-            var definition = new VehicleDefinition(id, name, config,
-                    GsonHelper.getAsString(json, "trainType", ""), parts, combined.build());
+            var bounds = combined.build();
+            var definition = new VehicleDefinition(id, name, config, RtmButtonTexture.read(json, archive, prefix, config),
+                    GsonHelper.getAsString(json, "trainType", ""), parts, bounds,
+                    readMotionSpec(json, bounds, bogiePositions));
             definitions.put(id, definition);
             report.registered(LoadReport.Kind.RTM_VEHICLE);
         } catch (IOException | RuntimeException exception) {
             report.failed(LoadReport.Kind.RTM_VEHICLE, config, exception);
         }
+    }
+
+    private static List<ModelData.Position> readBogiePositions(JsonObject json) throws IOException {
+        if (!json.has("bogiePos")) return List.of();
+        var positions = GsonHelper.getAsJsonArray(json, "bogiePos");
+        if (positions.size() != 2) throw new IOException("bogiePos must contain two XYZ positions");
+        var result = new ArrayList<ModelData.Position>(2);
+        for (var position : positions) {
+            var xyz = position.getAsJsonArray();
+            if (xyz.size() != 3) throw new IOException("Expected XYZ bogie position");
+            float x = xyz.get(0).getAsFloat(), y = xyz.get(1).getAsFloat(), z = xyz.get(2).getAsFloat();
+            if (!Float.isFinite(x) || !Float.isFinite(y) || !Float.isFinite(z)) {
+                throw new IOException("Non-finite bogiePos coordinate");
+            }
+            result.add(new ModelData.Position(x, y, z));
+        }
+        return result;
+    }
+
+    private static VehicleMotionSpec readMotionSpec(JsonObject json, ModelBounds bounds,
+                                                    List<ModelData.Position> bogiePositions) throws IOException {
+        var base = VehicleMotionSpec.fromBounds(bounds, 1);
+        double halfLength = GsonHelper.getAsDouble(json, "trainDistance", 0);
+        if (!Double.isFinite(halfLength)) throw new IOException("trainDistance must be finite");
+        double frontBogie = base.frontBogieOffset(), rearBogie = base.rearBogieOffset();
+        if (!bogiePositions.isEmpty()) {
+            double first = bogiePositions.get(0).z(), second = bogiePositions.get(1).z();
+            frontBogie = Math.max(first, second);
+            rearBogie = Math.min(first, second);
+        }
+        return new VehicleMotionSpec(halfLength > 0 ? 2 * halfLength : base.length(), base.width(), base.height(),
+                base.trackDatum(), halfLength > 0 ? halfLength : base.frontCouplerOffset(),
+                halfLength > 0 ? -halfLength : base.rearCouplerOffset(), frontBogie, rearBogie, 0);
     }
 
     private static ModelSource readSource(JsonObject json, PackageArchive archive, String prefix,

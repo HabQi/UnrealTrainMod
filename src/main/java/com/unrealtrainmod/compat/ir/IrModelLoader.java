@@ -23,9 +23,10 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.function.Predicate;
 import java.util.regex.Pattern;
 
-/** Package-local OBJ/MTL lookup and orientation for a static IR vehicle. No files are extracted. */
+/** Package-local OBJ/MTL lookup and orientation. No files are extracted. */
 public final class IrModelLoader {
     private static final Logger LOGGER = LoggerFactory.getLogger(IrModelLoader.class);
     private static final Charset LEGACY_MTL_CHARSET = Charset.forName("GB18030");
@@ -38,8 +39,18 @@ public final class IrModelLoader {
     private IrModelLoader() {}
 
     public static Imported load(PackageAsset asset) throws IOException {
-        try (var archive = new PackageArchive(asset.archive());
-             var reader = new InputStreamReader(archive.open(asset.entry()), StandardCharsets.UTF_8.newDecoder())) {
+        try (var archive = new PackageArchive(asset.archive())) {
+            return load(archive, asset, IrModelLoader::isVisible);
+        }
+    }
+
+    /** Uses the startup scan's archive; track objects do not inherit vehicle visibility rules. */
+    public static Imported loadRail(PackageArchive archive, PackageAsset asset) throws IOException {
+        return load(archive, asset, ignored -> true);
+    }
+
+    private static Imported load(PackageArchive archive, PackageAsset asset, Predicate<String> visible) throws IOException {
+        try (var reader = new InputStreamReader(archive.open(asset.entry()), StandardCharsets.UTF_8.newDecoder())) {
             var raw = ObjParser.parse(reader, asset.entry(), path -> openMaterial(archive, path));
             var textures = new HashMap<String, ModelTexture>();
             var textureEntries = new HashMap<String, String>();
@@ -65,7 +76,7 @@ public final class IrModelLoader {
                         normals[n + 2] = x;
                     }
                 }
-                parts.add(new ModelData.Part(part.name(), isVisible(part.name()), false, 0, positions, part.faces()));
+                parts.add(new ModelData.Part(part.name(), visible.test(part.name()), false, 0, positions, part.faces()));
             }
             return new Imported(new ModelData(raw.materials(), parts), textures);
         }

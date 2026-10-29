@@ -153,10 +153,11 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
         AABB broadBounds(int chunkX, int chunkZ) {
             double padding = (data.gauge() + 0.9) / 2 + 0.4;
             var model = ClientRailModelManager.INSTANCE.model(data.modelId());
-            if (model != null) padding = Math.max(padding, model.padding());
+            if (model != null) padding = Math.max(padding, model.padding() * model.scaleForGauge(data.gauge()));
             double x = (double)chunkX * 16, z = (double)chunkZ * 16;
-            return new AABB(x - padding, Math.min(data.start().y(), data.end().y()) - 0.4, z - padding,
-                    x + 16 + padding, Math.max(data.start().y(), data.end().y()) + 0.4, z + 16 + padding);
+            double verticalPadding = model == null ? 0.4 : Math.max(0.4, padding);
+            return new AABB(x - padding, Math.min(data.start().y(), data.end().y()) - verticalPadding, z - padding,
+                    x + 16 + padding, Math.max(data.start().y(), data.end().y()) + verticalPadding, z + 16 + padding);
         }
 
         @Override
