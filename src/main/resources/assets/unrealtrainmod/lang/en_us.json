@@ -1,5 +1,8 @@
 {
   "itemGroup.unrealtrainmod": "UnrealTrainMod",
+  "gui.warning": "Please enter the authentication key!",
+  "unrealtrainmod.configuration.showActivationWarning": "Show Activation Key Prompt",
+  "unrealtrainmod.configuration.showActivationWarning.tooltip": "For entertainment purposes only",
   "unrealtrainmod.configuration.section.unrealtrainmod.client.toml": "Client Settings",
   "unrealtrainmod.configuration.section.unrealtrainmod.client.toml.title": "UnrealTrainMod Client Settings",
   "unrealtrainmod.configuration.sortTranslucentTriangles": "Sort Translucent Triangles",

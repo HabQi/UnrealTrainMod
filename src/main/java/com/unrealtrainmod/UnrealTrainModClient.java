@@ -12,6 +12,7 @@ import com.unrealtrainmod.client.ClientThumbnailManager;
 import com.unrealtrainmod.client.PlacedModelRenderer;
 import com.unrealtrainmod.client.TrainEntityRenderer;
 import com.unrealtrainmod.client.StaticModelShader;
+import com.unrealtrainmod.client.gui.ActivationWarningOverlay;
 import com.unrealtrainmod.client.network.ClientPayloadHandlers;
 import com.unrealtrainmod.client.renderer.TrainModelRenderer;
 import com.unrealtrainmod.client.track.ClientTrackCache;
@@ -62,6 +63,7 @@ public class UnrealTrainModClient {
         // Expose the client configuration in the Mods screen.
         container.registerExtensionPoint(IConfigScreenFactory.class, ConfigurationScreen::new);
         NeoForge.EVENT_BUS.addListener(UnrealTrainModClient::onGameShuttingDown);
+        NeoForge.EVENT_BUS.addListener(ActivationWarningOverlay::render);
         NeoForge.EVENT_BUS.addListener(ClientPayloadHandlers::openModelSelector);
         NeoForge.EVENT_BUS.addListener(ClientPayloadHandlers::modelSelectionResult);
         NeoForge.EVENT_BUS.addListener(ClientPayloadHandlers::railSelectionResult);

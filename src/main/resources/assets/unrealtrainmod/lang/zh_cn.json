@@ -1,5 +1,8 @@
 {
   "itemGroup.unrealtrainmod": "UnrealTrainMod",
+  "gui.warning": "请输入激活码！",
+  "unrealtrainmod.configuration.showActivationWarning": "显示激活码提示",
+  "unrealtrainmod.configuration.showActivationWarning.tooltip": "仅为娱乐用途",
   "unrealtrainmod.configuration.section.unrealtrainmod.client.toml": "客户端设置",
   "unrealtrainmod.configuration.section.unrealtrainmod.client.toml.title": "UnrealTrainMod 客户端设置",
   "unrealtrainmod.configuration.sortTranslucentTriangles": "透明三角形排序",

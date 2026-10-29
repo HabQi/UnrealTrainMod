@@ -24,6 +24,12 @@ public final class ClientConfig {
             .translation("unrealtrainmod.configuration.useStaticTranslucentBatches")
             .define("useStaticTranslucentBatches", false);
 
+    public static final ModConfigSpec.BooleanValue SHOW_ACTIVATION_WARNING = BUILDER
+            .comment("Show a flashing authentication key prompt in the top-left corner of the HUD.",
+                    "Visual effect only; no activation is required.")
+            .translation("unrealtrainmod.configuration.showActivationWarning")
+            .define("showActivationWarning", false);
+
     public static final ModConfigSpec SPEC = BUILDER.build();
 
     private ClientConfig() {}
