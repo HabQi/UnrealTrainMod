@@ -79,8 +79,27 @@ public final class TrackPlacementGeometry {
             throw new IllegalArgumentException("Track endpoints need horizontal separation");
         }
         return startCurve == null && endCurve == null ? new StraightTrackGeometry(a, b, grade, gauge)
-                : new BezierTrackGeometry(a, control(start, end, startCurve, startDirected),
-                        control(end, start, endCurve, endDirected), b, grade, gauge);
+                : new BezierTrackGeometry(a, control(start, end, startCurve, endCurve, true, startDirected, endDirected),
+                        control(start, end, startCurve, endCurve, false, startDirected, endDirected), b, grade, gauge);
+    }
+
+    /** An automatic endpoint opposite a directed handle straightens toward that handle's control point. */
+    public static TrackPoint control(TrackVector start, TrackVector end,
+                                     TrackCurveParameters startCurve, TrackCurveParameters endCurve,
+                                     boolean atStart, boolean startDirected, boolean endDirected) {
+        var from = atStart ? start : end;
+        var to = atStart ? end : start;
+        var curve = atStart ? startCurve : endCurve;
+        var otherCurve = atStart ? endCurve : startCurve;
+        boolean directed = atStart ? startDirected : endDirected;
+        boolean otherDirected = atStart ? endDirected : startDirected;
+        if (curve == null && otherCurve != null && otherDirected) {
+            var otherControl = control(to, from, otherCurve, true);
+            // The two control-polygon edges at the automatic end are collinear, giving zero curvature there.
+            return new TrackPoint(from.x() + (otherControl.x() - from.x()) / 3,
+                    from.z() + (otherControl.z() - from.z()) / 3);
+        }
+        return control(from, to, curve, directed);
     }
 
     public static TrackPoint control(TrackVector from, TrackVector to, TrackCurveParameters curve) {
@@ -119,6 +138,20 @@ public final class TrackPlacementGeometry {
                 Math.clamp(Math.hypot(dx, dz) / 3, TrackCurveParameters.MIN_LENGTH, TrackCurveParameters.MAX_LENGTH));
     }
 
+    /** Match the actual draft control point when opening an automatic endpoint in the editor. */
+    public static TrackCurveParameters defaults(TrackVector start, TrackVector end,
+                                                TrackCurveParameters startCurve, TrackCurveParameters endCurve,
+                                                boolean atStart, double playerYaw, boolean startDirected, boolean endDirected) {
+        var curve = atStart ? startCurve : endCurve;
+        if (curve != null) return curve;
+        if (end == null) return defaults(start, null, playerYaw);
+        var from = atStart ? start : end;
+        var control = control(start, end, startCurve, endCurve, atStart, startDirected, endDirected);
+        double dx = control.x() - from.x(), dz = control.z() - from.z();
+        return new TrackCurveParameters(Math.toDegrees(Math.atan2(-dx, dz)),
+                Math.clamp(Math.hypot(dx, dz), TrackCurveParameters.MIN_LENGTH, TrackCurveParameters.MAX_LENGTH));
+    }
+
     /** Oriented from the draft start toward its end, even when horizontal geometry is not yet valid. */
     public static TrackVector endpointTangent(TrackVector start, TrackVector end,
                                               TrackCurveParameters startCurve, TrackCurveParameters endCurve,
@@ -131,8 +164,7 @@ public final class TrackPlacementGeometry {
                                               boolean atStart, double fallbackYaw, boolean startDirected, boolean endDirected) {
         if (end != null) {
             var from = atStart ? start : end;
-            var to = atStart ? end : start;
-            var control = control(from, to, atStart ? startCurve : endCurve, atStart ? startDirected : endDirected);
+            var control = control(start, end, startCurve, endCurve, atStart, startDirected, endDirected);
             double sign = atStart ? 1 : -1;
             double x = (control.x() - from.x()) * sign, z = (control.z() - from.z()) * sign;
             double magnitude = Math.hypot(x, z);

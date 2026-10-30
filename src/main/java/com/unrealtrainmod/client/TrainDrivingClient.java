@@ -12,9 +12,12 @@ import com.unrealtrainmod.train.TrainControlProfile;
 import com.unrealtrainmod.train.TrainControlState.Reverser;
 import java.util.Locale;
 import java.util.ArrayList;
+import java.util.List;
 import com.mojang.blaze3d.platform.InputConstants;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.Font;
+import net.minecraft.locale.Language;
 import net.minecraft.network.chat.Component;
 import net.minecraft.util.FormattedCharSequence;
 import net.neoforged.neoforge.client.event.ClientPlayerNetworkEvent;
@@ -46,6 +49,11 @@ public final class TrainDrivingClient {
     private static int handle, silence, heartbeat;
     private static Reverser reverser;
     private static boolean emergency;
+    private static TrainControlSyncPayload hudSnapshot;
+    private static Language hudLanguage;
+    private static Font hudFont;
+    private static int hudWidth;
+    private static List<FormattedCharSequence> hudRows = List.of();
 
     private TrainDrivingClient() {}
 
@@ -149,8 +157,20 @@ public final class TrainDrivingClient {
     public static void render(RenderGuiEvent.Post event) {
         var mc = Minecraft.getInstance();
         if (!riding() || mc.options.hideGui) return;
-        var state = snapshot;
         var graphics = event.getGuiGraphics();
+        int width = Math.min(graphics.guiWidth() - 24, 430);
+        // The server snapshot changes around 10 Hz; rendering may run hundreds of times per second.
+        if (hudSnapshot != snapshot || hudWidth != width || hudLanguage != Language.getInstance() || hudFont != mc.font) {
+            rebuildHud(mc, width);
+        }
+        int height = hudRows.size() * 10 + 12;
+        int x = 12, y = Math.max(12, graphics.guiHeight() - height - 48);
+        graphics.fill(x - 4, y - 4, x + width + 4, y + height - 4, 0xB0000000);
+        for (int i = 0; i < hudRows.size(); i++) graphics.drawString(mc.font, hudRows.get(i), x, y + i * 10, 0xFFFFFF, false);
+    }
+
+    private static void rebuildHud(Minecraft mc, int width) {
+        var state = snapshot;
         var direction = Component.translatable(PREFIX + "direction." + state.reverser().name().toLowerCase(Locale.ROOT));
         boolean releasing = state.handle() > 0 && state.brakeForce() > 0 && state.reverser() != Reverser.NEUTRAL;
         var condition = Component.translatable(PREFIX + (state.emergency() ? "state.emergency"
@@ -166,13 +186,13 @@ public final class TrainDrivingClient {
             Component.translatable(PREFIX + "help", POWER.getTranslatedKeyMessage(), BRAKE.getTranslatedKeyMessage(),
                     REVERSER.getTranslatedKeyMessage(), EMERGENCY.getTranslatedKeyMessage(), mc.options.keyShift.getTranslatedKeyMessage())
         };
-        int width = Math.min(graphics.guiWidth() - 24, 430);
         var wrapped = new ArrayList<FormattedCharSequence>();
         for (var line : lines) wrapped.addAll(mc.font.split(line, width));
-        int height = wrapped.size() * 10 + 12;
-        int x = 12, y = Math.max(12, graphics.guiHeight() - height - 48);
-        graphics.fill(x - 4, y - 4, x + width + 4, y + height - 4, 0xB0000000);
-        for (int i = 0; i < wrapped.size(); i++) graphics.drawString(mc.font, wrapped.get(i), x, y + i * 10, 0xFFFFFF, false);
+        hudRows = List.copyOf(wrapped);
+        hudSnapshot = state;
+        hudWidth = width;
+        hudLanguage = Language.getInstance();
+        hudFont = mc.font;
     }
 
     private static String number(double value) { return String.format(Locale.ROOT, "%.2f", value); }
@@ -184,6 +204,10 @@ public final class TrainDrivingClient {
         silence = heartbeat = handle = 0;
         reverser = null;
         emergency = false;
+        hudSnapshot = null;
+        hudLanguage = null;
+        hudFont = null;
+        hudRows = List.of();
     }
 
     public static void unload(LevelEvent.Unload event) { if (event.getLevel().isClientSide()) clear(); }

@@ -307,6 +307,7 @@
   "commands.unrealtrainmod.turnout.trailing_approach": "尚未挤开，首个转向架到达 A 前最后 10% 弧长时触发",
   "commands.unrealtrainmod.turnout.trailing_return": "已挤开，等待整列退出保护区",
   "gui.unrealtrainmod.track_curve.outward_hint": "已有端点使用有向控制柄，选定终点后不会自动翻向；可手动调节方向，恢复自动可清除本端设置。",
+  "gui.unrealtrainmod.track_curve.automatic_horizontal_hint": "自动控制柄随线路计算；另一端使用有向控制柄时，本端随其控制点逐渐收直。修改数值可手动调整。",
   "key.categories.unrealtrainmod.driving": "列车驾驶",
   "key.unrealtrainmod.driving.power": "手柄向牵引侧升挡",
   "key.unrealtrainmod.driving.brake": "手柄向制动侧降挡",

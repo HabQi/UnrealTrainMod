@@ -283,6 +283,7 @@ public final class TrackCurveScreen extends Screen {
             return Component.translatable(feedback.translationKey());
         }
         if (open.horizontalLocked() && !verticalPage) return label("direction_locked");
+        if (!open.turnout() && !verticalPage && automatic) return label("automatic_horizontal_hint");
         if (!open.turnout() && !verticalPage && !automatic && ClientTrackConstruction.INSTANCE.horizontalDirected(open.start())) {
             return label("outward_hint");
         }

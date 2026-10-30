@@ -326,9 +326,9 @@ public final class TrackConstructionManager {
         session.editorYaw = player.getYRot();
         session.editStart = start;
         TrackCurveParameters curve = start ? session.startCurve : session.endCurve;
-        TrackPlacementEndpoint other = start ? session.end : session.start;
-        TrackCurveParameters initial = curve != null ? curve : TrackPlacementGeometry.defaults(
-                selected.position(), other == null ? null : other.position(), player.getYRot());
+        TrackCurveParameters initial = TrackPlacementGeometry.defaults(session.start.position(),
+                session.end == null ? null : session.end.position(), session.startCurve, session.endCurve,
+                start, player.getYRot(), session.startHorizontalDirected, session.endHorizontalDirected);
         Feedback feedback = session.end == null ? Feedback.START : validate(graph, session);
         publish(player, session, feedback);
         PacketDistributor.sendToPlayer(player, new OpenTrackCurvePayload(player.serverLevel().dimension().location(),

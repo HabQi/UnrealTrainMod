@@ -123,7 +123,11 @@ public final class TrainEntity extends Entity {
         var body = pose.body();
         var p = body.position();
         setRailPose(p.x(), p.y(), p.z(), body.yaw(), body.pitch());
-        for (var passenger : getPassengers()) positionRider(passenger);
+        // ClientLevel snapshots each rider's old position after ticking the vehicle. Moving a
+        // client rider here would erase its interpolation interval before rideTick positions it.
+        if (!level().isClientSide) {
+            for (var passenger : getPassengers()) positionRider(passenger);
+        }
     }
 
     public VehiclePose renderPose(float partialTick) {

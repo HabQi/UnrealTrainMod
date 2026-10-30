@@ -314,6 +314,7 @@
   "commands.unrealtrainmod.turnout.trailing_approach": "Approaching; the leading bogie throws the turnout in the final 10% of arc length before A",
   "commands.unrealtrainmod.turnout.trailing_return": "Thrown; waiting for the entire consist to clear the protection area",
   "gui.unrealtrainmod.track_curve.outward_hint": "Connected endpoints use directed handles and do not flip toward a new endpoint. Adjust the angle manually, or restore automatic to clear this endpoint setting.",
+  "gui.unrealtrainmod.track_curve.automatic_horizontal_hint": "Automatic handles follow the alignment. Opposite a directed handle, this end gradually straightens toward its control point. Edit a value to adjust manually.",
   "key.categories.unrealtrainmod.driving": "Train driving",
   "key.unrealtrainmod.driving.power": "Move handle toward power",
   "key.unrealtrainmod.driving.brake": "Move handle toward braking",
