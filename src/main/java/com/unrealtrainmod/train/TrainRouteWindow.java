@@ -67,6 +67,11 @@ final class TrainRouteWindow {
             min = Math.min(min, offset);
             max = Math.max(max, offset);
         }
+        for (var car : train.cars()) {
+            var model = VehicleCatalog.find(car.modelId());
+            min = Math.min(min, car.offset() + TrackOccupancyManager.rear(model));
+            max = Math.max(max, car.offset() + TrackOccupancyManager.front(model));
+        }
         double speed = train.configuredSpeed();
         double ahead = Math.max(64, 2 * Math.abs(speed));
         double before = Math.max(0, (speed > 0 ? REAR_MARGIN : ahead) - (local + min));
@@ -97,8 +102,9 @@ final class TrainRouteWindow {
     List<Integer> occurrences(UUID id) { return segments.getOrDefault(id, List.of()); }
     void setProgress(double progress) { this.progress = progress; }
     void requestRefresh() { refreshRequested = true; }
+    boolean refreshRequested() { return refreshRequested; }
 
-    /** Includes the full chain between every member's reference point and bogies. */
+    /** Includes the full chain between all member reference points, bodies, couplers and bogies. */
     boolean occupies(UUID segment, TrainConsist train) {
         var indices = occurrences(segment);
         if (indices.isEmpty()) return false;
@@ -175,6 +181,9 @@ final class TrainRouteWindow {
                     ? 0 : reference + spec.rearBogieOffset();
             min = Math.min(min, Math.min(reference, Math.min(front, rear)));
             max = Math.max(max, Math.max(reference, Math.max(front, rear)));
+            var model = VehicleCatalog.find(car.modelId());
+            min = Math.min(min, reference + TrackOccupancyManager.rear(model));
+            max = Math.max(max, reference + TrackOccupancyManager.front(model));
         }
         // Whole-consist range checks own validity; absorb endpoint arithmetic rounding here.
         return new Span(Math.clamp(min, 0, route.getLength()), Math.clamp(max, 0, route.getLength()));

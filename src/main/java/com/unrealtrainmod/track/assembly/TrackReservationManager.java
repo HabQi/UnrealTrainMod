@@ -8,10 +8,15 @@ import com.unrealtrainmod.entity.TrainEntity;
 import com.unrealtrainmod.track.TrackGraph;
 import com.unrealtrainmod.vehicle.VehicleCatalog;
 import com.unrealtrainmod.vehicle.VehiclePose;
+import com.unrealtrainmod.train.TrackOccupancyManager.Interval;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.function.Predicate;
+import java.util.function.Supplier;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.phys.AABB;
 import org.joml.Vector3f;
@@ -22,13 +27,19 @@ public final class TrackReservationManager {
     private final TrackGraph graph;
     private final Function<UUID, List<UUID>> members;
     private final Predicate<UUID> confirmed;
+    private final Function<UUID, List<Interval>> occupancy;
+    private final Supplier<List<UUID>> representatives;
+    private final Map<UUID, List<AABB>> corridors = new HashMap<>();
 
     public TrackReservationManager(ServerLevel level, TrackGraph graph, Function<UUID, List<UUID>> members,
-                                   Predicate<UUID> confirmed) {
+                                   Predicate<UUID> confirmed, Function<UUID, List<Interval>> occupancy,
+                                   Supplier<List<UUID>> representatives) {
         this.level = level;
         this.graph = graph;
         this.members = members;
         this.confirmed = confirmed;
+        this.occupancy = occupancy;
+        this.representatives = representatives;
     }
 
     public static AABB area(TrainEntity entity) {
@@ -49,6 +60,7 @@ public final class TrackReservationManager {
 
     public void refreshLoaded() {
         var assemblies = graph.assemblies();
+        corridors.keySet().removeIf(id -> assemblies.stream().noneMatch(assembly -> assembly.id().equals(id)));
         if (assemblies.isEmpty()) return;
         for (var assembly : assemblies) {
             if (assembly.occupant() == null) continue;
@@ -59,30 +71,32 @@ public final class TrackReservationManager {
                     complete = false;
                     break;
                 }
-                occupied |= area(entity).intersects(assembly.bounds());
+                occupied |= touches(assembly, List.of(area(entity)), occupancy.apply(id));
             }
             if (complete && !occupied) graph.setAssemblyOccupant(assembly.id(), null);
         }
+        // Persisted footprints protect a turnout even before its member entities are loaded.
+        for (UUID owner : representatives.get()) acquire(members.apply(owner), List.of(), occupancy.apply(owner));
         for (var entity : level.getAllEntities()) {
             if (entity instanceof TrainEntity train && !train.isRemoved()
                     && (train.getRailAnchor() != null || train.hasInvalidAnchor())) {
-                acquire(members.apply(train.getUUID()), List.of(area(train)));
+                acquire(members.apply(train.getUUID()), List.of(area(train)), occupancy.apply(train.getUUID()));
             }
         }
     }
 
-    public boolean available(List<UUID> owners, List<AABB> areas) {
+    public boolean available(List<UUID> owners, List<AABB> areas, List<Interval> intervals) {
         for (var assembly : graph.assemblies()) {
-            if (touches(assembly, areas) && assembly.occupant() != null && !owners.contains(assembly.occupant())) return false;
+            if (touches(assembly, areas, intervals) && assembly.occupant() != null && !owners.contains(assembly.occupant())) return false;
         }
         return true;
     }
 
     /** Checks every target before acquiring any lock. Call before accepting a movement sample. */
-    public boolean acquire(List<UUID> owners, List<AABB> areas) {
-        if (!available(owners, areas)) return false;
+    public boolean acquire(List<UUID> owners, List<AABB> areas, List<Interval> intervals) {
+        if (!available(owners, areas, intervals)) return false;
         for (var assembly : graph.assemblies()) {
-            if (touches(assembly, areas) && assembly.occupant() == null) {
+            if (touches(assembly, areas, intervals) && assembly.occupant() == null) {
                 graph.setAssemblyOccupant(assembly.id(), owners.getFirst());
             }
         }
@@ -90,9 +104,9 @@ public final class TrackReservationManager {
     }
 
     /** Call only with a complete, validated member group. Missing members retain their locks. */
-    public void releaseOutside(List<UUID> owners, List<AABB> actual) {
+    public void releaseOutside(List<UUID> owners, List<AABB> actual, List<Interval> intervals) {
         for (var assembly : graph.assemblies()) {
-            if (assembly.occupant() != null && owners.contains(assembly.occupant()) && !touches(assembly, actual)) {
+            if (assembly.occupant() != null && owners.contains(assembly.occupant()) && !touches(assembly, actual, intervals)) {
                 graph.setAssemblyOccupant(assembly.id(), null);
             }
         }
@@ -110,11 +124,30 @@ public final class TrackReservationManager {
         }
     }
 
-    public boolean touchesTurnout(List<AABB> areas) {
-        return graph.assemblies().stream().anyMatch(assembly -> touches(assembly, areas));
+    public boolean touchesTurnout(List<AABB> areas, List<Interval> intervals) {
+        return graph.assemblies().stream().anyMatch(assembly -> touches(assembly, areas, intervals));
     }
 
-    private static boolean touches(TrackAssemblyInstance assembly, List<AABB> areas) {
-        return areas.stream().anyMatch(area -> area.intersects(assembly.bounds()));
+    private boolean touches(TrackAssemblyInstance assembly, List<AABB> areas, List<Interval> intervals) {
+        if (intervals.stream().anyMatch(interval -> assembly.segments().contains(interval.segmentId()))) return true;
+        if (areas.stream().noneMatch(area -> area.intersects(assembly.bounds()))) return false;
+        var corridor = corridors.computeIfAbsent(assembly.id(), ignored -> {
+            var result = new ArrayList<AABB>();
+            double width = assembly.gauge() / 2 + 0.1;
+            for (UUID id : assembly.segments()) {
+                var geometry = graph.segment(id).geometry();
+                int count = (int)Math.ceil(geometry.getLength() / 0.5);
+                var previous = geometry.sample(0).position();
+                for (int i = 1; i <= count; i++) {
+                    var next = geometry.sample(geometry.getLength() * i / count).position();
+                    result.add(new AABB(Math.min(previous.x(), next.x()) - width, Math.min(previous.y(), next.y()) - 0.25,
+                            Math.min(previous.z(), next.z()) - width, Math.max(previous.x(), next.x()) + width,
+                            Math.max(previous.y(), next.y()) + 3, Math.max(previous.z(), next.z()) + width));
+                    previous = next;
+                }
+            }
+            return List.copyOf(result);
+        });
+        return areas.stream().anyMatch(area -> corridor.stream().anyMatch(area::intersects));
     }
 }

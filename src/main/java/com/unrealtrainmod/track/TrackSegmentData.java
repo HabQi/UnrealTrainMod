@@ -4,9 +4,6 @@
  */
 package com.unrealtrainmod.track;
 
-import com.unrealtrainmod.track.geometry.BezierTrackGeometry;
-import com.unrealtrainmod.track.geometry.LinearGrade;
-import com.unrealtrainmod.track.geometry.StraightTrackGeometry;
 import com.unrealtrainmod.track.geometry.TrackGeometry;
 import com.unrealtrainmod.track.geometry.TrackPoint;
 import com.unrealtrainmod.track.geometry.TrackVector;
@@ -16,7 +13,7 @@ import java.util.UUID;
 
 /** Rendering definition only; the client does not own or reconstruct the server's topology. */
 public record TrackSegmentData(UUID id, TrackSegment.Type type, TrackVector start, TrackVector end,
-                               double gauge, List<TrackPoint> controls, String modelId) {
+                               double gauge, List<TrackPoint> controls, List<TrackPoint> verticalControls, String modelId) {
     public TrackSegmentData {
         Objects.requireNonNull(id);
         Objects.requireNonNull(type);
@@ -27,22 +24,23 @@ public record TrackSegmentData(UUID id, TrackSegment.Type type, TrackVector star
         }
         if (!Double.isFinite(gauge) || gauge <= 0) throw new IllegalArgumentException("Invalid track gauge");
         controls = List.copyOf(controls);
+        verticalControls = List.copyOf(verticalControls);
         if (controls.size() != (type == TrackSegment.Type.BEZIER ? 2 : 0)) {
             throw new IllegalArgumentException("Control count does not match track type");
+        }
+        if (!verticalControls.isEmpty() && verticalControls.size() != 2) {
+            throw new IllegalArgumentException("Invalid vertical control count");
         }
     }
 
     public static TrackSegmentData from(TrackGraph graph, TrackSegment segment) {
-        List<TrackPoint> controls = segment.geometry() instanceof BezierTrackGeometry bezier
-                ? List.of(bezier.control1(), bezier.control2()) : List.of();
+        var definition = TrackGeometryDefinition.from(segment.geometry());
         TrackNode start = graph.node(segment.startNodeId()), end = graph.node(segment.endNodeId());
-        return new TrackSegmentData(segment.id(), segment.type(), start.position(), end.position(), start.gauge(), controls, segment.modelId());
+        return new TrackSegmentData(segment.id(), definition.type(), start.position(), end.position(), start.gauge(),
+                definition.controls(), definition.verticalControls(), segment.modelId());
     }
 
     public TrackGeometry createGeometry() {
-        TrackPoint a = new TrackPoint(start.x(), start.z()), b = new TrackPoint(end.x(), end.z());
-        LinearGrade grade = new LinearGrade(start.y(), end.y());
-        return type == TrackSegment.Type.STRAIGHT ? new StraightTrackGeometry(a, b, grade, gauge)
-                : new BezierTrackGeometry(a, controls.get(0), controls.get(1), b, grade, gauge);
+        return new TrackGeometryDefinition(controls, verticalControls).create(start, end, gauge);
     }
 }

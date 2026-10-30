@@ -36,6 +36,16 @@ final class ArcLengthTable {
         return distances[distances.length - 1];
     }
 
+    double distanceAt(double parameter) {
+        if (parameter <= 0) return 0;
+        if (parameter >= 1) return length();
+        int found = Arrays.binarySearch(parameters, parameter);
+        if (found >= 0) return distances[found];
+        int upper = -found - 1, lower = upper - 1;
+        double fraction = (parameter - parameters[lower]) / (parameters[upper] - parameters[lower]);
+        return Math.fma(fraction, distances[upper] - distances[lower], distances[lower]);
+    }
+
     double parameterAt(double distance) {
         if (distance <= 0) return 0;
         if (distance >= length()) return 1;

@@ -9,7 +9,9 @@ import com.unrealtrainmod.track.TrackCurveParameters;
 import com.unrealtrainmod.track.TrackNode;
 import com.unrealtrainmod.track.TrackSegment;
 import com.unrealtrainmod.track.assembly.TrackAssemblyInstance;
-import com.unrealtrainmod.track.geometry.BezierTrackGeometry;
+import com.unrealtrainmod.track.TrackGeometryDefinition;
+import com.unrealtrainmod.track.TrackVerticalCurveParameters;
+import java.util.List;
 import com.unrealtrainmod.track.geometry.TrackPoint;
 import com.unrealtrainmod.track.geometry.TrackVector;
 import java.nio.file.Files;
@@ -32,7 +34,7 @@ import net.minecraft.world.level.storage.LevelResource;
 public final class TrackSavedData extends SavedData {
     public static final int MAX_VOLUME_BLOCKS = 16_384;
     private static final String NAME = "unrealtrainmod_tracks";
-    private static final int FORMAT_VERSION = 6;
+    private static final int FORMAT_VERSION = 7;
     private static final Factory<TrackSavedData> FACTORY =
             new Factory<>(TrackSavedData::new, (tag, registries) -> load(tag));
     private final TrackGraph graph = new TrackGraph(this::setDirty);
@@ -73,7 +75,8 @@ public final class TrackSavedData extends SavedData {
             CompoundTag node = nodes.getCompound(i);
             data.graph.addNode(readUuid(node, "Id"),
                     new TrackVector(readDouble(node, "X"), readDouble(node, "Y"), readDouble(node, "Z")),
-                    readDouble(node, "Gauge"), tag.getInt("Version") >= 3 ? readCurve(node) : null);
+                    readDouble(node, "Gauge"), tag.getInt("Version") >= 3 ? readCurve(node) : null,
+                    tag.getInt("Version") >= 7 ? readVerticalCurve(node) : null);
         }
         for (int i = 0; i < segments.size(); i++) {
             CompoundTag segment = segments.getCompound(i);
@@ -85,12 +88,17 @@ public final class TrackSavedData extends SavedData {
                 if (segment.getString("ModelId").isBlank()) throw new IllegalArgumentException("Blank track model ID");
                 modelId = ResourceLocation.parse(segment.getString("ModelId")).toString();
             }
-            switch (segment.getString("Type")) {
-                case "straight" -> data.graph.addStraight(id, start, end, modelId);
-                case "bezier" -> data.graph.addBezier(id, start, end,
-                        readPoint(segment, "Control1"), readPoint(segment, "Control2"), modelId);
+            List<TrackPoint> controls = switch (segment.getString("Type")) {
+                case "straight" -> List.of();
+                case "bezier" -> List.of(readPoint(segment, "Control1"), readPoint(segment, "Control2"));
                 default -> throw new IllegalArgumentException("Unknown segment type: " + segment.getString("Type"));
+            };
+            List<TrackPoint> vertical = tag.getInt("Version") >= 7 && segment.contains("VerticalControl1")
+                    ? List.of(readPoint(segment, "VerticalControl1"), readPoint(segment, "VerticalControl2")) : List.of();
+            if (segment.contains("VerticalControl1") != segment.contains("VerticalControl2")) {
+                throw new IllegalArgumentException("Incomplete vertical controls");
             }
+            data.graph.addDefined(id, start, end, new TrackGeometryDefinition(controls, vertical), modelId);
             if (tag.getInt("Version") >= 4 && segment.contains("Blocks")) {
                 data.volumes.put(id, readVolume(segment));
             }
@@ -123,6 +131,14 @@ public final class TrackSavedData extends SavedData {
                 curve.putDouble("Length", node.curve().length());
                 entry.put("Curve", curve);
             }
+            if (node.verticalCurve() != null) {
+                var curve = node.verticalCurve();
+                var vertical = new CompoundTag();
+                vertical.putDouble("Grade", curve.grade());
+                vertical.putDouble("Length", curve.length());
+                vertical.putDouble("ReferenceYaw", curve.referenceYaw());
+                entry.put("VerticalCurve", vertical);
+            }
             nodes.add(entry);
         }
         tag.put("Nodes", nodes);
@@ -135,12 +151,15 @@ public final class TrackSavedData extends SavedData {
             if (segment.modelId() != null) entry.putString("ModelId", segment.modelId());
             Map<BlockPos, Integer> volume = volumes.get(segment.id());
             if (volume != null) writeVolume(entry, volume);
-            if (segment.geometry() instanceof BezierTrackGeometry bezier) {
-                entry.putString("Type", "bezier");
-                entry.put("Control1", writePoint(bezier.control1()));
-                entry.put("Control2", writePoint(bezier.control2()));
-            } else {
-                entry.putString("Type", "straight");
+            var definition = TrackGeometryDefinition.from(segment.geometry());
+            entry.putString("Type", definition.controls().isEmpty() ? "straight" : "bezier");
+            if (!definition.controls().isEmpty()) {
+                entry.put("Control1", writePoint(definition.controls().get(0)));
+                entry.put("Control2", writePoint(definition.controls().get(1)));
+            }
+            if (!definition.verticalControls().isEmpty()) {
+                entry.put("VerticalControl1", writePoint(definition.verticalControls().get(0)));
+                entry.put("VerticalControl2", writePoint(definition.verticalControls().get(1)));
             }
             segments.add(entry);
         }
@@ -188,6 +207,14 @@ public final class TrackSavedData extends SavedData {
         if (!node.contains("Curve", Tag.TAG_COMPOUND)) throw new IllegalArgumentException("Invalid node curve");
         CompoundTag curve = node.getCompound("Curve");
         return new TrackCurveParameters(readDouble(curve, "Angle"), readDouble(curve, "Length"));
+    }
+
+    private static TrackVerticalCurveParameters readVerticalCurve(CompoundTag node) {
+        if (!node.contains("VerticalCurve")) return null;
+        if (!node.contains("VerticalCurve", Tag.TAG_COMPOUND)) throw new IllegalArgumentException("Invalid vertical curve");
+        var curve = node.getCompound("VerticalCurve");
+        return new TrackVerticalCurveParameters(readDouble(curve, "Grade"), readDouble(curve, "Length"),
+                readDouble(curve, "ReferenceYaw"));
     }
 
     private static ListTag readList(CompoundTag tag, String key) {

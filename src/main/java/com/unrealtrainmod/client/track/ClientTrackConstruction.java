@@ -13,6 +13,9 @@ import com.unrealtrainmod.network.payload.TrackConstructionPayload.Phase;
 import com.unrealtrainmod.network.payload.OpenTrackCurvePayload;
 import com.unrealtrainmod.network.payload.TrackCurveResultPayload;
 import com.unrealtrainmod.track.TrackCurveParameters;
+import com.unrealtrainmod.track.TrackVerticalCurveParameters;
+import com.unrealtrainmod.track.geometry.TrackVector;
+import com.unrealtrainmod.track.geometry.VerticalTrackGeometry;
 import com.unrealtrainmod.track.TrackPlacementGeometry;
 import com.unrealtrainmod.track.geometry.TrackGeometry;
 import java.util.UUID;
@@ -31,8 +34,12 @@ public final class ClientTrackConstruction {
     private ClientLevel world;
     private TrackConstructionPayload draft;
     private TrackGeometry geometry;
+    private TrackGeometry horizontalGeometry;
+    private boolean startVerticalEdited, endVerticalEdited;
     private TrackCurveParameters startCurve;
     private TrackCurveParameters endCurve;
+    private TrackVerticalCurveParameters startVertical;
+    private TrackVerticalCurveParameters endVertical;
     private Feedback previewFeedback;
 
     private ClientTrackConstruction() {}
@@ -81,22 +88,59 @@ public final class ClientTrackConstruction {
                 && draft.revision().equals(revision);
     }
 
-    public void editPreview(boolean start, TrackCurveParameters curve) {
+    public void editPreview(boolean start, TrackCurveParameters curve, TrackVerticalCurveParameters vertical,
+                            boolean horizontalEdited, boolean verticalEdited) {
         if (draft == null) return;
-        startCurve = start ? curve : draft.startCurve();
-        endCurve = start ? draft.endCurve() : curve;
+        startCurve = start && horizontalEdited ? curve : draft.startCurve();
+        endCurve = !start && horizontalEdited ? curve : draft.endCurve();
+        if (verticalEdited && vertical != null) {
+            var tangent = endpointTangent(start, vertical.referenceYaw());
+            vertical = new TrackVerticalCurveParameters(vertical.grade(), vertical.length(), TrackVerticalCurveParameters.yaw(tangent));
+        }
+        startVertical = start && verticalEdited ? vertical : draft.startVertical();
+        endVertical = !start && verticalEdited ? vertical : draft.endVertical();
+        startVerticalEdited = start && verticalEdited;
+        endVerticalEdited = !start && verticalEdited;
         updateGeometry();
+    }
+
+    public TrackVector endpointTangent(boolean start, double fallbackYaw) {
+        return TrackPlacementGeometry.endpointTangent(draft.start().position(),
+                draft.end() == null ? null : draft.end().position(), startCurve, endCurve, start, fallbackYaw);
+    }
+
+    public TrackVerticalCurveParameters previewVertical(boolean start) { return start ? startVertical : endVertical; }
+
+    public TrackVerticalCurveParameters defaultVerticalParameters(boolean start, double fallbackYaw) {
+        var tangent = endpointTangent(start, fallbackYaw);
+        double grade = 0, length = 1;
+        if (draft.end() != null) {
+            try {
+                var flat = horizontalGeometry != null ? horizontalGeometry : TrackPlacementGeometry.horizontal(
+                        draft.start().position(), draft.end().position(), draft.gauge(), startCurve, endCurve);
+                grade = (draft.end().position().y() - draft.start().position().y()) / flat.getLength() * 1000;
+                length = Math.clamp(flat.getLength() / 3, TrackCurveParameters.MIN_LENGTH, TrackCurveParameters.MAX_LENGTH);
+            } catch (IllegalArgumentException exception) {
+                // Keep both pages editable while the horizontal draft is invalid.
+            }
+        }
+        return new TrackVerticalCurveParameters(grade, length, TrackVerticalCurveParameters.yaw(tangent));
     }
 
     public void restorePreview() {
         if (draft == null) return;
         startCurve = draft.startCurve();
         endCurve = draft.endCurve();
+        startVertical = draft.startVertical();
+        endVertical = draft.endVertical();
+        startVerticalEdited = false;
+        endVerticalEdited = false;
         updateGeometry();
     }
 
     private void updateGeometry() {
         geometry = null;
+        horizontalGeometry = null;
         previewFeedback = draft.end() == null ? Feedback.START : Feedback.READY;
         if (draft.end() == null) return;
         if (draft.validation() == Feedback.GAUGE_MISMATCH || draft.validation() == Feedback.SAME_NODE) {
@@ -111,10 +155,27 @@ public final class ClientTrackConstruction {
             return;
         }
         try {
-            geometry = TrackPlacementGeometry.create(a, b, draft.gauge(), startCurve, endCurve);
+            if (startVertical != null || endVertical != null) {
+                horizontalGeometry = TrackPlacementGeometry.horizontal(a, b, draft.gauge(), startCurve, endCurve);
+                double length = Math.clamp(horizontalGeometry.getLength() / 3,
+                        TrackCurveParameters.MIN_LENGTH, TrackCurveParameters.MAX_LENGTH);
+                if (draft.startVerticalInferred() && !startVerticalEdited && startVertical != null) {
+                    startVertical = new TrackVerticalCurveParameters(startVertical.grade(), length, startVertical.referenceYaw());
+                }
+                if (draft.endVerticalInferred() && !endVerticalEdited && endVertical != null) {
+                    endVertical = new TrackVerticalCurveParameters(endVertical.grade(), length, endVertical.referenceYaw());
+                }
+                geometry = TrackPlacementGeometry.withVertical(horizontalGeometry, a.y(), b.y(), startVertical, endVertical);
+            } else geometry = TrackPlacementGeometry.create(a, b, draft.gauge(), startCurve, endCurve);
             if (geometry.getLength() > TrackPlacementGeometry.MAX_LENGTH) {
                 previewFeedback = Feedback.TOO_LONG;
             }
+            if ((draft.startVerticalLocked() && (startVertical == null || startVertical.grade() != 0))
+                    || (draft.endVerticalLocked() && (endVertical == null || endVertical.grade() != 0))) {
+                previewFeedback = Feedback.FLAT_PORT;
+            }
+        } catch (VerticalTrackGeometry.InvalidHandlesException exception) {
+            previewFeedback = Feedback.VERTICAL_HANDLES;
         } catch (IllegalArgumentException exception) {
             previewFeedback = Feedback.INVALID_GEOMETRY;
         }
@@ -138,6 +199,7 @@ public final class ClientTrackConstruction {
 
     TrackConstructionPayload draft() { return draft; }
     TrackGeometry geometry() { return geometry; }
+    TrackGeometry horizontalGeometry() { return horizontalGeometry; }
     TrackCurveParameters startCurve() { return startCurve; }
     TrackCurveParameters endCurve() { return endCurve; }
 
@@ -152,8 +214,13 @@ public final class ClientTrackConstruction {
         world = null;
         draft = null;
         geometry = null;
+        horizontalGeometry = null;
+        startVerticalEdited = false;
+        endVerticalEdited = false;
         startCurve = null;
         endCurve = null;
+        startVertical = null;
+        endVertical = null;
         previewFeedback = null;
     }
 }

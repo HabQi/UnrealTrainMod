@@ -17,6 +17,8 @@ import com.unrealtrainmod.network.payload.OpenTrackCurvePayload;
 import com.unrealtrainmod.network.payload.SetTrackCurvePayload;
 import com.unrealtrainmod.network.payload.TrackCurveResultPayload;
 import com.unrealtrainmod.track.TrackCurveParameters;
+import com.unrealtrainmod.track.TrackVerticalCurveParameters;
+import com.unrealtrainmod.track.geometry.VerticalTrackGeometry;
 import com.unrealtrainmod.track.TrackGraph;
 import com.unrealtrainmod.track.TrackGraphException;
 import com.unrealtrainmod.track.TrackNode;
@@ -128,12 +130,21 @@ public final class TrackConstructionManager {
             session = new Session(player, selected);
             session.gauge = selected.nodeId() == null ? DEFAULT_GAUGE : graph.node(selected.nodeId()).gauge();
             session.startCurve = savedCurve(graph, selected);
+            session.startVertical = savedVertical(graph, selected);
+            session.startVerticalInferred = session.startVertical == null;
+            if (session.startVerticalInferred) session.startVertical = inferVertical(graph, selected, 1);
+            updateInferredVertical(graph, session);
             SESSIONS.put(player.getUUID(), session);
             publish(player, session, Feedback.START);
         } else if (refreshStart(player, graph, session)) {
             session.end = selected;
             session.endCurve = savedCurve(graph, selected);
             session.endEdited = false;
+            session.endVertical = savedVertical(graph, selected);
+            session.endVerticalEdited = false;
+            session.endVerticalInferred = session.endVertical == null;
+            if (session.endVerticalInferred) session.endVertical = inferVertical(graph, selected, 1);
+            updateInferredVertical(graph, session);
             session.changed();
             Feedback result = validate(graph, session);
             publish(player, session, result);
@@ -142,6 +153,84 @@ public final class TrackConstructionManager {
 
     private static TrackCurveParameters savedCurve(TrackGraph graph, TrackPlacementEndpoint endpoint) {
         return endpoint.nodeId() == null ? null : graph.node(endpoint.nodeId()).curve();
+    }
+
+    private static TrackVerticalCurveParameters savedVertical(TrackGraph graph, TrackPlacementEndpoint endpoint) {
+        return endpoint.nodeId() == null ? null : graph.node(endpoint.nodeId()).verticalCurve();
+    }
+
+    private static boolean flatPort(TrackGraph graph, TrackPlacementEndpoint endpoint) {
+        return endpoint != null && endpoint.nodeId() != null && graph.assemblyAtPort(endpoint.nodeId()) != null;
+    }
+
+    private static double defaultVerticalLength(Session session) {
+        if (session.end == null) return 1;
+        try {
+            return Math.clamp(TrackPlacementGeometry.horizontal(session.start.position(), session.end.position(),
+                    session.gauge, session.startCurve, session.endCurve).getLength() / 3,
+                    TrackCurveParameters.MIN_LENGTH, TrackCurveParameters.MAX_LENGTH);
+        } catch (IllegalArgumentException exception) {
+            return 1; // The horizontal draft remains editable while invalid.
+        }
+    }
+
+    private static TrackVerticalCurveParameters inferVertical(TrackGraph graph, TrackPlacementEndpoint endpoint, double length) {
+        if (endpoint == null || endpoint.nodeId() == null) return null;
+        var assembly = graph.assemblyAtPort(endpoint.nodeId());
+        if (assembly != null) return new TrackVerticalCurveParameters(0, length, assembly.portAt(endpoint.nodeId()).outwardYaw());
+        var connections = graph.connections(endpoint.nodeId());
+        if (connections.size() != 1) return null;
+        var segment = graph.segment(connections.get(0).segmentId());
+        if (graph.assemblyForSegment(segment.id()) != null) return null;
+        boolean start = segment.startNodeId().equals(endpoint.nodeId());
+        var t = segment.geometry().sample(start ? 0 : segment.geometry().getLength()).tangent();
+        return new TrackVerticalCurveParameters(t.y() / Math.hypot(t.x(), t.z()) * 1000, length,
+                TrackVerticalCurveParameters.yaw(t));
+    }
+
+    private static void updateInferredVertical(TrackGraph graph, Session session) {
+        session.startFlatPort = flatPort(graph, session.start);
+        session.endFlatPort = flatPort(graph, session.end);
+        double length = defaultVerticalLength(session);
+        if (session.startVerticalInferred && !session.startVerticalEdited && session.startVertical != null) {
+            var curve = session.startVertical;
+            session.startVertical = new TrackVerticalCurveParameters(curve.grade(), length, curve.referenceYaw());
+        }
+        if (session.endVerticalInferred && !session.endVerticalEdited && session.endVertical != null) {
+            var curve = session.endVertical;
+            session.endVertical = new TrackVerticalCurveParameters(curve.grade(), length, curve.referenceYaw());
+        }
+        if (session.startFlatPort) session.startVertical = flatVertical(session.startVertical, length);
+        if (session.endFlatPort) session.endVertical = flatVertical(session.endVertical, length);
+    }
+
+    private static TrackVerticalCurveParameters flatVertical(TrackVerticalCurveParameters curve, double defaultLength) {
+        return new TrackVerticalCurveParameters(0, curve == null ? defaultLength : curve.length(),
+                curve == null ? 0 : curve.referenceYaw());
+    }
+
+    private static TrackVector endpointTangent(Session session, boolean start,
+                                                TrackCurveParameters startCurve, TrackCurveParameters endCurve) {
+        return TrackPlacementGeometry.endpointTangent(session.start.position(),
+                session.end == null ? null : session.end.position(), startCurve, endCurve, start, session.editorYaw);
+    }
+
+    private static TrackVerticalCurveParameters editorVertical(Session session, boolean start) {
+        var tangent = endpointTangent(session, start, session.startCurve, session.endCurve);
+        var curve = start ? session.startVertical : session.endVertical;
+        double grade = 0;
+        if (curve != null) grade = curve.gradeAlong(tangent);
+        else if (session.end != null) {
+            try {
+                double h = TrackPlacementGeometry.horizontal(session.start.position(), session.end.position(),
+                        session.gauge, session.startCurve, session.endCurve).getLength();
+                grade = (session.end.position().y() - session.start.position().y()) / h * 1000;
+            } catch (IllegalArgumentException exception) {
+                // Invalid horizontal drafts still allow editing either page.
+            }
+        }
+        return new TrackVerticalCurveParameters(grade, curve == null ? defaultVerticalLength(session) : curve.length(),
+                TrackVerticalCurveParameters.yaw(tangent));
     }
 
     public static void edit(ServerPlayer player) {
@@ -164,6 +253,7 @@ public final class TrackConstructionManager {
         }
         TrackGraph graph = graph(player);
         if (graph == null || !refreshStart(player, graph, session) || !refreshEnd(player, graph, session)) return;
+        updateInferredVertical(graph, session);
         Vec3 eye = player.getEyePosition();
         Vec3 rayEnd = eye.add(player.getLookAngle().scale(player.blockInteractionRange()));
         double startHit = hitDistance(session.start, eye, rayEnd);
@@ -179,6 +269,7 @@ public final class TrackConstructionManager {
             return;
         }
         session.editorId = UUID.randomUUID();
+        session.editorYaw = player.getYRot();
         session.editStart = start;
         TrackCurveParameters curve = start ? session.startCurve : session.endCurve;
         TrackPlacementEndpoint other = start ? session.end : session.start;
@@ -187,7 +278,8 @@ public final class TrackConstructionManager {
         Feedback feedback = session.end == null ? Feedback.START : validate(graph, session);
         publish(player, session, feedback);
         PacketDistributor.sendToPlayer(player, new OpenTrackCurvePayload(player.serverLevel().dimension().location(),
-                session.revision, session.editorId, start, curve == null, initial));
+                session.revision, session.editorId, start, curve == null, initial,
+                (start ? session.startVertical : session.endVertical) == null, flatPort(graph, selected), editorVertical(session, start)));
     }
 
     public static void editOrSwitch(ServerPlayer player, UseOnContext context) {
@@ -258,21 +350,44 @@ public final class TrackConstructionManager {
             return;
         }
         TrackCurveParameters curve;
+        TrackVerticalCurveParameters vertical;
         try {
-            // Even an automatic request must carry finite, bounded numeric values.
             curve = new TrackCurveParameters(payload.angle(), payload.length());
+            TrackCurveParameters startCurve = session.startCurve, endCurve = session.endCurve;
+            if (payload.horizontalEdited()) {
+                if (payload.start()) startCurve = payload.automatic() ? null : curve;
+                else endCurve = payload.automatic() ? null : curve;
+            }
+            var tangent = endpointTangent(session, payload.start(), startCurve, endCurve);
+            vertical = new TrackVerticalCurveParameters(payload.grade(), payload.verticalLength(),
+                    TrackVerticalCurveParameters.yaw(tangent));
         } catch (IllegalArgumentException exception) {
             curveResult(player, payload, false, Feedback.INVALID_PARAMETERS);
             return;
         }
-        if (payload.automatic()) curve = null;
-        if (payload.start()) {
-            session.startCurve = curve;
-            session.startEdited = true;
-        } else {
-            session.endCurve = curve;
-            session.endEdited = true;
+        if (flatPort(graph, endpoint) && payload.verticalEdited()
+                && (payload.verticalAutomatic() || vertical.grade() != 0)) {
+            curveResult(player, payload, false, Feedback.FLAT_PORT);
+            return;
         }
+        if (payload.automatic()) curve = null;
+        if (payload.verticalAutomatic()) vertical = null;
+        if (payload.start()) {
+            if (payload.horizontalEdited()) { session.startCurve = curve; session.startEdited = true; }
+            if (payload.verticalEdited()) {
+                session.startVertical = vertical;
+                session.startVerticalEdited = true;
+                session.startVerticalInferred = false;
+            }
+        } else {
+            if (payload.horizontalEdited()) { session.endCurve = curve; session.endEdited = true; }
+            if (payload.verticalEdited()) {
+                session.endVertical = vertical;
+                session.endVerticalEdited = true;
+                session.endVerticalInferred = false;
+            }
+        }
+        updateInferredVertical(graph, session);
         session.changed();
         Feedback feedback = session.end == null ? Feedback.START : validate(graph, session);
         publish(player, session, feedback);
@@ -381,8 +496,10 @@ public final class TrackConstructionManager {
         if (a.nodeId() != null && b.nodeId() != null && gaugeA != gaugeB) return Feedback.GAUGE_MISMATCH;
         try {
             var geometry = TrackPlacementGeometry.create(a.position(), b.position(), session.gauge,
-                    session.startCurve, session.endCurve);
+                    session.startCurve, session.endCurve, session.startVertical, session.endVertical);
             return geometry.getLength() <= TrackPlacementGeometry.MAX_LENGTH ? Feedback.READY : Feedback.TOO_LONG;
+        } catch (VerticalTrackGeometry.InvalidHandlesException exception) {
+            return Feedback.VERTICAL_HANDLES;
         } catch (IllegalArgumentException exception) {
             return Feedback.INVALID_GEOMETRY;
         }
@@ -391,6 +508,7 @@ public final class TrackConstructionManager {
     private static void confirm(ServerPlayer player, Session session, String modelId) {
         TrackGraph graph = graph(player);
         if (graph == null || !refreshStart(player, graph, session) || !refreshEnd(player, graph, session)) return;
+        updateInferredVertical(graph, session);
         Feedback result = validate(graph, session);
         if (result != Feedback.READY) {
             publish(player, session, result);
@@ -400,7 +518,8 @@ public final class TrackConstructionManager {
         UUID id = UUID.randomUUID();
         try {
             graph.addPlacement(id, session.start, session.end, session.gauge, modelId,
-                    session.startCurve, session.endCurve, session.startEdited, session.endEdited);
+                    session.startCurve, session.endCurve, session.startEdited, session.endEdited,
+                    session.startVertical, session.endVertical, session.startVerticalEdited, session.endVerticalEdited);
         } catch (TrackGraphException exception) {
             Feedback feedback = switch (exception.reason()) {
                 case BLOCKED_VOLUME -> Feedback.BLOCKED_VOLUME;
@@ -436,6 +555,10 @@ public final class TrackConstructionManager {
         session.end = null;
         session.endCurve = null;
         session.endEdited = false;
+        session.endVertical = null;
+        session.endVerticalEdited = false;
+        session.endVerticalInferred = false;
+        session.endFlatPort = false;
         session.validation = Feedback.START;
         session.changed();
         publish(player, session, feedback);
@@ -448,6 +571,9 @@ public final class TrackConstructionManager {
                 session == null ? DEFAULT_GAUGE : session.gauge, feedback,
                 session == null ? EMPTY_REVISION : session.revision,
                 session == null ? null : session.startCurve, session == null ? null : session.endCurve,
+                session == null ? null : session.startVertical, session == null ? null : session.endVertical,
+                session != null && session.startFlatPort, session != null && session.endFlatPort,
+                session != null && session.startVerticalInferred, session != null && session.endVerticalInferred,
                 session == null ? Feedback.START : session.validation));
     }
 
@@ -492,9 +618,18 @@ public final class TrackConstructionManager {
         TrackCurveParameters endCurve;
         boolean startEdited;
         boolean endEdited;
+        TrackVerticalCurveParameters startVertical;
+        TrackVerticalCurveParameters endVertical;
+        boolean startVerticalEdited;
+        boolean endVerticalEdited;
+        boolean startVerticalInferred;
+        boolean endVerticalInferred;
+        boolean startFlatPort;
+        boolean endFlatPort;
         UUID revision = UUID.randomUUID();
         UUID editorId;
         boolean editStart;
+        double editorYaw;
         double gauge;
         Feedback validation = Feedback.START;
 

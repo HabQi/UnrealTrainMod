@@ -216,8 +216,14 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
             if (model != null) padding = Math.max(padding, model.padding() * model.scaleForGauge(data.gauge()));
             double x = (double)chunkX * 16, z = (double)chunkZ * 16;
             double verticalPadding = model == null ? 0.4 : Math.max(0.4, padding);
-            return new AABB(x - padding, Math.min(data.start().y(), data.end().y()) - verticalPadding, z - padding,
-                    x + 16 + padding, Math.max(data.start().y(), data.end().y()) + verticalPadding, z + 16 + padding);
+            double minY = Math.min(data.start().y(), data.end().y());
+            double maxY = Math.max(data.start().y(), data.end().y());
+            for (var control : data.verticalControls()) {
+                minY = Math.min(minY, control.z());
+                maxY = Math.max(maxY, control.z());
+            }
+            return new AABB(x - padding, minY - verticalPadding, z - padding,
+                    x + 16 + padding, maxY + verticalPadding, z + 16 + padding);
         }
 
         @Override

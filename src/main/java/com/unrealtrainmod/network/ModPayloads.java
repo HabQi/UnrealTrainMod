@@ -22,6 +22,7 @@ import com.unrealtrainmod.network.payload.TrackAssemblyRemovePayload;
 import com.unrealtrainmod.network.payload.OpenTurnoutPayload;
 import com.unrealtrainmod.network.payload.TurnoutActionPayload;
 import com.unrealtrainmod.network.payload.TurnoutResultPayload;
+import com.unrealtrainmod.network.payload.TrainDebugPayload;
 import com.unrealtrainmod.track.construction.TurnoutConstructionManager;
 import net.minecraft.server.level.ServerPlayer;
 import net.neoforged.neoforge.common.NeoForge;
@@ -31,7 +32,9 @@ public final class ModPayloads {
     private ModPayloads() {}
 
     public static void register(RegisterPayloadHandlersEvent event) {
-        var registrar = event.registrar("9");
+        var registrar = event.registrar("11");
+        registrar.playToClient(TrainDebugPayload.TYPE, TrainDebugPayload.STREAM_CODEC,
+                (payload, context) -> NeoForge.EVENT_BUS.post(new TrackSyncEvent(payload)));
         registrar.playToClient(OpenTurnoutPayload.TYPE, OpenTurnoutPayload.STREAM_CODEC,
                 (payload, context) -> NeoForge.EVENT_BUS.post(new TrackSyncEvent(payload)));
         registrar.playToClient(TurnoutResultPayload.TYPE, TurnoutResultPayload.STREAM_CODEC,

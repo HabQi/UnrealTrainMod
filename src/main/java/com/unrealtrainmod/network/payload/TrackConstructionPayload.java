@@ -7,6 +7,7 @@ package com.unrealtrainmod.network.payload;
 import com.unrealtrainmod.UnrealTrainMod;
 import com.unrealtrainmod.track.TrackPlacementEndpoint;
 import com.unrealtrainmod.track.TrackCurveParameters;
+import com.unrealtrainmod.track.TrackVerticalCurveParameters;
 import com.unrealtrainmod.track.geometry.TrackVector;
 import java.util.Locale;
 import java.util.UUID;
@@ -18,7 +19,10 @@ import net.minecraft.resources.ResourceLocation;
 /** Private, server-authoritative draft; never inserted into the synchronized track cache. */
 public record TrackConstructionPayload(ResourceLocation dimension, Phase phase,
         TrackPlacementEndpoint start, TrackPlacementEndpoint end, double gauge, Feedback feedback,
-        UUID revision, TrackCurveParameters startCurve, TrackCurveParameters endCurve, Feedback validation)
+        UUID revision, TrackCurveParameters startCurve, TrackCurveParameters endCurve,
+        TrackVerticalCurveParameters startVertical, TrackVerticalCurveParameters endVertical,
+        boolean startVerticalLocked, boolean endVerticalLocked,
+        boolean startVerticalInferred, boolean endVerticalInferred, Feedback validation)
         implements CustomPacketPayload {
     public enum Phase { EMPTY, START, READY }
 
@@ -26,7 +30,7 @@ public record TrackConstructionPayload(ResourceLocation dimension, Phase phase,
         START, READY, CANCELLED, CLEARED, CREATED, SELECT_POINT, TOP_FACE, INVALID_POINT,
         INVALID_GEOMETRY, TOO_LONG, SAME_NODE, GAUGE_MISMATCH, STALE_START, STALE_END,
         STORAGE, NO_PERMISSION, INVALID_ITEM, SELECT_MODEL, MISSING_MODEL, LINE_NOT_READY,
-        NO_DRAFT, AIM_NODE, STALE_EDIT, INVALID_PARAMETERS, BLOCKED_VOLUME, UNLOADED_VOLUME, VOLUME_TOO_LARGE;
+        VERTICAL_HANDLES, FLAT_PORT, NO_DRAFT, AIM_NODE, STALE_EDIT, INVALID_PARAMETERS, BLOCKED_VOLUME, UNLOADED_VOLUME, VOLUME_TOO_LARGE;
 
         public String translationKey() {
             return "item.unrealtrainmod.track_builder.feedback." + name().toLowerCase(Locale.ROOT);
@@ -46,11 +50,19 @@ public record TrackConstructionPayload(ResourceLocation dimension, Phase phase,
                 buffer.writeUUID(payload.revision());
                 TrackPayloadCodec.writeCurve(buffer, payload.startCurve());
                 TrackPayloadCodec.writeCurve(buffer, payload.endCurve());
+                TrackPayloadCodec.writeVertical(buffer, payload.startVertical());
+                TrackPayloadCodec.writeVertical(buffer, payload.endVertical());
+                buffer.writeBoolean(payload.startVerticalLocked());
+                buffer.writeBoolean(payload.endVerticalLocked());
+                buffer.writeBoolean(payload.startVerticalInferred());
+                buffer.writeBoolean(payload.endVerticalInferred());
                 buffer.writeEnum(payload.validation());
             }, buffer -> new TrackConstructionPayload(buffer.readResourceLocation(),
                     buffer.readEnum(Phase.class), readEndpoint(buffer), readEndpoint(buffer),
                     buffer.readDouble(), buffer.readEnum(Feedback.class), buffer.readUUID(),
-                    TrackPayloadCodec.readCurve(buffer), TrackPayloadCodec.readCurve(buffer), buffer.readEnum(Feedback.class)));
+                    TrackPayloadCodec.readCurve(buffer), TrackPayloadCodec.readCurve(buffer),
+                    TrackPayloadCodec.readVertical(buffer), TrackPayloadCodec.readVertical(buffer),
+                    buffer.readBoolean(), buffer.readBoolean(), buffer.readBoolean(), buffer.readBoolean(), buffer.readEnum(Feedback.class)));
 
     private static void writeEndpoint(RegistryFriendlyByteBuf buffer, TrackPlacementEndpoint endpoint) {
         buffer.writeBoolean(endpoint != null);

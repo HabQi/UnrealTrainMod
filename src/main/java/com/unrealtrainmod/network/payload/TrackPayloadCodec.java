@@ -6,6 +6,7 @@ package com.unrealtrainmod.network.payload;
 
 import com.unrealtrainmod.track.TrackSegment;
 import com.unrealtrainmod.track.TrackCurveParameters;
+import com.unrealtrainmod.track.TrackVerticalCurveParameters;
 import com.unrealtrainmod.track.TrackSegmentData;
 import com.unrealtrainmod.track.geometry.TrackPoint;
 import com.unrealtrainmod.track.geometry.TrackVector;
@@ -27,6 +28,19 @@ final class TrackPayloadCodec {
         return buffer.readBoolean() ? new TrackCurveParameters(buffer.readDouble(), buffer.readDouble()) : null;
     }
 
+    static void writeVertical(RegistryFriendlyByteBuf buffer, TrackVerticalCurveParameters curve) {
+        buffer.writeBoolean(curve != null);
+        if (curve != null) {
+            buffer.writeDouble(curve.grade());
+            buffer.writeDouble(curve.length());
+            buffer.writeDouble(curve.referenceYaw());
+        }
+    }
+
+    static TrackVerticalCurveParameters readVertical(RegistryFriendlyByteBuf buffer) {
+        return buffer.readBoolean() ? new TrackVerticalCurveParameters(buffer.readDouble(), buffer.readDouble(), buffer.readDouble()) : null;
+    }
+
     static void write(RegistryFriendlyByteBuf buffer, TrackSegmentData data) {
         buffer.writeUUID(data.id());
         buffer.writeEnum(data.type());
@@ -34,6 +48,11 @@ final class TrackPayloadCodec {
         writeVector(buffer, data.end());
         buffer.writeDouble(data.gauge());
         for (TrackPoint control : data.controls()) {
+            buffer.writeDouble(control.x());
+            buffer.writeDouble(control.z());
+        }
+        buffer.writeBoolean(!data.verticalControls().isEmpty());
+        for (TrackPoint control : data.verticalControls()) {
             buffer.writeDouble(control.x());
             buffer.writeDouble(control.z());
         }
@@ -49,8 +68,11 @@ final class TrackPayloadCodec {
         List<TrackPoint> controls = type == TrackSegment.Type.BEZIER
                 ? List.of(new TrackPoint(buffer.readDouble(), buffer.readDouble()),
                         new TrackPoint(buffer.readDouble(), buffer.readDouble())) : List.of();
+        List<TrackPoint> verticalControls = buffer.readBoolean()
+                ? List.of(new TrackPoint(buffer.readDouble(), buffer.readDouble()),
+                        new TrackPoint(buffer.readDouble(), buffer.readDouble())) : List.of();
         String modelId = buffer.readBoolean() ? buffer.readResourceLocation().toString() : null;
-        return new TrackSegmentData(id, type, start, end, gauge, controls, modelId);
+        return new TrackSegmentData(id, type, start, end, gauge, controls, verticalControls, modelId);
     }
 
     private static void writeVector(RegistryFriendlyByteBuf buffer, TrackVector vector) {

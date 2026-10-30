@@ -16,6 +16,7 @@ import com.unrealtrainmod.track.TrackPlacementGeometry;
 import com.unrealtrainmod.track.geometry.TrackPoint;
 import com.unrealtrainmod.track.geometry.TrackPose;
 import com.unrealtrainmod.track.geometry.TrackVector;
+import com.unrealtrainmod.track.geometry.VerticalTrackGeometry;
 import net.minecraft.client.renderer.LevelRenderer;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.world.phys.Vec3;
@@ -83,6 +84,7 @@ public final class TrackConstructionRenderer {
                 handle(lines, p, new TrackPoint(p.x() - Math.sin(angle) * curve.length(),
                         p.z() + Math.cos(angle) * curve.length()), camera);
             }
+            verticalHandles(lines, state, camera);
             buffers.endBatch(TrackRenderTypes.PREVIEW);
         } finally {
             modelView.popMatrix();
@@ -94,8 +96,38 @@ public final class TrackConstructionRenderer {
 
     private static void handle(VertexConsumer lines, TrackVector node, TrackPoint control, Vec3 camera) {
         TrackVector point = new TrackVector(control.x(), node.y(), control.z());
-        line(lines, node, point, camera, 0.2f, 0.7f);
-        marker(lines, point, camera, 0.2f, 0.7f);
+        line(lines, node, point, camera, 0.2f, 0.7f, 1);
+        marker(lines, point, camera, 0.2f, 0.7f, 1, 0.12);
+    }
+
+    private static void verticalHandles(VertexConsumer lines, ClientTrackConstruction state, Vec3 camera) {
+        var draft = state.draft();
+        var start = state.previewVertical(true);
+        var end = state.previewVertical(false);
+        if (start == null && end == null) return;
+        if (draft.end() == null) {
+            var node = draft.start().position();
+            var tangent = state.endpointTangent(true, start.referenceYaw());
+            var point = new TrackVector(node.x() + tangent.x() * start.length(),
+                    node.y() + start.gradeAlong(tangent) / 1000 * start.length(), node.z() + tangent.z() * start.length());
+            verticalHandle(lines, node, point, camera);
+            return;
+        }
+        try {
+            var horizontal = state.horizontalGeometry();
+            if (horizontal == null) return;
+            var controls = TrackPlacementGeometry.verticalControls(horizontal, draft.start().position().y(),
+                    draft.end().position().y(), start, end);
+            verticalHandle(lines, draft.start().position(), VerticalTrackGeometry.controlPosition(horizontal, controls.get(0)), camera);
+            verticalHandle(lines, draft.end().position(), VerticalTrackGeometry.controlPosition(horizontal, controls.get(1)), camera);
+        } catch (IllegalArgumentException exception) {
+            // Keep endpoint markers and the horizontal handles visible for invalid drafts.
+        }
+    }
+
+    private static void verticalHandle(VertexConsumer lines, TrackVector node, TrackVector point, Vec3 camera) {
+        line(lines, node, point, camera, 1, 0.35f, 1);
+        marker(lines, point, camera, 1, 0.35f, 1, 0.12);
     }
 
     private static TrackVector[] section(TrackPose pose, double center) {
@@ -116,19 +148,27 @@ public final class TrackConstructionRenderer {
     }
 
     private static void marker(VertexConsumer lines, TrackVector p, Vec3 camera, float red, float green, double radius) {
+        marker(lines, p, camera, red, green, 0.2f, radius);
+    }
+
+    private static void marker(VertexConsumer lines, TrackVector p, Vec3 camera, float red, float green, float blue, double radius) {
         double x = p.x() - camera.x, y = p.y() - camera.y, z = p.z() - camera.z;
         LevelRenderer.renderLineBox(new PoseStack(), lines, x - radius, y - radius, z - radius,
-                x + radius, y + radius, z + radius, red, green, 0.2f, 1);
+                x + radius, y + radius, z + radius, red, green, blue, 1);
     }
 
     private static void line(VertexConsumer lines, TrackVector a, TrackVector b, Vec3 camera, float red, float green) {
+        line(lines, a, b, camera, red, green, 0.2f);
+    }
+
+    private static void line(VertexConsumer lines, TrackVector a, TrackVector b, Vec3 camera, float red, float green, float blue) {
         double x = b.x() - a.x(), y = b.y() - a.y(), z = b.z() - a.z();
         double length = Math.sqrt(x * x + y * y + z * z);
         if (length == 0) return;
         float nx = (float)(x / length), ny = (float)(y / length), nz = (float)(z / length);
         lines.addVertex((float)(a.x() - camera.x), (float)(a.y() - camera.y), (float)(a.z() - camera.z))
-                .setColor(red, green, 0.2f, 1).setNormal(nx, ny, nz);
+                .setColor(red, green, blue, 1).setNormal(nx, ny, nz);
         lines.addVertex((float)(b.x() - camera.x), (float)(b.y() - camera.y), (float)(b.z() - camera.z))
-                .setColor(red, green, 0.2f, 1).setNormal(nx, ny, nz);
+                .setColor(red, green, blue, 1).setNormal(nx, ny, nz);
     }
 }

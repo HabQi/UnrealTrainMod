@@ -9,9 +9,11 @@ import com.unrealtrainmod.track.TrackPlacementGeometry;
 import com.unrealtrainmod.track.geometry.TrackGeometry;
 import com.unrealtrainmod.track.geometry.TrackPose;
 import com.unrealtrainmod.track.geometry.TrackVector;
+import com.unrealtrainmod.track.geometry.VerticalTrackGeometry;
 import com.unrealtrainmod.track.persistence.TrackSavedData;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.TreeSet;
 import net.minecraft.core.BlockPos;
 
 /** Follows centerline cells and adds one cell on each side, with a 0.3-block bed below the rail. */
@@ -28,12 +30,16 @@ public final class TrackBlockVolume {
         }
         Map<BlockPos, Integer> blocks = new HashMap<>();
         int steps = Math.max(1, (int)Math.ceil(length / 0.25));
+        var distances = new TreeSet<Double>();
+        for (int i = 1; i <= steps; i++) distances.add(length * i / steps);
+        if (geometry instanceof VerticalTrackGeometry vertical) distances.addAll(vertical.heightExtrema());
         TrackVector start = geometry.sample(0).position();
         validatePosition(start);
-        for (int i = 1; i <= steps; i++) {
-            TrackVector end = geometry.sample(length * i / steps).position();
+        double previousDistance = 0;
+        for (double distance : distances) {
+            TrackVector end = geometry.sample(distance).position();
             validatePosition(end);
-            TrackPose middle = geometry.sample(length * (i - 0.5) / steps);
+            TrackPose middle = geometry.sample((previousDistance + distance) / 2);
             // Use the grid axis closest to the lateral direction. Absolute values keep reverse placement identical.
             int sideX = Math.abs(middle.lateral().x()) >= Math.abs(middle.lateral().z()) ? 1 : 0;
             int sideZ = 1 - sideX;
@@ -44,6 +50,7 @@ public final class TrackBlockVolume {
             interval(blocks, start, end, first, last, sideX, sideZ);
             interval(blocks, start, end, last, 1, sideX, sideZ);
             start = end;
+            previousDistance = distance;
         }
         return blocks;
     }

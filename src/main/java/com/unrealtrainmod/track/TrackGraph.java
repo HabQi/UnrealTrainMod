@@ -5,11 +5,10 @@
 package com.unrealtrainmod.track;
 
 import com.unrealtrainmod.track.geometry.BezierTrackGeometry;
-import com.unrealtrainmod.track.geometry.LinearGrade;
-import com.unrealtrainmod.track.geometry.StraightTrackGeometry;
 import com.unrealtrainmod.track.geometry.TrackGeometry;
 import com.unrealtrainmod.track.geometry.TrackPoint;
 import com.unrealtrainmod.track.geometry.TrackVector;
+import com.unrealtrainmod.track.geometry.VerticalTrackGeometry;
 import com.unrealtrainmod.track.assembly.TrackAssemblyDefinition;
 import com.unrealtrainmod.track.assembly.TrackAssemblyInstance;
 import com.unrealtrainmod.track.assembly.JunctionState;
@@ -54,7 +53,12 @@ public final class TrackGraph {
     }
 
     public TrackNode addNode(UUID id, TrackVector position, double gauge, TrackCurveParameters curve) {
-        TrackNode node = new TrackNode(id, position, gauge, curve);
+        return addNode(id, position, gauge, curve, null);
+    }
+
+    public TrackNode addNode(UUID id, TrackVector position, double gauge, TrackCurveParameters curve,
+                             TrackVerticalCurveParameters verticalCurve) {
+        TrackNode node = new TrackNode(id, position, gauge, curve, verticalCurve);
         if (nodes.containsKey(id)) throw new TrackGraphException(TrackGraphException.Reason.DUPLICATE_ID);
         insertNode(node);
         onChange.run();
@@ -86,28 +90,41 @@ public final class TrackGraph {
     public TrackSegment addPlacement(UUID id, TrackPlacementEndpoint start, TrackPlacementEndpoint end, double gauge,
                                      String modelId, TrackCurveParameters startCurve, TrackCurveParameters endCurve,
                                      boolean startEdited, boolean endEdited) {
+        return addPlacement(id, start, end, gauge, modelId, startCurve, endCurve, startEdited, endEdited,
+                null, null, false, false);
+    }
+
+    public TrackSegment addPlacement(UUID id, TrackPlacementEndpoint start, TrackPlacementEndpoint end, double gauge,
+                                     String modelId, TrackCurveParameters startCurve, TrackCurveParameters endCurve,
+                                     boolean startEdited, boolean endEdited,
+                                     TrackVerticalCurveParameters startVertical, TrackVerticalCurveParameters endVertical,
+                                     boolean startVerticalEdited, boolean endVerticalEdited) {
         TrackNode a = placementNode(start, gauge), b = placementNode(end, gauge);
         if ((start.nodeId() == null && nodes.containsKey(a.id()))
                 || (end.nodeId() == null && nodes.containsKey(b.id()))) {
             throw new TrackGraphException(TrackGraphException.Reason.DUPLICATE_ID);
         }
-        TrackGeometry geometry = TrackPlacementGeometry.create(a.position(), b.position(), gauge, startCurve, endCurve);
+        TrackGeometry geometry = TrackPlacementGeometry.create(a.position(), b.position(), gauge, startCurve, endCurve,
+                startVertical, endVertical);
         if (geometry.getLength() > TrackPlacementGeometry.MAX_LENGTH) {
             throw new IllegalArgumentException("Construction track exceeds 256 blocks");
         }
-        TrackPoint control1 = geometry instanceof BezierTrackGeometry bezier ? bezier.control1() : null;
-        TrackPoint control2 = geometry instanceof BezierTrackGeometry bezier ? bezier.control2() : null;
+        var controls = TrackGeometryDefinition.from(geometry).controls();
+        TrackPoint control1 = controls.isEmpty() ? null : controls.get(0);
+        TrackPoint control2 = controls.isEmpty() ? null : controls.get(1);
         TrackSegment segment = prepareSegment(id, a, b, control1, control2, modelId, geometry);
         validateExternalSegment(segment);
         segmentValidator.accept(List.of(segment));
-        TrackNode updatedA = start.nodeId() == null || startEdited
-                ? new TrackNode(a.id(), a.position(), gauge, startCurve) : a;
-        TrackNode updatedB = end.nodeId() == null || endEdited
-                ? new TrackNode(b.id(), b.position(), gauge, endCurve) : b;
+        TrackNode updatedA = new TrackNode(a.id(), a.position(), gauge,
+                start.nodeId() == null || startEdited ? startCurve : a.curve(),
+                start.nodeId() == null || startVerticalEdited ? startVertical : a.verticalCurve());
+        TrackNode updatedB = new TrackNode(b.id(), b.position(), gauge,
+                end.nodeId() == null || endEdited ? endCurve : b.curve(),
+                end.nodeId() == null || endVerticalEdited ? endVertical : b.verticalCurve());
         if (start.nodeId() == null) insertNode(updatedA);
-        else if (startEdited) nodes.put(a.id(), updatedA);
+        else if (startEdited || startVerticalEdited) nodes.put(a.id(), updatedA);
         if (end.nodeId() == null) insertNode(updatedB);
-        else if (endEdited) nodes.put(b.id(), updatedB);
+        else if (endEdited || endVerticalEdited) nodes.put(b.id(), updatedB);
         return insertSegment(segment);
     }
 
@@ -129,6 +146,16 @@ public final class TrackGraph {
                 Objects.requireNonNull(control1), Objects.requireNonNull(control2), modelId));
     }
 
+    public TrackSegment addDefined(UUID id, UUID startNodeId, UUID endNodeId,
+                                    TrackGeometryDefinition definition, String modelId) {
+        var start = node(startNodeId);
+        var end = node(endNodeId);
+        var controls = definition.controls();
+        return addSegment(prepareSegment(id, start, end,
+                controls.isEmpty() ? null : controls.get(0), controls.isEmpty() ? null : controls.get(1), modelId,
+                definition.create(start.position(), end.position(), start.gauge())));
+    }
+
     private TrackSegment prepareSegment(UUID id, TrackNode start, TrackNode end,
                                         TrackPoint control1, TrackPoint control2, String modelId) {
         return prepareSegment(id, start, end, control1, control2, modelId, null);
@@ -147,9 +174,8 @@ public final class TrackGraph {
                 : TrackChunkBounds.of(a, control1, control2, b);
         TrackGeometry geometry = preparedGeometry;
         if (geometry == null) {
-            LinearGrade grade = new LinearGrade(start.position().y(), end.position().y());
-            geometry = control1 == null ? new StraightTrackGeometry(a, b, grade, start.gauge())
-                    : new BezierTrackGeometry(a, control1, control2, b, grade, start.gauge());
+            geometry = new TrackGeometryDefinition(control1 == null ? List.of() : List.of(control1, control2), List.of())
+                    .create(start.position(), end.position(), start.gauge());
         }
         return new TrackSegment(id, start.id(), end.id(), geometry, bounds, modelId);
     }
@@ -384,6 +410,9 @@ public final class TrackGraph {
                         || !samePosition(endNode.position(), part.sample(part.getLength()).position())
                         || Math.abs(segment.geometry().getLength() - part.getLength()) > 1e-6) {
                     throw new IllegalArgumentException("Assembly path geometry mismatch");
+                }
+                if (segment.geometry() instanceof VerticalTrackGeometry) {
+                    throw new IllegalArgumentException("Turnout internal paths must remain horizontal");
                 }
                 if (part instanceof BezierTrackGeometry wanted) {
                     if (!(segment.geometry() instanceof BezierTrackGeometry actual)

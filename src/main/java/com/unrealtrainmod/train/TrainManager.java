@@ -6,6 +6,7 @@ package com.unrealtrainmod.train;
 
 import com.unrealtrainmod.entity.TrainEntity;
 import com.unrealtrainmod.track.TrackGraph;
+import com.unrealtrainmod.track.TrackGraphException;
 import com.unrealtrainmod.track.TrackSegmentChange;
 import com.unrealtrainmod.track.assembly.TrackAssemblyInstance;
 import com.unrealtrainmod.track.assembly.TrackReservationManager;
@@ -57,6 +58,7 @@ public final class TrainManager {
     private StateException storageFailure;
     private TrackGraph graph;
     private TrackReservationManager reservations;
+    private final TrackOccupancyManager occupancy = new TrackOccupancyManager();
     private final Consumer<TrackSegmentChange> listener = this::trackChanged;
     private final Map<UUID, Long> assemblyRevisions = new HashMap<>();
     private final Consumer<TrackAssemblyInstance> assemblyListener = this::assemblyChanged;
@@ -141,11 +143,14 @@ public final class TrainManager {
     private TrackGraph graph() {
         if (graph == null) {
             graph = TrackBlockManager.get(level).graph();
-            reservations = new TrackReservationManager(level, graph, this::reservationMembers, this::reservationMemberConfirmed);
+            reservations = new TrackReservationManager(level, graph, this::reservationMembers, this::reservationMemberConfirmed,
+                    id -> occupancy.intervals(entityTrains.get(id)),
+                    () -> trains.values().stream().map(train -> train.cars().getFirst().entityId()).toList());
             graph.addSegmentListener(listener);
             for (var assembly : graph.assemblies()) assemblyRevisions.put(assembly.id(), assembly.revision());
             graph.addAssemblyListener(assemblyListener);
             graph.addAssemblyRemoveListener(assemblyRemoveListener);
+            initializeOccupancy();
         }
         return graph;
     }
@@ -189,9 +194,90 @@ public final class TrainManager {
         trains.put(train.id(), train);
         for (var car : train.cars()) entityTrains.put(car.entityId(), train.id());
         savedData.put(train);
+        if (graph != null && train.route() == null) seedOccupancy(train);
+    }
+
+    /** Reconstruct saved footprints without loading chunks or relocating entities. */
+    private void initializeOccupancy() {
+        for (var train : trains.values()) seedOccupancy(train);
+    }
+
+    private void seedOccupancy(TrainConsist train) {
+        if (train.anchor() == null) return;
+        var intervals = new ArrayList<TrackOccupancyManager.Interval>();
+        try {
+            if (train.cars().stream().anyMatch(car -> VehicleCatalog.find(car.modelId()) == null)) {
+                throw new IllegalArgumentException("Missing saved vehicle model");
+            }
+            var snapshot = new TrainConsist(train.id(), train.cars(), train.configuredSpeed());
+            snapshot.setWindow(TrainRouteWindow.initial(graph, train.anchor(), snapshot));
+            for (var car : train.cars()) {
+                if (!TrainMotion.matchesAt(snapshot.window(), car.anchor(), snapshot.progress() + car.offset())) {
+                    throw new IllegalArgumentException("Saved member anchors disagree");
+                }
+            }
+            intervals.addAll(TrackOccupancyManager.footprint(snapshot, snapshot.progress()));
+        } catch (IllegalArgumentException exception) {
+            // A damaged/closed route must not silently make the known member segments removable.
+            for (var car : train.cars()) {
+                var anchor = car.anchor();
+                if (anchor == null) continue;
+                var segment = graph.segments().stream().filter(value -> value.id().equals(anchor.segmentId())).findFirst();
+                segment.ifPresent(value -> intervals.add(new TrackOccupancyManager.Interval(value.id(), 0, value.geometry().getLength())));
+            }
+            LOGGER.warn("Consist {} occupancy limited to saved member segments: {}", train.id(), exception.getMessage());
+        }
+        occupancy.update(train.id(), intervals);
+    }
+
+    public TrackOccupancyManager occupancy() {
+        data();
+        graph();
+        return occupancy;
+    }
+
+    /** Ordinary edits are protected; only explicit administrative force bypasses this boundary. */
+    public void removeTrack(UUID segmentId, boolean force) {
+        data();
+        var tracks = graph();
+        tracks.segment(segmentId);
+        var assembly = tracks.assemblyForSegment(segmentId);
+        if (assembly != null) {
+            removeTurnout(assembly.id(), force);
+            return;
+        }
+        if (!force) requireUnoccupied(List.of(segmentId));
+        tracks.removeSegment(segmentId);
+    }
+
+    public void removeTurnout(UUID assemblyId, boolean force) {
+        data();
+        var assembly = graph().assembly(assemblyId);
+        if (!force) {
+            requireUnoccupied(assembly.segments());
+            if (graph.assembly(assemblyId).occupant() != null) {
+                throw new TrackGraphException(TrackGraphException.Reason.VEHICLE_PRESENT);
+            }
+        }
+        graph.removeAssembly(assemblyId);
+    }
+
+    private void requireUnoccupied(List<UUID> segments) {
+        // A click can arrive after chunk/entity joining but before the deferred registration tick.
+        for (UUID id : pending) {
+            if (level.getEntity(id) instanceof TrainEntity entity && entity.getRailAnchor() != null) {
+                var train = state(entity);
+                if (occupancy.intervals(train.id()).isEmpty()) seedOccupancy(train);
+            }
+        }
+        reservations.refreshLoaded();
+        if (segments.stream().anyMatch(id -> !occupancy.occupants(id).isEmpty())) {
+            throw new TrackGraphException(TrackGraphException.Reason.VEHICLE_PRESENT);
+        }
     }
 
     private void remove(TrainConsist train) {
+        occupancy.remove(train.id());
         trains.remove(train.id());
         restored.remove(train.id());
         for (var car : train.cars()) entityTrains.remove(car.entityId());
@@ -268,6 +354,11 @@ public final class TrainManager {
     }
 
     public boolean isRestored(TrainConsist train) { return restored.contains(train.id()); }
+
+    public TrainConsist knownTrain(UUID entityId) {
+        data();
+        return trains.get(entityTrains.get(entityId));
+    }
 
     private List<TrainEntity> requireReady(TrainConsist train) {
         if (train.running()) throw new StateException(StopReason.CONSIST_NOT_STOPPED);
@@ -371,6 +462,7 @@ public final class TrainManager {
             candidate.setWindow(window);
             checkCheckpoint(candidate, calculate(candidate, entities, candidate.progress()));
             train.setWindow(window);
+            occupancy.update(train.id(), TrackOccupancyManager.footprint(train, train.progress()));
         } catch (IllegalArgumentException exception) {
             throw new StateException(StopReason.TRACK_CHANGED, exception);
         }
@@ -407,16 +499,16 @@ public final class TrainManager {
         return areas;
     }
 
-    private void check(TrainConsist train, List<AABB> areas) {
+    private void check(TrainConsist train, List<AABB> areas, List<TrackOccupancyManager.Interval> intervals) {
         for (var area : areas) {
             var failure = areaFailure(area);
             if (failure != null) throw new StateException(failure);
         }
         for (var assembly : graph.assemblies()) {
-            if (areas.stream().anyMatch(area -> area.intersects(assembly.bounds()))
+            if (intervals.stream().anyMatch(interval -> assembly.segments().contains(interval.segmentId()))
                     && !TrackTransitionResolver.usesEnabledPath(assembly, train::usesSegment)) throw new StateException(StopReason.TURNOUT_ROUTE_UNAVAILABLE);
         }
-        if (!reservations.available(memberIds(train), areas)) throw new StateException(StopReason.TURNOUT_OCCUPIED);
+        if (!reservations.available(memberIds(train), areas, intervals)) throw new StateException(StopReason.TURNOUT_OCCUPIED);
     }
 
     private void saveCandidate(TrainConsist train, Candidate candidate) {
@@ -426,6 +518,7 @@ public final class TrainManager {
             savedData.setDirty();
         }
         train.setProgress(candidate.progress());
+        occupancy.update(train.id(), TrackOccupancyManager.footprint(train, candidate.progress()));
     }
 
     private void commit(TrainConsist train, Candidate candidate, boolean publish) {
@@ -470,8 +563,9 @@ public final class TrainManager {
                 areas.add(move ? car.bounds() : TrackReservationManager.area(car.entity()));
             }
             reservations.refreshLoaded();
-            check(train, areas);
-            reservations.acquire(memberIds(train), areas);
+            var intervals = TrackOccupancyManager.footprint(train, candidate.progress());
+            check(train, areas, intervals);
+            reservations.acquire(memberIds(train), areas, intervals);
             saveCandidate(train, candidate);
             for (int i = 0; i < candidate.cars().size(); i++) {
                 var car = candidate.cars().get(i);
@@ -482,7 +576,7 @@ public final class TrainManager {
                     car.entity().setOldPosAndRot();
                 }
             }
-            reservations.releaseOutside(memberIds(train), areas);
+            reservations.releaseOutside(memberIds(train), areas, intervals);
             restored.add(train.id());
             sync(train);
             return null;
@@ -519,7 +613,8 @@ public final class TrainManager {
             var candidate = calculate(train, List.of(entity), train.progress());
             var car = candidate.cars().getFirst();
             reservations.refreshLoaded();
-            check(train, candidate.areas());
+            var intervals = TrackOccupancyManager.footprint(train, candidate.progress());
+            check(train, candidate.areas(), intervals);
             var p = car.pose().body().position();
             if (!allowed.test(BlockPos.containing(p.x(), p.y(), p.z()))) return StopReason.INVALID_POSITION;
             entity.setTrainId(train.id());
@@ -535,8 +630,8 @@ public final class TrainManager {
             attached.add(entity.getUUID());
             restored.add(train.id());
             pending.remove(entity.getUUID());
-            reservations.acquire(memberIds(train), candidate.areas());
-            reservations.releaseOutside(memberIds(train), candidate.areas());
+            reservations.acquire(memberIds(train), candidate.areas(), intervals);
+            reservations.releaseOutside(memberIds(train), candidate.areas(), intervals);
             return null;
         } catch (StateException exception) {
             return exception.reason();
@@ -558,10 +653,11 @@ public final class TrainManager {
             checkCheckpoint(train, candidate);
             var areas = swept(currentAreas(entities), candidate.areas());
             reservations.refreshLoaded();
-            check(train, areas);
-            reservations.acquire(memberIds(train), areas);
+            var intervals = TrackOccupancyManager.footprint(train, candidate.progress());
+            check(train, areas, intervals);
+            reservations.acquire(memberIds(train), areas, intervals);
             commit(train, candidate, true);
-            reservations.releaseOutside(memberIds(train), candidate.areas());
+            reservations.releaseOutside(memberIds(train), candidate.areas(), intervals);
             train.start();
             return null;
         } catch (StateException exception) {
@@ -638,8 +734,9 @@ public final class TrainManager {
             var actual = currentAreas(List.of(front, rear));
             // Include old saved poses even when the along-route adjustment is zero.
             var alignment = swept(actual, candidate.areas());
-            if (reservations.touchesTurnout(alignment)) return StopReason.TURNOUT_OPERATION_BLOCKED;
-            check(combined, alignment);
+            var intervals = TrackOccupancyManager.footprint(combined, candidate.progress());
+            if (reservations.touchesTurnout(alignment, intervals)) return StopReason.TURNOUT_OPERATION_BLOCKED;
+            check(combined, alignment, intervals);
             var previous = actual.get(1);
             double accepted = from;
             var sampleOffsets = TrainMotion.sampleOffsets(rearSpec);
@@ -647,8 +744,8 @@ public final class TrainManager {
                 double next = TrainMotion.nextStep(combined.route(), combined.sampler(), sampleOffsets, accepted, target);
                 var car = solveCar(combined, members.get(1), rear, next);
                 var sweep = previous.minmax(car.bounds());
-                if (reservations.touchesTurnout(List.of(sweep))) return StopReason.TURNOUT_OPERATION_BLOCKED;
-                check(combined, List.of(sweep));
+                if (reservations.touchesTurnout(List.of(sweep), intervals)) return StopReason.TURNOUT_OPERATION_BLOCKED;
+                check(combined, List.of(sweep), intervals);
                 previous = car.bounds();
                 accepted = next;
             }
@@ -673,7 +770,7 @@ public final class TrainManager {
             var train = registered(member);
             if (train.cars().size() != 2) return StopReason.NOT_COUPLED;
             var entities = requireReady(train);
-            if (reservations.touchesTurnout(currentAreas(entities))) return StopReason.TURNOUT_OPERATION_BLOCKED;
+            if (reservations.touchesTurnout(currentAreas(entities), occupancy.intervals(train.id()))) return StopReason.TURNOUT_OPERATION_BLOCKED;
             var first = new TrainConsist(train.id(), List.of(train.cars().getFirst().asSingle()), train.configuredSpeed());
             var second = new TrainConsist(UUID.randomUUID(), List.of(train.cars().get(1).asSingle()), train.configuredSpeed());
             first.setWindow(train.window().copyAt(graph(), train.progress()));
@@ -687,6 +784,8 @@ public final class TrainManager {
             entities.get(1).setTrainId(second.id());
             restored.add(first.id());
             restored.add(second.id());
+            occupancy.update(first.id(), TrackOccupancyManager.footprint(first, first.progress()));
+            occupancy.update(second.id(), TrackOccupancyManager.footprint(second, second.progress()));
             sync(first);
             sync(second);
             return null;
@@ -703,12 +802,11 @@ public final class TrainManager {
     private void trackChanged(TrackSegmentChange change) {
         var segment = change.segment();
         for (var train : trains.values()) {
-            if (train.route() == null || train.routeDirty()) continue;
             if (change.type() == TrackSegmentChange.Type.REMOVED
-                    && train.window().occupies(segment.id(), train)) {
+                    && (occupancy.occupies(train.id(), segment.id()) || (train.window() != null && train.window().occupies(segment.id(), train)))) {
                 train.invalidate();
                 sync(train);
-            } else if (train.usesNode(segment.startNodeId()) || train.usesNode(segment.endNodeId())) {
+            } else if (!train.routeDirty() && (train.usesNode(segment.startNodeId()) || train.usesNode(segment.endNodeId()))) {
                 train.window().requestRefresh();
             }
         }
@@ -765,7 +863,7 @@ public final class TrainManager {
             entities = loadedMembers(train);
             maintainWindow(train, entities);
             previous = currentAreas(entities);
-            check(train, previous);
+            check(train, previous, occupancy.intervals(train.id()));
             var range = TrainMotion.range(train);
             target = Math.clamp(train.progress() + train.actualSpeed() / 20, range.min(), range.max());
         } catch (StateException exception) {
@@ -779,8 +877,9 @@ public final class TrainManager {
                 double next = TrainMotion.nextStep(train.route(), train.sampler(), sampleOffsets, progress, target);
                 var candidate = calculate(train, entities, next);
                 var areas = swept(previous, candidate.areas());
-                check(train, areas);
-                reservations.acquire(owners, areas);
+                var intervals = TrackOccupancyManager.footprint(train, next);
+                check(train, areas, intervals);
+                reservations.acquire(owners, areas, intervals);
                 accepted = candidate;
                 progress = next;
                 previous = candidate.areas();
@@ -790,7 +889,7 @@ public final class TrainManager {
             }
         }
         if (accepted != null) commit(train, accepted, level.getGameTime() % 2 == 0);
-        reservations.releaseOutside(owners, previous);
+        reservations.releaseOutside(owners, previous, occupancy.intervals(train.id()));
         var range = TrainMotion.range(train);
         if (failure != null) stop(train, failure);
         else if ((train.actualSpeed() < 0 && progress == range.min() && train.window().startBoundary())

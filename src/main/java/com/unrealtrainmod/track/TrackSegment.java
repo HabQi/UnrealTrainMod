@@ -33,7 +33,9 @@ public final class TrackSegment {
     public UUID endNodeId() { return endNodeId; }
     public TrackGeometry geometry() { return geometry; }
     public String modelId() { return modelId; }
-    public Type type() { return geometry instanceof BezierTrackGeometry ? Type.BEZIER : Type.STRAIGHT; }
+    public Type type() {
+        return TrackGeometryDefinition.horizontal(geometry) instanceof BezierTrackGeometry ? Type.BEZIER : Type.STRAIGHT;
+    }
     /** Conservative coverage, including control-bounds false positives. */
     public boolean coversChunk(int x, int z) {
         return x >= chunkBounds.minX() && x <= chunkBounds.maxX()

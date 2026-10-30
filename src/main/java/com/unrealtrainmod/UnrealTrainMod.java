@@ -10,9 +10,11 @@ import com.unrealtrainmod.command.TrackCommands;
 import com.unrealtrainmod.command.TrainCommands;
 import com.unrealtrainmod.command.TurnoutCommands;
 import com.unrealtrainmod.train.TrainManager;
+import com.unrealtrainmod.train.TrainDiagnostics;
 import com.unrealtrainmod.entity.PlacedModelEntity;
 import com.unrealtrainmod.entity.TrainEntity;
 import com.unrealtrainmod.item.ModelPlacerItem;
+import com.unrealtrainmod.item.HacksawItem;
 import com.unrealtrainmod.item.VehicleItem;
 import com.unrealtrainmod.item.TrackBuilderItem;
 import com.unrealtrainmod.item.TurnoutBuilderItem;
@@ -62,7 +64,7 @@ public class UnrealTrainMod {
     public static final DeferredRegister<CreativeModeTab> CREATIVE_MODE_TABS = DeferredRegister.create(Registries.CREATIVE_MODE_TAB, MODID);
 
     public static final DeferredBlock<TrackBlock> TRACK_BLOCK = BLOCKS.registerBlock("track", TrackBlock::new,
-            BlockBehaviour.Properties.of().mapColor(MapColor.METAL).strength(0.5f).sound(SoundType.METAL)
+            BlockBehaviour.Properties.of().mapColor(MapColor.METAL).strength(-1, 3600000).sound(SoundType.METAL)
                     .noOcclusion().noLootTable().pushReaction(PushReaction.BLOCK)
                     .isSuffocating((state, level, pos) -> false).isViewBlocking((state, level, pos) -> false));
 
@@ -78,6 +80,8 @@ public class UnrealTrainMod {
             "track_wrench", TrackWrenchItem::new, new Item.Properties().stacksTo(1));
     public static final DeferredItem<TurnoutBuilderItem> TURNOUT_BUILDER = ITEMS.registerItem(
             "turnout_builder", TurnoutBuilderItem::new, new Item.Properties().stacksTo(1));
+    public static final DeferredItem<HacksawItem> HACKSAW = ITEMS.registerItem(
+            "hacksaw", HacksawItem::new, new Item.Properties().stacksTo(1));
 
     public static final DeferredHolder<CreativeModeTab, CreativeModeTab> MOD_TAB = CREATIVE_MODE_TABS.register("example_tab", () -> CreativeModeTab.builder()
             .title(Component.translatable("itemGroup.unrealtrainmod"))
@@ -89,6 +93,7 @@ public class UnrealTrainMod {
                 output.accept(RAIL_PLACER.get());
                 output.accept(TRACK_WRENCH.get());
                 output.accept(TURNOUT_BUILDER.get());
+                output.accept(HACKSAW.get());
                 output.accept(VEHICLE.get());
             }).build());
 
@@ -106,9 +111,11 @@ public class UnrealTrainMod {
         NeoForge.EVENT_BUS.addListener(TrainCommands::register);
         NeoForge.EVENT_BUS.addListener(TurnoutCommands::register);
         TrackBlockManager.register(NeoForge.EVENT_BUS);
+        HacksawItem.register(NeoForge.EVENT_BUS);
         TrackSyncManager.register(NeoForge.EVENT_BUS);
         TrackConstructionManager.register(NeoForge.EVENT_BUS);
         TurnoutConstructionManager.register(NeoForge.EVENT_BUS);
         TrainManager.register(NeoForge.EVENT_BUS);
+        TrainDiagnostics.register(NeoForge.EVENT_BUS);
     }
 }

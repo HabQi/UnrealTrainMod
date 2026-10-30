@@ -21,6 +21,8 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
+import net.minecraft.world.entity.player.Player;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
@@ -75,6 +77,15 @@ public final class TrackBlockManager {
         return indexed == null ? List.of() : indexed.keySet().stream().sorted().map(graph::segment).toList();
     }
 
+    public boolean mayDismantle(Player player, List<UUID> segments) {
+        for (UUID id : segments) {
+            for (BlockPos pos : volumes.getOrDefault(id, Map.of()).keySet()) {
+                if (!level.mayInteract(player, pos) || !player.mayUseItemAt(pos, Direction.UP, player.getMainHandItem())) return false;
+            }
+        }
+        return true;
+    }
+
     /** True only when every indexed owner of the cell connects to this node. */
     public boolean isNodeTrackBlock(BlockPos pos, UUID nodeId) {
         Map<UUID, Integer> indexed = owners.get(pos);
@@ -103,7 +114,7 @@ public final class TrackBlockManager {
 
     private Map<UUID, Map<BlockPos, Integer>> prepareVolumes(List<TrackSegment> segments) {
         var batch = new HashMap<UUID, Map<BlockPos, Integer>>();
-        for (var segment : segments) batch.put(segment.id(), prepareVolume(segment, segments.size() > 1));
+        for (var segment : segments) batch.put(segment.id(), prepareVolume(segment));
         if (segments.size() > 1) {
             AABB bounds = null;
             for (var volume : batch.values()) {
@@ -123,7 +134,7 @@ public final class TrackBlockManager {
         return batch;
     }
 
-    private Map<BlockPos, Integer> prepareVolume(TrackSegment segment, boolean assemblyPlacement) {
+    private Map<BlockPos, Integer> prepareVolume(TrackSegment segment) {
         Map<BlockPos, Integer> volume = TrackBlockVolume.create(segment.geometry());
         for (BlockPos pos : volume.keySet()) {
             if (level.isOutsideBuildHeight(pos) || !level.getWorldBorder().isWithinBounds(pos)) {
@@ -131,26 +142,12 @@ public final class TrackBlockManager {
             }
             if (!level.hasChunkAt(pos)) throw new TrackGraphException(TrackGraphException.Reason.UNLOADED_VOLUME);
             BlockState state = level.getBlockState(pos);
-            boolean shared = state.is(UnrealTrainMod.TRACK_BLOCK.get()) && owners.containsKey(pos);
-            if (shared) {
-                for (UUID owner : owners.get(pos).keySet()) {
-                    var other = graph.segment(owner);
-                    if (!assemblyPlacement && graph.assemblyForSegment(owner) == null) continue;
-                    boolean endpoint = false;
-                    for (UUID node : List.of(segment.startNodeId(), segment.endNodeId())) {
-                        if (!node.equals(other.startNodeId()) && !node.equals(other.endNodeId())) continue;
-                        var p = graph.node(node).position();
-                        double radius = segment.geometry().sample(0).gauge() + 2;
-                        double dx = pos.getX() + 0.5 - p.x(), dz = pos.getZ() + 0.5 - p.z();
-                        if (dx * dx + dz * dz <= radius * radius) endpoint = true;
-                    }
-                    if (!endpoint) throw new TrackGraphException(TrackGraphException.Reason.BLOCKED_VOLUME);
-                }
-            }
-            if (!shared && (!state.canBeReplaced() || !state.getFluidState().isEmpty())) {
+            if (!state.getFluidState().isEmpty()
+                    || (!state.is(UnrealTrainMod.TRACK_BLOCK.get()) && !state.canBeReplaced())) {
                 throw new TrackGraphException(TrackGraphException.Reason.BLOCKED_VOLUME);
             }
         }
+        // Shared cells remain in each segment's volume so either segment can be removed independently.
         return volume;
     }
 
@@ -206,7 +203,7 @@ public final class TrackBlockManager {
                 .map(TrackAssemblyInstance::id).distinct().toList();
         if (!assemblyIds.isEmpty()) {
             for (UUID id : assemblyIds) graph.removeAssembly(id);
-            // Preserve any ordinary external track that also owns the broken endpoint cell.
+            // Preserve any ordinary track that also owns the removed cell.
             if (owners.containsKey(pos)) update(pos, true);
             return;
         }

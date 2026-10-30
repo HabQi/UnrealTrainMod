@@ -9,9 +9,14 @@ import java.util.Objects;
 import java.util.UUID;
 
 /** A connection is established by this ID, never by spatial proximity. */
-public record TrackNode(UUID id, TrackVector position, double gauge, TrackCurveParameters curve) {
+public record TrackNode(UUID id, TrackVector position, double gauge, TrackCurveParameters curve,
+                        TrackVerticalCurveParameters verticalCurve) {
+    public TrackNode(UUID id, TrackVector position, double gauge, TrackCurveParameters curve) {
+        this(id, position, gauge, curve, null);
+    }
+
     public TrackNode(UUID id, TrackVector position, double gauge) {
-        this(id, position, gauge, null);
+        this(id, position, gauge, null, null);
     }
 
     public TrackNode {

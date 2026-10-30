@@ -17,9 +17,12 @@ import com.unrealtrainmod.track.TrackGraphException;
 import com.unrealtrainmod.track.TrackNode;
 import com.unrealtrainmod.track.TrackSegment;
 import com.unrealtrainmod.track.geometry.BezierTrackGeometry;
+import com.unrealtrainmod.track.TrackGeometryDefinition;
+import com.unrealtrainmod.track.geometry.VerticalTrackGeometry;
 import com.unrealtrainmod.track.geometry.TrackPoint;
 import com.unrealtrainmod.track.geometry.TrackVector;
 import com.unrealtrainmod.track.block.TrackBlockManager;
+import com.unrealtrainmod.train.TrainManager;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
@@ -39,7 +42,7 @@ import static com.mojang.brigadier.arguments.IntegerArgumentType.integer;
 import static net.minecraft.commands.Commands.argument;
 import static net.minecraft.commands.Commands.literal;
 
-/** Server-side diagnostics only: these commands create data, not blocks or rendered rails. */
+/** Administrator track creation, inspection and protected demolition. */
 public final class TrackCommands {
     private static final String PREFIX = "commands.unrealtrainmod.track.";
     private static final double DEFAULT_GAUGE = 1.435;
@@ -61,7 +64,8 @@ public final class TrackCommands {
                         .executes(context -> addSegment(context, false)))))
                 .then(literal("bezier").then(nodeArgument("startNodeId").then(nodeArgument("endNodeId").then(controls))))
                 .then(literal("info").then(segmentArgument("segmentId").executes(TrackCommands::segmentInfo)))
-                .then(literal("remove").then(segmentArgument("segmentId").executes(TrackCommands::removeSegment)))
+                .then(literal("remove").then(segmentArgument("segmentId").executes(TrackCommands::removeSegment)
+                        .then(literal("force").executes(context -> removeSegment(context, true)))))
                 .then(literal("list")
                         .executes(context -> list(context, (int)Math.floor(context.getSource().getPosition().x / 16),
                                 (int)Math.floor(context.getSource().getPosition().z / 16)))
@@ -134,9 +138,13 @@ public final class TrackCommands {
                 context.getSource().sendSuccess(() -> Component.translatable(PREFIX + "model_info", segment.modelId(),
                         Component.translatable(PREFIX + (model == null ? "model_missing" : "model_present"))), false);
             }
-            if (segment.geometry() instanceof BezierTrackGeometry bezier) {
+            if (TrackGeometryDefinition.horizontal(segment.geometry()) instanceof BezierTrackGeometry bezier) {
                 context.getSource().sendSuccess(() -> Component.translatable(PREFIX + "controls", bezier.control1().x(),
                         bezier.control1().z(), bezier.control2().x(), bezier.control2().z()), false);
+            }
+            if (segment.geometry() instanceof VerticalTrackGeometry vertical) {
+                context.getSource().sendSuccess(() -> Component.translatable(PREFIX + "vertical_controls",
+                        vertical.control1().x(), vertical.control1().z(), vertical.control2().x(), vertical.control2().z()), false);
             }
             return 1;
         });
@@ -152,9 +160,13 @@ public final class TrackCommands {
     }
 
     private static int removeSegment(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        return removeSegment(context, false);
+    }
+
+    private static int removeSegment(CommandContext<CommandSourceStack> context, boolean force) throws CommandSyntaxException {
         return execute(context, graph -> {
             UUID segmentId = UuidArgument.getUuid(context, "segmentId");
-            graph.removeSegment(segmentId);
+            TrainManager.get(context.getSource().getLevel()).removeTrack(segmentId, force);
             context.getSource().sendSuccess(() -> Component.translatable(PREFIX + "segment_removed", id(segmentId)), true);
             return 1;
         });
@@ -189,6 +201,8 @@ public final class TrackCommands {
             throw error(exception.reason().name().toLowerCase(Locale.ROOT));
         } catch (IllegalArgumentException exception) {
             throw error("geometry", exception.getMessage());
+        } catch (IllegalStateException exception) {
+            throw error("storage", exception.getMessage());
         }
     }
 

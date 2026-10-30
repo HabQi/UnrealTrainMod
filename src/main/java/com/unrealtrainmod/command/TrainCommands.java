@@ -13,6 +13,7 @@ import com.unrealtrainmod.track.block.TrackBlockManager;
 import com.unrealtrainmod.train.TrainAnchor;
 import com.unrealtrainmod.train.TrainConsist;
 import com.unrealtrainmod.train.TrainManager;
+import com.unrealtrainmod.train.TrainDiagnostics;
 import java.util.Locale;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.SharedSuggestionProvider;
@@ -69,7 +70,16 @@ public final class TrainCommands {
                                 manager.setSpeed(vehicle, getDouble(context, "blocksPerSecond")))))))
                 .then(literal("reverse").then(vehicleArgument()
                         .executes(context -> execute(context, "reverse", TrainManager::reverse))))
-                .then(literal("info").then(vehicleArgument().executes(TrainCommands::info)));
+                .then(literal("info").then(vehicleArgument().executes(TrainCommands::info)))
+                .then(literal("debug")
+                        .then(literal("off").executes(context -> {
+                            TrainDiagnostics.stop(context.getSource().getPlayerOrException());
+                            return 1;
+                        }))
+                        .then(vehicleArgument().executes(context -> {
+                            TrainDiagnostics.watch(context.getSource().getPlayerOrException(), vehicle(context));
+                            return 1;
+                        })));
         event.getDispatcher().register(literal("utm").requires(source -> source.hasPermission(2)).then(train));
     }
 
@@ -144,6 +154,13 @@ public final class TrainCommands {
         context.getSource().sendSuccess(() -> anchor == null ? Component.translatable(PREFIX + "anchor_none")
                 : Component.translatable(PREFIX + "anchor", anchor.segmentId().toString(), number(anchor.distance()),
                         Boolean.toString(anchor.fromStart())), false);
+        try {
+            for (var line : TrainDiagnostics.occupancyLines(train, manager.occupancy(), 32, 16)) {
+                context.getSource().sendSuccess(() -> line, false);
+            }
+        } catch (IllegalStateException exception) {
+            throw error("operation", reason(TrainConsist.StopReason.STORAGE_ERROR));
+        }
         return 1;
     }
 

@@ -69,16 +69,23 @@ public final class TurnoutCommands {
                     c.getSource().sendSuccess(() -> Component.translatable(PREFIX + "count", g.assemblies().size()), false);
                     return g.assemblies().size();
                 })))
-                .then(literal("remove").then(assemblyArgument().executes(c -> execute(c, g -> {
-                    UUID id = UuidArgument.getUuid(c, "assemblyId"); g.removeAssembly(id);
-                    c.getSource().sendSuccess(() -> Component.translatable(PREFIX + "removed", id(id)), true); return 1;
-                }))));
+                .then(literal("remove").then(assemblyArgument().executes(c -> remove(c, false))
+                        .then(literal("force").executes(c -> remove(c, true)))));
         event.getDispatcher().register(literal("utm").requires(s -> s.hasPermission(2)).then(turnout));
     }
 
     private static RequiredArgumentBuilder<CommandSourceStack, UUID> assemblyArgument() {
         return argument("assemblyId", UuidArgument.uuid()).suggests((c, b) -> SharedSuggestionProvider.suggest(
                 graph(c).assemblies().stream().map(a -> a.id().toString()), b));
+    }
+
+    private static int remove(CommandContext<CommandSourceStack> context, boolean force) throws CommandSyntaxException {
+        return execute(context, graph -> {
+            UUID value = UuidArgument.getUuid(context, "assemblyId");
+            TrainManager.get(context.getSource().getLevel()).removeTurnout(value, force);
+            context.getSource().sendSuccess(() -> Component.translatable(PREFIX + "removed", id(value)), true);
+            return 1;
+        });
     }
 
     private static TrackGraph graph(CommandContext<CommandSourceStack> context) {

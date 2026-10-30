@@ -13,7 +13,9 @@ import net.minecraft.resources.ResourceLocation;
 
 /** Raw values are checked by the handler, allowing malformed input to receive an editing error. */
 public record SetTrackCurvePayload(ResourceLocation dimension, UUID revision, UUID editorId,
-                                   boolean start, boolean automatic, double angle, double length)
+                                   boolean start, boolean horizontalEdited, boolean verticalEdited,
+                                   boolean automatic, double angle, double length,
+                                   boolean verticalAutomatic, double grade, double verticalLength)
         implements CustomPacketPayload {
     public static final Type<SetTrackCurvePayload> TYPE = new Type<>(
             ResourceLocation.fromNamespaceAndPath(UnrealTrainMod.MODID, "set_track_curve"));
@@ -23,11 +25,17 @@ public record SetTrackCurvePayload(ResourceLocation dimension, UUID revision, UU
                 buffer.writeUUID(payload.revision());
                 buffer.writeUUID(payload.editorId());
                 buffer.writeBoolean(payload.start());
+                buffer.writeBoolean(payload.horizontalEdited());
+                buffer.writeBoolean(payload.verticalEdited());
                 buffer.writeBoolean(payload.automatic());
                 buffer.writeDouble(payload.angle());
                 buffer.writeDouble(payload.length());
+                buffer.writeBoolean(payload.verticalAutomatic());
+                buffer.writeDouble(payload.grade());
+                buffer.writeDouble(payload.verticalLength());
             }, buffer -> new SetTrackCurvePayload(buffer.readResourceLocation(), buffer.readUUID(), buffer.readUUID(),
-                    buffer.readBoolean(), buffer.readBoolean(), buffer.readDouble(), buffer.readDouble()));
+                    buffer.readBoolean(), buffer.readBoolean(), buffer.readBoolean(), buffer.readBoolean(),
+                    buffer.readDouble(), buffer.readDouble(), buffer.readBoolean(), buffer.readDouble(), buffer.readDouble()));
 
     @Override public Type<SetTrackCurvePayload> type() { return TYPE; }
 }
