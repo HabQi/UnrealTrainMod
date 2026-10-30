@@ -4,125 +4,240 @@
  */
 package com.unrealtrainmod.track.assembly;
 
+import com.unrealtrainmod.track.TrackConnection;
 import com.unrealtrainmod.track.geometry.TrackVector;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.TreeMap;
 import java.util.UUID;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.Tag;
 import net.minecraft.world.phys.AABB;
 
-/** Immutable world structure and stable state; occupancy is deliberately retained across unloads. */
+/** Immutable structure and controls; occupancy deliberately survives unloads. */
 public final class TrackAssemblyInstance {
-    public enum State { STRAIGHT, DIVERGING }
-    private final UUID id, a, b, c, straight, diverging, occupant;
+    private final UUID id, occupant;
     private final TrackAssemblyDefinition definition;
+    private final Map<String, TrackPort> ports;
+    private final Map<String, TrackPath> paths;
+    private final List<UUID> segments;
     private final TrackVector origin;
     private final double yaw, gauge;
-    private final State state;
+    private final JunctionState state;
     private final long revision;
     private final TrackAssemblyDefinition.Geometry geometry;
     private final AABB bounds;
 
-    public TrackAssemblyInstance(UUID id, TrackAssemblyDefinition definition, UUID a, UUID b, UUID c,
-                                 UUID straight, UUID diverging, TrackVector origin, double yaw, double gauge,
-                                 State state, long revision, UUID occupant) {
-        if (!Double.isFinite(yaw) || !Double.isFinite(gauge) || gauge <= 0 || 32 * gauge / 1.435 > 256 || revision < 0
-                || !Double.isFinite(origin.x()) || !Double.isFinite(origin.y()) || !Double.isFinite(origin.z())
-                || new java.util.HashSet<>(List.of(a, b, c, straight, diverging)).size() != 5) {
-            throw new IllegalArgumentException("Invalid turnout structure");
-        }
-        this.id = java.util.Objects.requireNonNull(id); this.definition = java.util.Objects.requireNonNull(definition);
-        this.a = a; this.b = b; this.c = c; this.straight = straight; this.diverging = diverging;
+    public TrackAssemblyInstance(UUID id, TrackAssemblyDefinition definition,
+                                 Map<String, TrackPort> ports, Map<String, TrackPath> paths,
+                                 TrackVector origin, double yaw, double gauge,
+                                 JunctionState state, long revision, UUID occupant,
+                                 TrackAssemblyDefinition.Geometry geometry) {
+        if (revision < 0) throw new IllegalArgumentException("Invalid assembly revision");
+        this.id = Objects.requireNonNull(id);
+        this.definition = Objects.requireNonNull(definition);
+        this.ports = Collections.unmodifiableMap(new TreeMap<>(ports));
+        this.paths = Collections.unmodifiableMap(new TreeMap<>(paths));
         this.origin = origin; this.yaw = ((yaw % 360) + 540) % 360 - 180; this.gauge = gauge;
-        this.state = java.util.Objects.requireNonNull(state); this.revision = revision; this.occupant = occupant;
-        geometry = definition.geometry(origin, this.yaw, gauge);
+        definition.validateState(state);
+        this.state = state; this.revision = revision; this.occupant = occupant;
+        this.geometry = geometry;
+        if (!ports.keySet().equals(geometry.ports().keySet()) || !paths.keySet().equals(definition.routes().keySet())) {
+            throw new IllegalArgumentException("Assembly ports or paths do not match definition");
+        }
+        var nodeIds = new HashSet<UUID>();
+        for (var entry : this.ports.entrySet()) {
+            var port = entry.getValue();
+            double expected = geometry.ports().get(entry.getKey()).outwardYaw();
+            double difference = ((port.outwardYaw() - expected) % 360 + 540) % 360 - 180;
+            if (!nodeIds.add(port.nodeId()) || Math.abs(difference) > 1e-6) {
+                throw new IllegalArgumentException("Invalid assembly port");
+            }
+        }
+        segments = this.paths.values().stream().flatMap(path -> path.steps().stream())
+                .map(TrackConnection::segmentId).distinct().toList();
+        if (segments.stream().anyMatch(nodeIds::contains)) throw new IllegalArgumentException("Assembly IDs overlap");
+        for (var entry : this.paths.entrySet()) {
+            if (entry.getValue().steps().size() != geometry.paths().get(entry.getKey()).size()) {
+                throw new IllegalArgumentException("Assembly path does not match definition geometry");
+            }
+        }
         bounds = createBounds();
     }
 
-    private TrackAssemblyInstance(TrackAssemblyInstance source, State state, long revision, UUID occupant) {
-        id = source.id; definition = source.definition;
-        a = source.a; b = source.b; c = source.c; straight = source.straight; diverging = source.diverging;
+    private TrackAssemblyInstance(TrackAssemblyInstance source, JunctionState state, long revision, UUID occupant) {
+        id = source.id; definition = source.definition; ports = source.ports; paths = source.paths; segments = source.segments;
         origin = source.origin; yaw = source.yaw; gauge = source.gauge;
         this.state = state; this.revision = revision; this.occupant = occupant;
         geometry = source.geometry; bounds = source.bounds;
     }
 
     public UUID id() { return id; }
-    public UUID a() { return a; }
-    public UUID b() { return b; }
-    public UUID c() { return c; }
-    public UUID straight() { return straight; }
-    public UUID diverging() { return diverging; }
     public UUID occupant() { return occupant; }
     public TrackAssemblyDefinition definition() { return definition; }
     public TrackVector origin() { return origin; }
     public double yaw() { return yaw; }
     public double gauge() { return gauge; }
-    public State state() { return state; }
+    public JunctionState state() { return state; }
     public long revision() { return revision; }
-
-    public List<UUID> ports() { return List.of(a, b, c); }
-    public List<UUID> segments() { return List.of(straight, diverging); }
-    public UUID activeSegment() {
-        var route = definition.routes().stream().filter(r -> r.state() == state).findFirst().orElseThrow();
-        return route.exit().equals("B") ? straight : diverging;
-    }
+    public Map<String, TrackPort> ports() { return ports; }
+    public Map<String, TrackPath> paths() { return paths; }
+    public List<UUID> segments() { return segments; }
     public TrackAssemblyDefinition.Geometry geometry() { return geometry; }
-    public TrackAssemblyInstance withState(State value) {
+
+    public TrackPort portAt(UUID nodeId) {
+        return ports.values().stream().filter(port -> port.nodeId().equals(nodeId)).findFirst().orElseThrow();
+    }
+
+    public TrackAssemblyInstance withState(JunctionState value) {
         return withState(value, Math.incrementExact(revision));
     }
-    public TrackAssemblyInstance withState(State value, long version) {
-        if (version < 0) throw new IllegalArgumentException("Invalid turnout state revision");
-        return new TrackAssemblyInstance(this, java.util.Objects.requireNonNull(value), version, occupant);
+    public TrackAssemblyInstance withState(JunctionState value, long version) {
+        if (version < 0) throw new IllegalArgumentException("Invalid assembly state revision");
+        definition.validateState(value);
+        return new TrackAssemblyInstance(this, value, version, occupant);
     }
     public TrackAssemblyInstance withOccupant(UUID value) {
         return new TrackAssemblyInstance(this, state, revision, value);
     }
 
-    /** Conservative protection includes the entire three-cell-wide track volume and vehicle overhang. */
+    /** Conservative protection covers all paths and vehicle overhang. */
     public AABB bounds() { return bounds; }
 
     private AABB createBounds() {
-        var g = geometry;
+        double minX = origin.x(), maxX = origin.x(), minZ = origin.z(), maxZ = origin.z();
+        for (var port : geometry.ports().values()) {
+            minX = Math.min(minX, port.position().x()); maxX = Math.max(maxX, port.position().x());
+            minZ = Math.min(minZ, port.position().z()); maxZ = Math.max(maxZ, port.position().z());
+        }
         double padding = Math.max(2, (gauge + 0.9) / 2);
-        return new AABB(Math.min(origin.x(), Math.min(g.b().x(), g.c().x())) - padding, origin.y() - 1,
-                Math.min(origin.z(), Math.min(g.b().z(), g.c().z())) - padding,
-                Math.max(origin.x(), Math.max(g.b().x(), g.c().x())) + padding, origin.y() + 4,
-                Math.max(origin.z(), Math.max(g.b().z(), g.c().z())) + padding);
+        return new AABB(minX - padding, origin.y() - 1, minZ - padding,
+                maxX + padding, origin.y() + 4, maxZ + padding);
     }
 
     public boolean coversChunk(int x, int z) {
-        var box = bounds();
-        return box.maxX >= (double)x * 16 && box.minX < (double)x * 16 + 16
-                && box.maxZ >= (double)z * 16 && box.minZ < (double)z * 16 + 16;
+        return bounds.maxX >= (double)x * 16 && bounds.minX < (double)x * 16 + 16
+                && bounds.maxZ >= (double)z * 16 && bounds.minZ < (double)z * 16 + 16;
     }
 
     public CompoundTag save() {
         var tag = new CompoundTag();
         tag.putUUID("Id", id); tag.putString("Definition", definition.name());
-        tag.putUUID("A", a); tag.putUUID("B", b); tag.putUUID("C", c);
-        tag.putUUID("Straight", straight); tag.putUUID("Diverging", diverging);
+        var savedPorts = new ListTag();
+        ports.forEach((name, port) -> {
+            var entry = new CompoundTag();
+            entry.putString("Name", name); entry.putUUID("Node", port.nodeId()); entry.putDouble("Yaw", port.outwardYaw());
+            savedPorts.add(entry);
+        });
+        tag.put("Ports", savedPorts);
+        var savedPaths = new ListTag();
+        paths.forEach((name, path) -> {
+            var entry = new CompoundTag();
+            entry.putString("Name", name);
+            var steps = new ListTag();
+            for (var step : path.steps()) {
+                var item = new CompoundTag();
+                item.putUUID("Segment", step.segmentId()); item.putBoolean("FromStart", step.fromStart()); steps.add(item);
+            }
+            entry.put("Steps", steps); savedPaths.add(entry);
+        });
+        tag.put("Paths", savedPaths);
         tag.putDouble("X", origin.x()); tag.putDouble("Y", origin.y()); tag.putDouble("Z", origin.z());
         tag.putDouble("Yaw", yaw); tag.putDouble("Gauge", gauge);
-        tag.putString("State", state.name()); tag.putLong("Revision", revision);
+        tag.put("Controls", state.save()); tag.putLong("Revision", revision);
         if (occupant != null) tag.putUUID("Occupant", occupant);
         return tag;
     }
 
     public static TrackAssemblyInstance load(CompoundTag tag) {
-        for (String key : List.of("Id", "A", "B", "C", "Straight", "Diverging")) {
-            if (!tag.hasUUID(key)) throw new IllegalArgumentException("Missing turnout UUID: " + key);
+        validateHeader(tag);
+        var ports = new LinkedHashMap<String, TrackPort>();
+        var savedPorts = readList(tag, "Ports");
+        for (int i = 0; i < savedPorts.size(); i++) {
+            var entry = savedPorts.getCompound(i);
+            String name = entry.getString("Name");
+            if (name.isBlank() || !entry.contains("Yaw", Tag.TAG_DOUBLE)
+                    || ports.putIfAbsent(name, new TrackPort(readUuid(entry, "Node"), entry.getDouble("Yaw"))) != null) {
+                throw new IllegalArgumentException("Invalid or duplicate assembly port");
+            }
+        }
+        var paths = new LinkedHashMap<String, TrackPath>();
+        var savedPaths = readList(tag, "Paths");
+        for (int i = 0; i < savedPaths.size(); i++) {
+            var entry = savedPaths.getCompound(i);
+            var steps = new ArrayList<TrackConnection>();
+            var savedSteps = readList(entry, "Steps");
+            for (int j = 0; j < savedSteps.size(); j++) {
+                var step = savedSteps.getCompound(j);
+                if (!step.contains("FromStart", Tag.TAG_BYTE)
+                        || (step.getByte("FromStart") != 0 && step.getByte("FromStart") != 1)) {
+                    throw new IllegalArgumentException("Invalid assembly path direction");
+                }
+                steps.add(new TrackConnection(readUuid(step, "Segment"), step.getBoolean("FromStart")));
+            }
+            String name = entry.getString("Name");
+            if (name.isBlank() || paths.putIfAbsent(name, new TrackPath(steps)) != null) {
+                throw new IllegalArgumentException("Invalid or duplicate assembly path");
+            }
+        }
+        if (!tag.contains("Controls", Tag.TAG_COMPOUND)) throw new IllegalArgumentException("Missing assembly controls");
+        return create(tag, ports, paths, JunctionState.load(tag.getCompound("Controls")));
+    }
+
+    /** Version 5 conversion is used only by world storage, never by network decoding. */
+    public static TrackAssemblyInstance loadLegacy(CompoundTag tag) {
+        validateHeader(tag);
+        var definition = TrackAssemblyDefinition.valueOf(tag.getString("Definition"));
+        double yaw = tag.getDouble("Yaw");
+        var ports = Map.of("A", new TrackPort(readUuid(tag, "A"), yaw + 180),
+                "B", new TrackPort(readUuid(tag, "B"), yaw), "C", new TrackPort(readUuid(tag, "C"), definition.exitYaw(yaw)));
+        var paths = Map.of("straight", new TrackPath(List.of(new TrackConnection(readUuid(tag, "Straight"), true))),
+                "diverging", new TrackPath(List.of(new TrackConnection(readUuid(tag, "Diverging"), true))));
+        var position = switch (tag.getString("State")) {
+            case "STRAIGHT" -> SwitchPosition.NORMAL;
+            case "DIVERGING" -> SwitchPosition.REVERSE;
+            default -> throw new IllegalArgumentException("Invalid legacy turnout state");
+        };
+        return create(tag, ports, paths, new JunctionState(Map.of("main", position)));
+    }
+
+    private static TrackAssemblyInstance create(CompoundTag tag, Map<String, TrackPort> ports,
+                                                 Map<String, TrackPath> paths, JunctionState state) {
+        var definition = TrackAssemblyDefinition.valueOf(tag.getString("Definition"));
+        var origin = new TrackVector(tag.getDouble("X"), tag.getDouble("Y"), tag.getDouble("Z"));
+        double yaw = ((tag.getDouble("Yaw") % 360) + 540) % 360 - 180;
+        double gauge = tag.getDouble("Gauge");
+        return new TrackAssemblyInstance(readUuid(tag, "Id"), definition, ports, paths, origin, yaw, gauge,
+                state, tag.getLong("Revision"), tag.hasUUID("Occupant") ? tag.getUUID("Occupant") : null,
+                definition.geometry(origin, yaw, gauge));
+    }
+
+    private static void validateHeader(CompoundTag tag) {
+        readUuid(tag, "Id");
+        if (!tag.contains("Definition", Tag.TAG_STRING) || !tag.contains("Revision", Tag.TAG_LONG)
+                || (tag.contains("Occupant") && !tag.hasUUID("Occupant"))) {
+            throw new IllegalArgumentException("Invalid assembly header");
         }
         for (String key : List.of("X", "Y", "Z", "Yaw", "Gauge")) {
-            if (!tag.contains(key, Tag.TAG_DOUBLE)) throw new IllegalArgumentException("Invalid turnout number: " + key);
+            if (!tag.contains(key, Tag.TAG_DOUBLE)) throw new IllegalArgumentException("Invalid assembly number: " + key);
         }
-        if (!tag.contains("Revision", Tag.TAG_LONG) || (tag.contains("Occupant") && !tag.hasUUID("Occupant"))) {
-            throw new IllegalArgumentException("Invalid turnout state");
-        }
-        return new TrackAssemblyInstance(tag.getUUID("Id"), TrackAssemblyDefinition.valueOf(tag.getString("Definition")),
-                tag.getUUID("A"), tag.getUUID("B"), tag.getUUID("C"), tag.getUUID("Straight"), tag.getUUID("Diverging"),
-                new TrackVector(tag.getDouble("X"), tag.getDouble("Y"), tag.getDouble("Z")), tag.getDouble("Yaw"),
-                tag.getDouble("Gauge"), State.valueOf(tag.getString("State")), tag.getLong("Revision"),
-                tag.hasUUID("Occupant") ? tag.getUUID("Occupant") : null);
+    }
+
+    private static UUID readUuid(CompoundTag tag, String key) {
+        if (!tag.hasUUID(key)) throw new IllegalArgumentException("Missing assembly UUID: " + key);
+        return tag.getUUID(key);
+    }
+
+    private static ListTag readList(CompoundTag tag, String key) {
+        if (!tag.contains(key, Tag.TAG_LIST)) throw new IllegalArgumentException("Missing assembly list: " + key);
+        var list = (ListTag)tag.get(key);
+        if (!list.isEmpty() && list.getElementType() != Tag.TAG_COMPOUND) throw new IllegalArgumentException("Invalid assembly list: " + key);
+        return list;
     }
 }

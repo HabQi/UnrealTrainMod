@@ -9,6 +9,7 @@ import com.unrealtrainmod.track.geometry.TrackPose;
 import com.unrealtrainmod.track.geometry.TrackVector;
 import java.util.Arrays;
 import com.unrealtrainmod.track.assembly.TrackAssemblyInstance;
+import com.unrealtrainmod.track.assembly.TrackTransitionResolver;
 
 /** Chunk-owned primitives use global distance grids, so adjacent chunks never duplicate a face. */
 public final class TrackMeshBuilder {
@@ -51,8 +52,8 @@ public final class TrackMeshBuilder {
     /** Shared sleepers/stock rails and a separately cached two-state tongue region. */
     public static TrackMeshData buildTurnout(TrackAssemblyInstance assembly, int chunkX, int chunkZ, boolean tongues) {
         var geometry = assembly.geometry();
-        var direct = geometry.straight();
-        var branch = geometry.diverging();
+        var direct = geometry.paths().get("straight").getFirst();
+        var branch = geometry.paths().get("diverging").getFirst();
         double length = direct.getLength();
         var mesh = new Builder((double)chunkX * 16, (double)chunkZ * 16);
         int count = (int)Math.ceil(length / RAIL_STEP);
@@ -73,7 +74,7 @@ public final class TrackMeshBuilder {
             }
             for (int rail = 0; rail < 4; rail++) {
                 if (tongues) {
-                    int active = assembly.state() == TrackAssemblyInstance.State.STRAIGHT ? 0 : 1;
+                    int active = TrackTransitionResolver.isPathEnabled(assembly, "straight") ? 0 : 1;
                     if (rail / 2 != active || rail == low || rail == high) continue;
                     if (horizontalDistanceSquared(centers[rail], centers[low]) < RAIL_WIDTH * RAIL_WIDTH
                             || horizontalDistanceSquared(centers[rail], centers[high]) < RAIL_WIDTH * RAIL_WIDTH) continue;

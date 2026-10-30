@@ -4,5 +4,13 @@
  */
 package com.unrealtrainmod.track.assembly;
 
-/** Both directions of one ordinary turnout path share the same required state. */
-public record TrackRouteDefinition(String entrance, String exit, TrackAssemblyInstance.State state) {}
+import java.util.Map;
+
+/** Both directions of a logical path require the same control positions. */
+public record TrackRouteDefinition(String entrance, String exit, Map<String, SwitchPosition> requirements) {
+    public TrackRouteDefinition { requirements = Map.copyOf(requirements); }
+
+    public boolean enabled(JunctionState state) {
+        return requirements.entrySet().stream().allMatch(e -> state.controls().get(e.getKey()) == e.getValue());
+    }
+}

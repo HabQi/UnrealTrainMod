@@ -32,7 +32,7 @@ import net.minecraft.world.level.storage.LevelResource;
 public final class TrackSavedData extends SavedData {
     public static final int MAX_VOLUME_BLOCKS = 16_384;
     private static final String NAME = "unrealtrainmod_tracks";
-    private static final int FORMAT_VERSION = 5;
+    private static final int FORMAT_VERSION = 6;
     private static final Factory<TrackSavedData> FACTORY =
             new Factory<>(TrackSavedData::new, (tag, registries) -> load(tag));
     private final TrackGraph graph = new TrackGraph(this::setDirty);
@@ -98,7 +98,8 @@ public final class TrackSavedData extends SavedData {
         if (tag.getInt("Version") >= 5) {
             var assemblies = readList(tag, "Assemblies");
             for (int i = 0; i < assemblies.size(); i++) data.graph.restoreAssembly(
-                    TrackAssemblyInstance.load(assemblies.getCompound(i)));
+                    tag.getInt("Version") == 5 ? TrackAssemblyInstance.loadLegacy(assemblies.getCompound(i))
+                            : TrackAssemblyInstance.load(assemblies.getCompound(i)));
         }
         // Do not publish a partly restored graph, or schedule a rewrite merely because it was loaded.
         data.setDirty(false);

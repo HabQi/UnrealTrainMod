@@ -12,6 +12,9 @@ import com.unrealtrainmod.track.geometry.TrackPoint;
 import com.unrealtrainmod.track.geometry.TrackVector;
 import com.unrealtrainmod.track.assembly.TrackAssemblyDefinition;
 import com.unrealtrainmod.track.assembly.TrackAssemblyInstance;
+import com.unrealtrainmod.track.assembly.JunctionState;
+import com.unrealtrainmod.track.assembly.TrackPath;
+import com.unrealtrainmod.track.assembly.TrackPort;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -171,8 +174,7 @@ public final class TrackGraph {
         boolean start = segment.startNodeId().equals(port);
         var tangent = segment.geometry().sample(start ? 0 : segment.geometry().getLength()).tangent();
         double sign = start ? 1 : -1;
-        double yaw = port.equals(assembly.a()) ? assembly.yaw() + 180
-                : port.equals(assembly.b()) ? assembly.yaw() : assembly.definition().exitYaw(assembly.yaw());
+        double yaw = assembly.portAt(port).outwardYaw();
         double radians = Math.toRadians(yaw);
         double dot = sign * (-Math.sin(radians) * tangent.x() + Math.cos(radians) * tangent.z());
         if (Math.abs(tangent.y()) > 1e-6 || dot < Math.cos(Math.toRadians(1))) {
@@ -258,75 +260,154 @@ public final class TrackGraph {
         return createTurnout(new TrackPlacementEndpoint(originId, origin.position()), origin.gauge(), definition, yaw);
     }
 
-    /** Pure preparation: no graph changes, world validation, or observer notifications. */
-    public PreparedTurnout prepareTurnout(TrackPlacementEndpoint origin, double gauge,
-                                          TrackAssemblyDefinition definition, double yaw) {
+    /** Pure preparation: all topology checks run against unpublished nodes and segments. */
+    public PreparedAssembly prepareTurnout(TrackPlacementEndpoint origin, double gauge,
+                                            TrackAssemblyDefinition definition, double yaw) {
         TrackNode a = placementNode(origin, gauge);
         if (origin.nodeId() != null && (assemblyAtPort(a.id()) != null || connections(a.id()).size() > 1)) {
             throw new IllegalArgumentException("Turnout origin must be a free endpoint");
         }
-        var instance = new TrackAssemblyInstance(UUID.randomUUID(), definition, a.id(), UUID.randomUUID(), UUID.randomUUID(),
-                UUID.randomUUID(), UUID.randomUUID(), a.position(), yaw, a.gauge(), TrackAssemblyInstance.State.STRAIGHT, 0, null);
-        var geometry = instance.geometry();
-        if (origin.nodeId() != null) {
-            for (var connection : connections(a.id())) validatePortTangent(segment(connection.segmentId()), a.id(), instance);
+        if (!Double.isFinite(yaw)) throw new IllegalArgumentException("Invalid turnout yaw");
+        yaw = ((yaw % 360) + 540) % 360 - 180;
+        var geometry = definition.geometry(a.position(), yaw, gauge);
+        var preparedNodes = new LinkedHashMap<UUID, TrackNode>();
+        var ports = new LinkedHashMap<String, TrackPort>();
+        for (var entry : geometry.ports().entrySet()) {
+            var port = entry.getValue();
+            UUID id = entry.getKey().equals("A") ? a.id() : UUID.randomUUID();
+            ports.put(entry.getKey(), new TrackPort(id, port.outwardYaw()));
+            double handle = geometry.paths().entrySet().stream()
+                    .filter(path -> definition.routes().get(path.getKey()).entrance().equals(entry.getKey())
+                            || definition.routes().get(path.getKey()).exit().equals(entry.getKey()))
+                    .mapToDouble(path -> path.getValue().stream().mapToDouble(TrackGeometry::getLength).sum()).min().orElseThrow() / 3;
+            preparedNodes.put(id, new TrackNode(id, port.position(), gauge,
+                    new TrackCurveParameters(entry.getKey().equals("A") ? yaw : port.outwardYaw(), handle)));
         }
-        var b = new TrackNode(instance.b(), geometry.b(), a.gauge(), new TrackCurveParameters(yaw, geometry.straight().getLength() / 3));
-        var c = new TrackNode(instance.c(), geometry.c(), a.gauge(), new TrackCurveParameters(definition.exitYaw(yaw),
-                geometry.diverging().getLength() / 3));
-        var direct = prepareSegment(instance.straight(), a, b, null, null, null, geometry.straight());
-        var branch = prepareSegment(instance.diverging(), a, c, geometry.control1(), geometry.control2(), null, geometry.diverging());
-        return new PreparedTurnout(instance, a, b, c, List.of(direct, branch));
+        var batch = new ArrayList<TrackSegment>();
+        var paths = new LinkedHashMap<String, TrackPath>();
+        for (var entry : geometry.paths().entrySet()) {
+            var route = definition.routes().get(entry.getKey());
+            var parts = entry.getValue();
+            var steps = new ArrayList<TrackConnection>();
+            var previous = preparedNodes.get(ports.get(route.entrance()).nodeId());
+            for (int i = 0; i < parts.size(); i++) {
+                var part = parts.get(i);
+                TrackNode next;
+                if (i == parts.size() - 1) next = preparedNodes.get(ports.get(route.exit()).nodeId());
+                else {
+                    next = new TrackNode(UUID.randomUUID(), part.sample(part.getLength()).position(), gauge);
+                    preparedNodes.put(next.id(), next);
+                }
+                var curve = part instanceof BezierTrackGeometry bezier ? bezier : null;
+                var segment = prepareSegment(UUID.randomUUID(), previous, next,
+                        curve == null ? null : curve.control1(), curve == null ? null : curve.control2(), null, part);
+                batch.add(segment);
+                steps.add(new TrackConnection(segment.id(), true));
+                previous = next;
+            }
+            paths.put(entry.getKey(), new TrackPath(steps));
+        }
+        var instance = new TrackAssemblyInstance(UUID.randomUUID(), definition, ports, paths, a.position(), yaw, gauge,
+                definition.initialState(), 0, null, geometry);
+        var byId = batch.stream().collect(java.util.stream.Collectors.toMap(TrackSegment::id, segment -> segment));
+        for (var node : preparedNodes.values()) {
+            if (!node.id().equals(a.id()) && nodes.containsKey(node.id())) {
+                throw new IllegalArgumentException("Duplicate assembly node ID");
+            }
+        }
+        validateAssembly(instance, preparedNodes::get, byId::get);
+        return new PreparedAssembly(instance, List.copyOf(preparedNodes.values()), List.copyOf(batch));
     }
 
-    public record PreparedTurnout(TrackAssemblyInstance instance, TrackNode a, TrackNode b, TrackNode c,
-                                  List<TrackSegment> segments) {}
+    public record PreparedAssembly(TrackAssemblyInstance instance, List<TrackNode> nodes, List<TrackSegment> segments) {}
 
     public TrackAssemblyInstance createTurnout(TrackPlacementEndpoint origin, double gauge,
                                                TrackAssemblyDefinition definition, double yaw) {
         var prepared = prepareTurnout(origin, gauge, definition, yaw);
         var instance = prepared.instance();
-        var a = prepared.a();
-        var batch = prepared.segments();
-        segmentValidator.accept(batch);
-        // No observer sees partial topology or missing ownership, including during block updates.
-        if (origin.nodeId() == null) insertNode(a);
-        insertNode(prepared.b()); insertNode(prepared.c());
-        nodes.put(a.id(), new TrackNode(a.id(), a.position(), a.gauge(),
-                new TrackCurveParameters(yaw, instance.geometry().straight().getLength() / 3)));
-        for (var segment : batch) indexSegment(segment);
-        restoreAssembly(instance);
+        segmentValidator.accept(prepared.segments());
+        // All rejecting validation precedes mutation; observers see complete ownership and topology.
+        for (var node : prepared.nodes()) {
+            if (nodes.containsKey(node.id())) nodes.put(node.id(), node);
+            else insertNode(node);
+        }
+        for (var segment : prepared.segments()) indexSegment(segment);
+        indexAssembly(instance);
         onChange.run();
-        for (var segment : batch) notifySegmentChange(new TrackSegmentChange(TrackSegmentChange.Type.ADDED, segment));
+        for (var segment : prepared.segments()) notifySegmentChange(new TrackSegmentChange(TrackSegmentChange.Type.ADDED, segment));
         for (var listener : assemblyListeners) listener.accept(instance);
         return instance;
     }
 
-    /** Called after all saved segments have been restored, before runtime observers are installed. */
+    /** Called after saved nodes and segments have been restored, before observers are installed. */
     public void restoreAssembly(TrackAssemblyInstance value) {
-        if (assemblies.containsKey(value.id())) throw new IllegalArgumentException("Duplicate turnout ID");
-        var geometry = value.geometry();
-        if (!samePosition(node(value.a()).position(), value.origin()) || !samePosition(node(value.b()).position(), geometry.b())
-                || !samePosition(node(value.c()).position(), geometry.c()) || segment(value.straight()).type() != TrackSegment.Type.STRAIGHT
-                || !(segment(value.diverging()).geometry() instanceof BezierTrackGeometry curve)
-                || !samePoint(curve.control1(), geometry.control1()) || !samePoint(curve.control2(), geometry.control2())) {
-            throw new IllegalArgumentException("Turnout geometry does not match its definition");
+        validateAssembly(value, this::node, this::segment);
+        indexAssembly(value);
+    }
+
+    private void validateAssembly(TrackAssemblyInstance value, java.util.function.Function<UUID, TrackNode> nodeLookup,
+                                  java.util.function.Function<UUID, TrackSegment> segmentLookup) {
+        if (assemblies.containsKey(value.id())) throw new IllegalArgumentException("Duplicate assembly ID");
+        for (var entry : value.ports().entrySet()) {
+            var port = entry.getValue();
+            var node = nodeLookup.apply(port.nodeId());
+            if (node == null || node.gauge() != value.gauge()
+                    || !samePosition(node.position(), value.geometry().ports().get(entry.getKey()).position())) {
+                throw new IllegalArgumentException("Assembly port geometry mismatch");
+            }
+            if (portAssemblies.containsKey(port.nodeId())) throw new IllegalArgumentException("Duplicate assembly port");
+            var external = connections.getOrDefault(port.nodeId(), List.of()).stream()
+                    .filter(c -> !value.segments().contains(c.segmentId())).toList();
+            if (external.size() > 1) throw new IllegalArgumentException("Too many assembly connections");
+            for (var connection : external) validatePortTangent(segment(connection.segmentId()), port.nodeId(), value);
         }
-        for (UUID port : value.ports()) {
-            if (node(port).gauge() != value.gauge()) throw new IllegalArgumentException("Turnout gauge mismatch");
-            if (portAssemblies.containsKey(port)) throw new IllegalArgumentException("Duplicate turnout port");
-            var external = connections(port).stream().filter(c -> !value.segments().contains(c.segmentId())).toList();
-            if (external.size() > 1) throw new IllegalArgumentException("Too many turnout connections");
-            for (var connection : external) validatePortTangent(segment(connection.segmentId()), port, value);
+        var portIds = value.ports().values().stream().map(TrackPort::nodeId).collect(java.util.stream.Collectors.toSet());
+        for (var entry : value.paths().entrySet()) {
+            var route = value.definition().routes().get(entry.getKey());
+            UUID previous = value.ports().get(route.entrance()).nodeId();
+            var expected = value.geometry().paths().get(entry.getKey());
+            var steps = entry.getValue().steps();
+            for (int i = 0; i < steps.size(); i++) {
+                var step = steps.get(i);
+                var segment = segmentLookup.apply(step.segmentId());
+                if (segment == null || segmentAssemblies.containsKey(segment.id())) {
+                    throw new IllegalArgumentException("Missing or already owned assembly segment");
+                }
+                UUID entrance = step.fromStart() ? segment.startNodeId() : segment.endNodeId();
+                UUID exit = step.fromStart() ? segment.endNodeId() : segment.startNodeId();
+                if (!entrance.equals(previous)) throw new IllegalArgumentException("Discontinuous assembly path");
+                var startNode = nodeLookup.apply(entrance);
+                var endNode = nodeLookup.apply(exit);
+                var part = expected.get(i);
+                if (startNode == null || endNode == null || startNode.gauge() != value.gauge() || endNode.gauge() != value.gauge()
+                        || !samePosition(startNode.position(), part.sample(0).position())
+                        || !samePosition(endNode.position(), part.sample(part.getLength()).position())
+                        || Math.abs(segment.geometry().getLength() - part.getLength()) > 1e-6) {
+                    throw new IllegalArgumentException("Assembly path geometry mismatch");
+                }
+                if (part instanceof BezierTrackGeometry wanted) {
+                    if (!(segment.geometry() instanceof BezierTrackGeometry actual)
+                            || !samePoint(step.fromStart() ? actual.control1() : actual.control2(), wanted.control1())
+                            || !samePoint(step.fromStart() ? actual.control2() : actual.control1(), wanted.control2())) {
+                        throw new IllegalArgumentException("Assembly curve mismatch");
+                    }
+                } else if (segment.type() != TrackSegment.Type.STRAIGHT) throw new IllegalArgumentException("Assembly line mismatch");
+                if (i < steps.size() - 1 && portIds.contains(exit)) throw new IllegalArgumentException("Path crosses an external port");
+                for (UUID id : List.of(entrance, exit)) {
+                    if (!portIds.contains(id) && (portAssemblies.containsKey(id)
+                            || connections.getOrDefault(id, List.of()).stream().anyMatch(c -> !value.segments().contains(c.segmentId())))) {
+                        throw new IllegalArgumentException("Assembly internal node has an external connection");
+                    }
+                }
+                previous = exit;
+            }
+            if (!previous.equals(value.ports().get(route.exit()).nodeId())) throw new IllegalArgumentException("Wrong assembly path exit");
         }
-        for (UUID id : value.segments()) {
-            var segment = segment(id);
-            UUID end = id.equals(value.straight()) ? value.b() : value.c();
-            if (!segment.startNodeId().equals(value.a()) || !segment.endNodeId().equals(end)
-                    || segmentAssemblies.containsKey(id)) throw new IllegalArgumentException("Invalid turnout path");
-        }
+    }
+
+    private void indexAssembly(TrackAssemblyInstance value) {
         assemblies.put(value.id(), value);
-        value.ports().forEach(id -> portAssemblies.put(id, value.id()));
+        value.ports().values().forEach(port -> portAssemblies.put(port.nodeId(), value.id()));
         value.segments().forEach(id -> segmentAssemblies.put(id, value.id()));
     }
 
@@ -338,9 +419,9 @@ public final class TrackGraph {
         return Math.abs(a.x() - b.x()) <= 1e-6 && Math.abs(a.z() - b.z()) <= 1e-6;
     }
 
-    public void setAssemblyState(UUID id, TrackAssemblyInstance.State state) {
+    public void setAssemblyState(UUID id, JunctionState state) {
         var old = assembly(id);
-        if (old.state() == state) return;
+        if (old.state().equals(state)) return;
         if (old.occupant() != null) throw new IllegalArgumentException("Turnout occupied by " + old.occupant());
         var updated = old.withState(state);
         assemblies.put(id, updated);
@@ -359,7 +440,7 @@ public final class TrackGraph {
         var value = assembly(id);
         var removed = value.segments().stream().map(this::segment).toList();
         assemblies.remove(id);
-        value.ports().forEach(portAssemblies::remove);
+        value.ports().values().forEach(port -> portAssemblies.remove(port.nodeId()));
         value.segments().forEach(segmentAssemblies::remove);
         for (var segment : removed) unindexSegment(segment);
         onChange.run();

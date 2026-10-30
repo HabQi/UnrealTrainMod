@@ -31,7 +31,7 @@ public final class ModPayloads {
     private ModPayloads() {}
 
     public static void register(RegisterPayloadHandlersEvent event) {
-        var registrar = event.registrar("8");
+        var registrar = event.registrar("9");
         registrar.playToClient(OpenTurnoutPayload.TYPE, OpenTurnoutPayload.STREAM_CODEC,
                 (payload, context) -> NeoForge.EVENT_BUS.post(new TrackSyncEvent(payload)));
         registrar.playToClient(TurnoutResultPayload.TYPE, TurnoutResultPayload.STREAM_CODEC,

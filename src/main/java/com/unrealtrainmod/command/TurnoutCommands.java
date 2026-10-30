@@ -11,8 +11,10 @@ import com.mojang.brigadier.exceptions.SimpleCommandExceptionType;
 import com.unrealtrainmod.track.TrackGraph;
 import com.unrealtrainmod.track.assembly.TrackAssemblyDefinition;
 import com.unrealtrainmod.track.assembly.TrackAssemblyInstance;
+import com.unrealtrainmod.track.assembly.SwitchPosition;
 import com.unrealtrainmod.track.block.TrackBlockManager;
 import com.unrealtrainmod.train.TrainManager;
+import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
 import net.minecraft.ChatFormatting;
@@ -46,11 +48,12 @@ public final class TurnoutCommands {
                             })))));
         }
         var set = assemblyArgument();
-        for (var state : TrackAssemblyInstance.State.values()) {
-            set.then(literal(state.name().toLowerCase(Locale.ROOT)).executes(c -> execute(c, g -> {
+        for (String name : List.of("straight", "diverging")) {
+            var position = name.equals("straight") ? SwitchPosition.NORMAL : SwitchPosition.REVERSE;
+            set.then(literal(name).executes(c -> execute(c, g -> {
                 TrainManager.get(c.getSource().getLevel()).refreshTurnoutOccupancy();
                 UUID id = UuidArgument.getUuid(c, "assemblyId");
-                g.setAssemblyState(id, state);
+                g.setAssemblyState(id, g.assembly(id).state().withControl("main", position));
                 describe(c, g, g.assembly(id));
                 return 1;
             })));
@@ -88,16 +91,22 @@ public final class TurnoutCommands {
                 : Component.translatable(PREFIX + (source.getLevel().getEntity(value.occupant()) == null ? "waiting" : "occupied"), id(value.occupant()));
         source.sendSuccess(() -> Component.translatable(PREFIX + "info", id(value.id()),
                 Component.translatable(PREFIX + value.definition().name().toLowerCase(Locale.ROOT)),
-                Component.translatable(PREFIX + value.state().name().toLowerCase(Locale.ROOT)), value.revision(), occupancy), false);
-        var ports = value.ports();
-        for (int i = 0; i < ports.size(); i++) {
-            var node = graph.node(ports.get(i));
-            String name = String.valueOf((char)('A' + i));
-            double yaw = i == 0 ? value.yaw() + 180 : i == 1 ? value.yaw() : value.definition().exitYaw(value.yaw());
-            source.sendSuccess(() -> Component.translatable(PREFIX + "port", name, id(node.id()),
-                    number(node.position().x()), number(node.position().y()), number(node.position().z()), number(yaw)), false);
+                Component.translatable(PREFIX + (value.state().controls().get("main") == SwitchPosition.NORMAL ? "straight" : "diverging")), value.revision(), occupancy), false);
+        for (var entry : value.ports().entrySet()) {
+            var port = entry.getValue();
+            var node = graph.node(port.nodeId());
+            source.sendSuccess(() -> Component.translatable(PREFIX + "port", entry.getKey(), id(node.id()),
+                    number(node.position().x()), number(node.position().y()), number(node.position().z()), number(port.outwardYaw())), false);
         }
-        source.sendSuccess(() -> Component.translatable(PREFIX + "paths", id(value.straight()), id(value.diverging()), number(value.gauge())), false);
+        for (var entry : value.paths().entrySet()) {
+            var steps = Component.empty();
+            for (var step : entry.getValue().steps()) {
+                if (!steps.getSiblings().isEmpty()) steps.append(" → ");
+                steps.append(step.fromStart() ? "+" : "−").append(id(step.segmentId()));
+            }
+            source.sendSuccess(() -> Component.translatable(PREFIX + "path", entry.getKey(), steps,
+                    number(value.gauge())), false);
+        }
     }
 
     private static String number(double value) { return String.format(Locale.ROOT, "%.4f", value); }

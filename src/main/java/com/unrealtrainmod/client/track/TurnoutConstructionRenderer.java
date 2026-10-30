@@ -39,8 +39,9 @@ public final class TurnoutConstructionRenderer {
             var buffers = MultiBufferSource.immediate(bytes);
             var lines = buffers.getBuffer(TrackRenderTypes.PREVIEW);
             var camera = event.getCamera().getPosition();
-            path(lines, geometry.straight(), draft.gauge(), camera, color);
-            path(lines, geometry.diverging(), draft.gauge(), camera, color);
+            for (var parts : geometry.paths().values()) {
+                for (var part : parts) path(lines, part, draft.gauge(), camera, color);
+            }
             var volume = state.volume();
             for (var entry : volume.entrySet()) {
                 BlockPos p = entry.getKey();
@@ -54,18 +55,16 @@ public final class TurnoutConstructionRenderer {
                 if (!volume.containsKey(p.south())) line(lines, c, d, camera, color);
                 if (!volume.containsKey(p.west())) line(lines, d, a, camera, color);
             }
-            double[] directions = {state.yaw() + 180, state.yaw(), state.definition().exitYaw(state.yaw())};
-            TrackVector[] ports = {draft.origin().position(), geometry.b(), geometry.c()};
-            for (int i = 0; i < ports.length; i++) arrow(lines, ports[i], directions[i], camera, color);
+            for (var port : geometry.ports().values()) arrow(lines, port.position(), port.outwardYaw(), camera, color);
             buffers.endBatch(TrackRenderTypes.PREVIEW);
             var font = Minecraft.getInstance().font;
-            for (int i = 0; i < ports.length; i++) {
-                var point = ports[i];
+            for (var entry : geometry.ports().entrySet()) {
+                var point = entry.getValue().position();
                 var pose = new PoseStack();
                 pose.translate(point.x() - camera.x, point.y() - camera.y + 0.6, point.z() - camera.z);
                 pose.mulPose(event.getCamera().rotation()); pose.scale(0.025f, -0.025f, 0.025f);
-                double direction = ((directions[i] % 360) + 540) % 360 - 180;
-                String label = String.format(Locale.ROOT, "%c  %.1f°", 'A' + i, direction);
+                double direction = ((entry.getValue().outwardYaw() % 360) + 540) % 360 - 180;
+                String label = String.format(Locale.ROOT, "%s  %.1f°", entry.getKey(), direction);
                 font.drawInBatch(label, -font.width(label) / 2f, 0, color, true, pose.last().pose(),
                         buffers, Font.DisplayMode.NORMAL, 0x80000000, 0xF000F0);
             }

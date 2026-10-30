@@ -5,7 +5,6 @@
 package com.unrealtrainmod.train;
 
 import com.unrealtrainmod.entity.TrainEntity;
-import com.unrealtrainmod.track.TrackConnection;
 import com.unrealtrainmod.track.TrackGraph;
 import com.unrealtrainmod.track.TrackSegmentChange;
 import com.unrealtrainmod.track.assembly.TrackAssemblyInstance;
@@ -13,8 +12,6 @@ import com.unrealtrainmod.track.assembly.TrackReservationManager;
 import com.unrealtrainmod.track.assembly.TrackTransitionResolver;
 import com.unrealtrainmod.track.block.TrackBlockManager;
 import com.unrealtrainmod.track.geometry.TrackVector;
-import com.unrealtrainmod.track.path.TrackPathSampler;
-import com.unrealtrainmod.track.path.TrackRoute;
 import com.unrealtrainmod.train.TrainConsist.StopReason;
 import com.unrealtrainmod.vehicle.VehicleCatalog;
 import com.unrealtrainmod.vehicle.VehicleMotionSpec;
@@ -65,7 +62,8 @@ public final class TrainManager {
     private final Consumer<TrackAssemblyInstance> assemblyListener = this::assemblyChanged;
     private final Consumer<TrackAssemblyInstance> assemblyRemoveListener = assembly -> assemblyRevisions.remove(assembly.id());
 
-    private record CarCandidate(TrainCarState member, TrainEntity entity, VehiclePose pose, TrainAnchor anchor, AABB bounds) {}
+    private record CarCandidate(TrainCarState member, TrainEntity entity, double progress,
+                                VehiclePose pose, TrainAnchor anchor, AABB bounds) {}
     private record Candidate(double progress, List<CarCandidate> cars) {
         List<AABB> areas() { return cars.stream().map(CarCandidate::bounds).toList(); }
     }
@@ -281,6 +279,7 @@ public final class TrainManager {
                 throw new StateException(StopReason.CONSIST_NOT_READY);
             }
         }
+        maintainWindow(train, entities);
         return entities;
     }
 
@@ -324,6 +323,13 @@ public final class TrainManager {
     public TrainConsist info(TrainEntity entity) {
         var train = state(entity);
         if (attached.add(entity.getUUID())) restore(train);
+        if (isRestored(train) && !train.routeDirty()) {
+            try {
+                maintainWindow(train, loadedMembers(train));
+            } catch (StateException exception) {
+                stop(train, exception.reason());
+            }
+        }
         return train;
     }
 
@@ -345,21 +351,28 @@ public final class TrainManager {
             if (anchor.distance() > tracks.segment(anchor.segmentId()).geometry().getLength()) {
                 throw new StateException(StopReason.INVALID_ANCHOR);
             }
-            if (!TrackTransitionResolver.active(tracks, anchor.segmentId())) {
+            if (!TrackTransitionResolver.isSegmentEnabled(tracks, anchor.segmentId())) {
                 throw new StateException(StopReason.TURNOUT_ROUTE_UNAVAILABLE);
             }
-            var route = TrackRoute.trace(tracks, new TrackConnection(anchor.segmentId(), anchor.fromStart()));
-            var sampler = new TrackPathSampler(route);
-            double progress = TrainMotion.distance(route, sampler, anchor);
-            var nodes = new HashSet<UUID>();
-            for (var connection : route.connections()) {
-                var segment = tracks.segment(connection.segmentId());
-                nodes.add(segment.startNodeId());
-                nodes.add(segment.endNodeId());
-            }
-            train.setRoute(route, sampler, progress, nodes);
+            train.setWindow(TrainRouteWindow.initial(tracks, anchor, train));
         } catch (IllegalArgumentException exception) {
             throw new StateException(StopReason.INVALID_ANCHOR, exception);
+        }
+    }
+
+    /** Pure cache changes must preserve every committed checkpoint and never publish a new pose. */
+    private void maintainWindow(TrainConsist train, List<TrainEntity> entities) {
+        if (train.routeDirty()) throw new StateException(StopReason.TRACK_CHANGED);
+        if (!TrainMotion.range(train).contains(train.progress())) throw new StateException(StopReason.INSUFFICIENT_ROUTE);
+        try {
+            var window = train.window().maintain(graph(), train);
+            if (window == train.window()) return;
+            var candidate = new TrainConsist(train.id(), train.cars(), train.configuredSpeed());
+            candidate.setWindow(window);
+            checkCheckpoint(candidate, calculate(candidate, entities, candidate.progress()));
+            train.setWindow(window);
+        } catch (IllegalArgumentException exception) {
+            throw new StateException(StopReason.TRACK_CHANGED, exception);
         }
     }
 
@@ -368,7 +381,7 @@ public final class TrainManager {
         var solved = VehiclePoseSolver.solve(train.sampler(), progress, spec);
         if (solved.failure() != null) throw new StateException(poseFailure(solved.failure()));
         var pose = solved.pose();
-        return new CarCandidate(car, entity, pose, TrainMotion.anchor(train.route(), train.sampler(), progress),
+        return new CarCandidate(car, entity, progress, pose, TrainMotion.anchor(train.route(), train.sampler(), progress),
                 protectedArea(entity, train, progress, spec, pose));
     }
 
@@ -401,7 +414,7 @@ public final class TrainManager {
         }
         for (var assembly : graph.assemblies()) {
             if (areas.stream().anyMatch(area -> area.intersects(assembly.bounds()))
-                    && !train.usesSegment(assembly.activeSegment())) throw new StateException(StopReason.TURNOUT_ROUTE_UNAVAILABLE);
+                    && !TrackTransitionResolver.usesEnabledPath(assembly, train::usesSegment)) throw new StateException(StopReason.TURNOUT_ROUTE_UNAVAILABLE);
         }
         if (!reservations.available(memberIds(train), areas)) throw new StateException(StopReason.TURNOUT_OCCUPIED);
     }
@@ -451,7 +464,8 @@ public final class TrainManager {
             var areas = new ArrayList<AABB>(entities.size());
             var relocate = new ArrayList<Boolean>(entities.size());
             for (var car : candidate.cars()) {
-                boolean move = car.entity().hasInvalidAnchor() || !sameRoutePosition(train, car.anchor(), car.entity().getRailAnchor());
+                boolean move = car.entity().hasInvalidAnchor()
+                        || !TrainMotion.matchesAt(train.window(), car.entity().getRailAnchor(), car.progress());
                 relocate.add(move);
                 areas.add(move ? car.bounds() : TrackReservationManager.area(car.entity()));
             }
@@ -478,22 +492,9 @@ public final class TrainManager {
         }
     }
 
-    private static boolean sameRoutePosition(TrainConsist train, TrainAnchor first, TrainAnchor second) {
-        if (Objects.equals(first, second)) return true;
-        if (second == null) return false;
-        try {
-            // A joint can be saved as either the previous segment's end or the next one's start.
-            double a = TrainMotion.distance(train.route(), train.sampler(), first);
-            double b = TrainMotion.distance(train.route(), train.sampler(), second);
-            return Math.abs(a - b) <= Math.max(1e-9, 4 * Math.max(Math.ulp(a), Math.ulp(b)));
-        } catch (IllegalArgumentException exception) {
-            return false;
-        }
-    }
-
     private static void checkCheckpoint(TrainConsist train, Candidate candidate) {
         for (var car : candidate.cars()) {
-            if (!sameRoutePosition(train, car.anchor(), car.member().anchor())) {
+            if (!TrainMotion.matchesAt(train.window(), car.member().anchor(), car.progress())) {
                 throw new StateException(StopReason.INVALID_ANCHOR);
             }
         }
@@ -552,6 +553,7 @@ public final class TrainManager {
         try {
             var entities = loadedMembers(train);
             if (train.routeDirty()) prepare(train, entities);
+            maintainWindow(train, entities);
             var candidate = calculate(train, entities, train.progress());
             checkCheckpoint(train, candidate);
             var areas = swept(currentAreas(entities), candidate.areas());
@@ -617,15 +619,15 @@ public final class TrainManager {
                     new TrainCarState(rear.getUUID(), rear.getModelId(), offset, second.anchor()));
             var combined = new TrainConsist(first.id(), members, first.configuredSpeed());
             prepare(combined, List.of(front, rear));
+            double target = TrainMotion.carProgress(combined.progress(), offset,
+                    VehiclePoseSolver.range(combined.route().getLength(), rearSpec));
             double from;
             try {
-                from = TrainMotion.distance(combined.route(), combined.sampler(), second.anchor());
+                from = TrainMotion.nearestDistance(combined.window(), second.anchor(), target);
             } catch (IllegalArgumentException exception) {
                 return StopReason.COUPLING_REJECTED;
             }
             var candidate = calculate(combined, List.of(front, rear), combined.progress());
-            double target = TrainMotion.carProgress(combined.progress(), offset,
-                    VehiclePoseSolver.range(combined.route().getLength(), rearSpec));
             if (Math.abs(target - from) > 0.5) return StopReason.COUPLING_REJECTED;
             var a = coupler(front, firstSpec.rearCouplerOffset());
             var b = coupler(rear, rearSpec.frontCouplerOffset());
@@ -674,10 +676,10 @@ public final class TrainManager {
             if (reservations.touchesTurnout(currentAreas(entities))) return StopReason.TURNOUT_OPERATION_BLOCKED;
             var first = new TrainConsist(train.id(), List.of(train.cars().getFirst().asSingle()), train.configuredSpeed());
             var second = new TrainConsist(UUID.randomUUID(), List.of(train.cars().get(1).asSingle()), train.configuredSpeed());
-            first.setRoute(train.route(), train.sampler(), train.progress(), train.routeNodes());
+            first.setWindow(train.window().copyAt(graph(), train.progress()));
             double rearProgress = TrainMotion.carProgress(train.progress(), train.cars().get(1).offset(),
                     VehiclePoseSolver.range(train.route().getLength(), VehicleCatalog.find(train.cars().get(1).modelId()).motionSpec()));
-            second.setRoute(train.route(), train.sampler(), rearProgress, train.routeNodes());
+            second.setWindow(train.window().copyAt(graph(), rearProgress));
             remove(train);
             put(first);
             put(second);
@@ -701,9 +703,13 @@ public final class TrainManager {
     private void trackChanged(TrackSegmentChange change) {
         var segment = change.segment();
         for (var train : trains.values()) {
-            if (train.usesNode(segment.startNodeId()) || train.usesNode(segment.endNodeId())) {
+            if (train.route() == null || train.routeDirty()) continue;
+            if (change.type() == TrackSegmentChange.Type.REMOVED
+                    && train.window().occupies(segment.id(), train)) {
                 train.invalidate();
                 sync(train);
+            } else if (train.usesNode(segment.startNodeId()) || train.usesNode(segment.endNodeId())) {
+                train.window().requestRefresh();
             }
         }
     }
@@ -711,24 +717,13 @@ public final class TrainManager {
     private void assemblyChanged(TrackAssemblyInstance assembly) {
         Long previous = assemblyRevisions.put(assembly.id(), assembly.revision());
         if (previous == null || previous == assembly.revision()) return;
-        for (var train : List.copyOf(trains.values())) {
-            if (assembly.ports().stream().noneMatch(train::usesNode) || !isRestored(train)) continue;
-            boolean running = train.running();
-            train.invalidate();
-            try {
-                var entities = loadedMembers(train);
-                var candidate = new TrainConsist(train.id(), train.cars(), train.configuredSpeed());
-                prepare(candidate, entities);
-                checkCheckpoint(candidate, calculate(candidate, entities, candidate.progress()));
-                // Rebase the whole consist without changing any proxy's current position or pose.
-                train.setRoute(candidate.route(), candidate.sampler(), candidate.progress(), candidate.routeNodes());
-                if (running) train.start();
-                else train.stop(StopReason.STOPPED);
-            } catch (StateException exception) {
-                var failure = exception.reason() == StopReason.INVALID_ANCHOR ? StopReason.TURNOUT_ROUTE_UNAVAILABLE : exception.reason();
-                stop(train, failure);
-                LOGGER.warn("Consist {} stopped after turnout {} changed: {}", train.id(), assembly.id(), failure);
-            }
+        for (var train : trains.values()) {
+            if (train.routeDirty() || assembly.ports().values().stream().noneMatch(port -> train.usesNode(port.nodeId()))) continue;
+            boolean occupiedPathClosed = !train.window().occupiedPathsEnabled(graph, train);
+            if (occupiedPathClosed) {
+                train.invalidate();
+                stop(train, StopReason.TURNOUT_ROUTE_UNAVAILABLE);
+            } else train.window().requestRefresh();
         }
     }
 
@@ -768,10 +763,10 @@ public final class TrainManager {
         var owners = memberIds(train);
         try {
             entities = loadedMembers(train);
+            maintainWindow(train, entities);
             previous = currentAreas(entities);
             check(train, previous);
             var range = TrainMotion.range(train);
-            if (!range.contains(train.progress())) throw new StateException(StopReason.INSUFFICIENT_ROUTE);
             target = Math.clamp(train.progress() + train.actualSpeed() / 20, range.min(), range.max());
         } catch (StateException exception) {
             stop(train, exception.reason());
@@ -798,7 +793,10 @@ public final class TrainManager {
         reservations.releaseOutside(owners, previous);
         var range = TrainMotion.range(train);
         if (failure != null) stop(train, failure);
-        else if (progress == range.min() || progress == range.max()) stop(train, StopReason.END_OF_ROUTE);
+        else if ((train.actualSpeed() < 0 && progress == range.min() && train.window().startBoundary())
+                || (train.actualSpeed() > 0 && progress == range.max() && train.window().endBoundary())) {
+            stop(train, StopReason.END_OF_ROUTE);
+        }
     }
 
     private static AABB protectedArea(TrainEntity entity, TrainConsist train, double progress, VehicleMotionSpec spec, VehiclePose pose) {

@@ -7,7 +7,6 @@ package com.unrealtrainmod.train;
 import com.unrealtrainmod.track.path.TrackPathSampler;
 import com.unrealtrainmod.track.path.TrackRoute;
 import java.util.List;
-import java.util.Set;
 import java.util.UUID;
 
 /** Persistent ordered membership and server-owned runtime state for one or two same-facing cars. */
@@ -24,11 +23,7 @@ public final class TrainConsist {
     public static final double MAX_SPEED = 100;
     private final UUID id;
     private List<TrainCarState> cars;
-    private TrackRoute route;
-    private TrackPathSampler sampler;
-    private Set<UUID> routeNodes = Set.of();
-    private Set<UUID> routeSegments = Set.of();
-    private double progress;
+    private TrainRouteWindow window;
     private double configuredSpeed;
     private boolean running;
     private boolean routeDirty = true;
@@ -46,30 +41,25 @@ public final class TrainConsist {
     public TrainCarState member(UUID entityId) {
         return cars.stream().filter(car -> car.entityId().equals(entityId)).findFirst().orElse(null);
     }
-    public TrackRoute route() { return route; }
-    public double progress() { return progress; }
+    public TrackRoute route() { return window == null ? null : window.route(); }
+    public double progress() { return window == null ? 0 : window.progress(); }
     public double configuredSpeed() { return configuredSpeed; }
     public double actualSpeed() { return running ? configuredSpeed : 0; }
     public boolean running() { return running; }
     public boolean routeDirty() { return routeDirty; }
     public StopReason stopReason() { return stopReason; }
 
-    TrackPathSampler sampler() { return sampler; }
-    boolean usesNode(UUID id) { return routeNodes.contains(id); }
-    boolean usesSegment(UUID id) { return routeSegments.contains(id); }
-    Set<UUID> routeNodes() { return routeNodes; }
+    TrainRouteWindow window() { return window; }
+    TrackPathSampler sampler() { return window.sampler(); }
+    boolean usesNode(UUID id) { return window != null && window.usesNode(id); }
+    boolean usesSegment(UUID id) { return window != null && window.usesSegment(id); }
 
-    void setRoute(TrackRoute route, TrackPathSampler sampler, double progress, Set<UUID> nodes) {
-        this.route = route;
-        this.sampler = sampler;
-        this.progress = progress;
-        this.routeNodes = Set.copyOf(nodes);
-        this.routeSegments = route.connections().stream().map(com.unrealtrainmod.track.TrackConnection::segmentId)
-                .collect(java.util.stream.Collectors.toUnmodifiableSet());
+    void setWindow(TrainRouteWindow window) {
+        this.window = window;
         this.routeDirty = false;
     }
 
-    void setProgress(double progress) { this.progress = progress; }
+    void setProgress(double progress) { window.setProgress(progress); }
     void setCars(List<TrainCarState> cars) { this.cars = List.copyOf(cars); }
     void setConfiguredSpeed(double speed) { configuredSpeed = speed; }
     void start() { running = true; }
@@ -85,11 +75,7 @@ public final class TrainConsist {
     }
 
     void clearRoute() {
-        route = null;
-        sampler = null;
-        routeNodes = Set.of();
-        routeSegments = Set.of();
-        progress = 0;
+        window = null;
         routeDirty = true;
     }
 }

@@ -21,6 +21,11 @@ import java.util.UUID;
  * to TrackSegmentChange; this class neither watches the graph nor accesses world/chunk state.
  */
 public final class TrackRoute {
+    /** prefixCount maps the supplied core's indices into this finite expanded snapshot. */
+    public record Extension(TrackRoute route, int prefixCount, boolean startBoundary, boolean endBoundary) {}
+
+    private record Growth(int count, boolean boundary) {}
+
     private final List<TrackConnection> connections;
     private final List<TrackGeometry> geometries;
     private final double[] distances;
@@ -42,21 +47,10 @@ public final class TrackRoute {
     public static TrackRoute of(TrackGraph graph, List<TrackConnection> connections) {
         var steps = List.copyOf(connections);
         if (steps.isEmpty()) throw new IllegalArgumentException("Route must contain at least one segment");
+        if (!TrackTransitionResolver.isRouteEnabled(graph, steps)) throw new IllegalArgumentException("Illegal or closed assembly path sequence");
         var geometries = new ArrayList<TrackGeometry>(steps.size());
-        UUID previousExit = null;
-        for (int i = 0; i < steps.size(); i++) {
-            var connection = steps.get(i);
-            var segment = graph.segment(connection.segmentId());
-            if (!TrackTransitionResolver.active(graph, segment.id())) throw new IllegalArgumentException("Turnout path is closed");
-            UUID entrance = connection.fromStart() ? segment.startNodeId() : segment.endNodeId();
-            if (previousExit != null && !previousExit.equals(entrance)) {
-                throw new IllegalArgumentException("Route segments " + (i - 1) + " and " + i + " do not share an exit/entrance node");
-            }
-            if (i > 0 && !TrackTransitionResolver.permits(graph, entrance, steps.get(i - 1).segmentId(), segment.id())) {
-                throw new IllegalArgumentException("Illegal turnout transition");
-            }
-            previousExit = connection.fromStart() ? segment.endNodeId() : segment.startNodeId();
-            var geometry = segment.geometry();
+        for (var connection : steps) {
+            var geometry = graph.segment(connection.segmentId()).geometry();
             geometries.add(connection.fromStart() ? geometry : geometry.reversed());
         }
         return new TrackRoute(steps, geometries);
@@ -67,33 +61,90 @@ public final class TrackRoute {
      * A ring starts at the seed's entrance, contains each segment once, and has no distance wrapping.
      */
     public static TrackRoute trace(TrackGraph graph, TrackConnection seed) {
-        var steps = new ArrayDeque<TrackConnection>();
+        return trace(graph, List.of(seed), null);
+    }
+
+    /**
+     * Keeps an already traversed contiguous core, extending only its two ends through unique choices.
+     * A non-null cutNode is a fixed finite-ring boundary which neither extension may cross.
+     * The core must contain no repeated segment; explicit repeated paths still use of().
+     */
+    public static TrackRoute trace(TrackGraph graph, List<TrackConnection> core, UUID cutNode) {
+        if (core.isEmpty()) throw new IllegalArgumentException("Route core must not be empty");
+        if (!TrackTransitionResolver.isRouteEnabled(graph, core)) throw new IllegalArgumentException("Route core contains a closed assembly path");
+        var steps = new ArrayDeque<>(core);
         var visited = new HashSet<UUID>();
-        steps.add(seed);
-        visited.add(seed.segmentId());
-        extend(graph, seed, steps, visited, true);
-        extend(graph, reversed(seed), steps, visited, false);
+        for (var connection : core) {
+            if (!visited.add(connection.segmentId())) throw new IllegalArgumentException("Route core repeats a segment");
+        }
+        extendEnd(graph, core.getLast(), steps, visited, true, cutNode, Double.POSITIVE_INFINITY);
+        extendEnd(graph, reversed(core.getFirst()), steps, visited, false, cutNode, Double.POSITIVE_INFINITY);
         return of(graph, List.copyOf(steps));
     }
 
-    private static void extend(TrackGraph graph, TrackConnection current, ArrayDeque<TrackConnection> steps,
-                               Set<UUID> visited, boolean append) {
-        while (true) {
+    /**
+     * Extends by at least the requested distances outside a committed core, using whole segments.
+     * Repeated segments are allowed. A boundary means an end or ambiguous continuation, not a budget limit.
+     */
+    public static Extension extend(TrackGraph graph, List<TrackConnection> core, double before, double after) {
+        if (core.isEmpty()) throw new IllegalArgumentException("Route core must not be empty");
+        if (!Double.isFinite(before) || before < 0 || !Double.isFinite(after) || after < 0) {
+            throw new IllegalArgumentException("Extension distances must be finite and nonnegative");
+        }
+        if (!TrackTransitionResolver.isRouteEnabled(graph, core)) throw new IllegalArgumentException("Route core contains a closed assembly path");
+        var steps = new ArrayDeque<>(core);
+        var end = extendEnd(graph, core.getLast(), steps, null, true, null, after);
+        var start = extendEnd(graph, reversed(core.getFirst()), steps, null, false, null, before);
+        return new Extension(of(graph, List.copyOf(steps)), start.count(), start.boundary(), end.boundary());
+    }
+
+    private static Growth extendEnd(TrackGraph graph, TrackConnection current, ArrayDeque<TrackConnection> steps,
+                                     Set<UUID> visited, boolean append, UUID cutNode, double distance) {
+        var owner = graph.assemblyForSegment(current.segmentId());
+        var run = new ArrayList<TrackConnection>();
+        if (owner != null) {
+            var iterator = append ? steps.descendingIterator() : steps.iterator();
+            while (iterator.hasNext()) {
+                var step = iterator.next();
+                if (graph.assemblyForSegment(step.segmentId()) != owner) break;
+                run.add(append ? step : reversed(step));
+            }
+            java.util.Collections.reverse(run);
+        }
+        double length = 0;
+        int count = 0;
+        while (length < distance) {
             var segment = graph.segment(current.segmentId());
             UUID exit = current.fromStart() ? segment.endNodeId() : segment.startNodeId();
+            if (exit.equals(cutNode)) return new Growth(count, true);
             TrackConnection next = null;
             for (var candidate : graph.connections(exit)) {
                 if (candidate.segmentId().equals(current.segmentId())) continue;
-                if (!TrackTransitionResolver.permits(graph, exit, current.segmentId(), candidate.segmentId())) continue;
+                if (!TrackTransitionResolver.permits(graph, current, candidate)) continue;
+                if (owner != null && graph.assemblyForSegment(candidate.segmentId()) == owner) {
+                    var continued = new ArrayList<>(run);
+                    continued.add(candidate);
+                    if (!TrackTransitionResolver.isSequenceEnabled(owner, continued)) continue;
+                }
                 // Count all choices before checking visited IDs: a branch must never select a side.
-                if (next != null) return;
+                if (next != null) return new Growth(count, true);
                 next = candidate;
             }
-            if (next == null || !visited.add(next.segmentId())) return;
+            if (next == null || (visited != null && !visited.add(next.segmentId()))) return new Growth(count, true);
             if (append) steps.addLast(next);
             else steps.addFirst(reversed(next));
+            double extended = length + graph.segment(next.segmentId()).geometry().getLength();
+            if (!Double.isFinite(extended) || extended <= length) {
+                throw new IllegalArgumentException("Extension length must be finite and strictly increasing");
+            }
+            length = extended;
+            count++;
+            var nextOwner = graph.assemblyForSegment(next.segmentId());
+            if (nextOwner != owner) { run.clear(); owner = nextOwner; }
+            if (owner != null) run.add(next);
             current = next;
         }
+        return new Growth(count, false);
     }
 
     public List<TrackConnection> connections() {
@@ -108,6 +159,15 @@ public final class TrackRoute {
     /** Length of one directed segment occurrence, for converting segment-local anchors. */
     public double segmentLength(int segmentIndex) {
         return geometries.get(segmentIndex).getLength();
+    }
+
+    /** Copies a non-empty contiguous range, sharing immutable geometry and rebuilding local distances. */
+    public TrackRoute slice(int fromInclusive, int toExclusive) {
+        if (fromInclusive < 0 || toExclusive > connections.size() || fromInclusive >= toExclusive) {
+            throw new IllegalArgumentException("Route slice must be a non-empty segment range");
+        }
+        if (fromInclusive == 0 && toExclusive == connections.size()) return this;
+        return new TrackRoute(connections.subList(fromInclusive, toExclusive), geometries.subList(fromInclusive, toExclusive));
     }
 
     /** Reverses order and direction without consulting the graph or rebuilding geometry caches. */

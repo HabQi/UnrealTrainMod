@@ -62,8 +62,10 @@ public final class ClientTurnoutConstruction implements ResourceManagerReloadLis
         if (!Double.isFinite(yaw) || draft.gauge() <= 0 || 32 * draft.gauge() / 1.435 > 256) return;
         geometry = definition.geometry(draft.origin().position(), yaw, draft.gauge());
         try {
-            var cells = new HashMap<>(TrackBlockVolume.create(geometry.straight()));
-            TrackBlockVolume.create(geometry.diverging()).forEach((pos, height) -> cells.merge(pos, height, Math::max));
+            var cells = new HashMap<BlockPos, Integer>();
+            for (var parts : geometry.paths().values()) {
+                for (var part : parts) TrackBlockVolume.create(part).forEach((pos, height) -> cells.merge(pos, height, Math::max));
+            }
             volume = cells;
         } catch (IllegalArgumentException exception) {
             // A red geometry can still explain a size/position rejection, without enumerating its footprint.

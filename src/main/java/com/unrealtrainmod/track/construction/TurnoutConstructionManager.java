@@ -13,11 +13,11 @@ import com.unrealtrainmod.track.TrackGraphException;
 import com.unrealtrainmod.track.TrackPlacementEndpoint;
 import com.unrealtrainmod.track.assembly.TrackAssemblyDefinition;
 import com.unrealtrainmod.track.assembly.TrackAssemblyInstance;
+import com.unrealtrainmod.track.assembly.SwitchPosition;
 import com.unrealtrainmod.track.block.TrackBlockManager;
 import com.unrealtrainmod.track.geometry.TrackVector;
 import com.unrealtrainmod.train.TrainManager;
 import java.util.HashMap;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
@@ -209,11 +209,11 @@ public final class TurnoutConstructionManager {
                 player.displayClientMessage(Component.translatable("item.unrealtrainmod.turnout_builder.occupied",
                         assembly.occupant().toString()).withStyle(ChatFormatting.RED), true); return;
             }
-            var next = assembly.state() == TrackAssemblyInstance.State.STRAIGHT
-                    ? TrackAssemblyInstance.State.DIVERGING : TrackAssemblyInstance.State.STRAIGHT;
-            graph.setAssemblyState(assembly.id(), next);
+            var next = assembly.state().controls().get("main") == SwitchPosition.NORMAL
+                    ? SwitchPosition.REVERSE : SwitchPosition.NORMAL;
+            graph.setAssemblyState(assembly.id(), assembly.state().withControl("main", next));
             player.displayClientMessage(Component.translatable("item.unrealtrainmod.turnout_builder.switched",
-                    Component.translatable("commands.unrealtrainmod.turnout." + next.name().toLowerCase(Locale.ROOT)))
+                    Component.translatable("commands.unrealtrainmod.turnout." + (next == SwitchPosition.NORMAL ? "straight" : "diverging")))
                     .withStyle(ChatFormatting.GREEN), true);
         } catch (IllegalStateException exception) { message(player, Feedback.STORAGE, ""); }
     }

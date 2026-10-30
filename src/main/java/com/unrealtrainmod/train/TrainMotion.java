@@ -4,7 +4,6 @@
  */
 package com.unrealtrainmod.train;
 
-import com.unrealtrainmod.track.TrackConnection;
 import com.unrealtrainmod.track.path.TrackCursor;
 import com.unrealtrainmod.track.path.TrackPathSampler;
 import com.unrealtrainmod.track.path.TrackRoute;
@@ -19,9 +18,13 @@ final class TrainMotion {
     private TrainMotion() {}
 
     static VehiclePoseSolver.Range range(TrainConsist train) {
+        return range(train.route().getLength(), train.cars());
+    }
+
+    static VehiclePoseSolver.Range range(double routeLength, List<TrainCarState> cars) {
         double min = Double.NEGATIVE_INFINITY, max = Double.POSITIVE_INFINITY;
-        for (var car : train.cars()) {
-            var range = VehiclePoseSolver.range(train.route().getLength(), VehicleCatalog.find(car.modelId()).motionSpec());
+        for (var car : cars) {
+            var range = VehiclePoseSolver.range(routeLength, VehicleCatalog.find(car.modelId()).motionSpec());
             min = Math.max(min, range.min() - car.offset());
             max = Math.min(max, range.max() - car.offset());
         }
@@ -67,11 +70,48 @@ final class TrainMotion {
         return next;
     }
 
-    static double distance(TrackRoute route, TrackPathSampler sampler, TrainAnchor anchor) {
-        int index = route.connections().indexOf(new TrackConnection(anchor.segmentId(), anchor.fromStart()));
-        if (index < 0) throw new IllegalArgumentException("Anchor is not on this directed route");
-        return sampler.distance(new TrackCursor(index,
-                anchor.fromStart() ? anchor.distance() : route.segmentLength(index) - anchor.distance()));
+    /** A saved physical anchor is checked at the member's expected occurrence, never the first match. */
+    static boolean matchesAt(TrainRouteWindow window, TrainAnchor anchor, double expected) {
+        if (anchor == null) return false;
+        for (int index : window.occurrences(anchor.segmentId())) {
+            if (window.route().connections().get(index).fromStart() != anchor.fromStart()
+                    || anchor.distance() > window.route().segmentLength(index)) continue;
+            if (sameDistance(distanceAt(window, index, anchor), expected)) return true;
+        }
+        return false;
+    }
+
+    /** Chooses the uniquely nearest occurrence for a single car being aligned during coupling. */
+    static double nearestDistance(TrainRouteWindow window, TrainAnchor anchor, double expected) {
+        var positions = new ArrayList<Double>();
+        double best = Double.NaN, difference = Double.POSITIVE_INFINITY;
+        for (int index : window.occurrences(anchor.segmentId())) {
+            if (window.route().connections().get(index).fromStart() != anchor.fromStart()
+                    || anchor.distance() > window.route().segmentLength(index)) continue;
+            double position = distanceAt(window, index, anchor);
+            positions.add(position);
+            double delta = Math.abs(position - expected);
+            if (delta < difference) {
+                best = position;
+                difference = delta;
+            }
+        }
+        if (positions.isEmpty()) throw new IllegalArgumentException("Anchor is not on this directed route");
+        int nearest = 0;
+        for (double position : positions) {
+            if (sameDistance(Math.abs(position - expected), difference)) nearest++;
+        }
+        if (nearest != 1) throw new IllegalArgumentException("Anchor has equally near route occurrences");
+        return best;
+    }
+
+    private static double distanceAt(TrainRouteWindow window, int index, TrainAnchor anchor) {
+        double local = anchor.fromStart() ? anchor.distance() : window.route().segmentLength(index) - anchor.distance();
+        return window.sampler().distance(new TrackCursor(index, local));
+    }
+
+    static boolean sameDistance(double first, double second) {
+        return Math.abs(first - second) <= Math.max(1e-9, 4 * Math.max(Math.ulp(first), Math.ulp(second)));
     }
 
     static TrainAnchor anchor(TrackRoute route, TrackPathSampler sampler, double progress) {
