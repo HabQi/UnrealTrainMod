@@ -11,6 +11,7 @@ import com.unrealtrainmod.network.payload.TrackSegmentRemovePayload;
 import com.unrealtrainmod.track.TrackSegmentData;
 import com.unrealtrainmod.track.geometry.TrackGeometry;
 import com.unrealtrainmod.track.assembly.TrackAssemblyInstance;
+import com.unrealtrainmod.track.assembly.TrackAssemblyDefinition;
 import com.unrealtrainmod.network.payload.TrackAssemblyPayload;
 import com.unrealtrainmod.network.payload.TrackAssemblyStatePayload;
 import com.unrealtrainmod.network.payload.TrackAssemblyRemovePayload;
@@ -177,16 +178,25 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
         TrackAssemblyInstance data;
         final Set<Long> chunks = new LinkedHashSet<>();
         final Map<Long, TrackRenderMesh> meshes = new HashMap<>();
+        // Standard tongue mesh, or the second static path of a custom turnout.
         final Map<Long, TrackRenderMesh> tongues = new HashMap<>();
+        boolean missingReported;
         AssemblyEntry(TrackAssemblyInstance data) { this.data = data; }
+        AABB broadBounds() {
+            var model = ClientRailModelManager.INSTANCE.model(data.modelId());
+            return model == null ? data.bounds() : data.bounds().inflate(model.padding() * model.scaleForGauge(data.gauge()));
+        }
         void setState(TrackAssemblyInstance data) {
-            for (var mesh : tongues.values()) mesh.close();
-            tongues.clear(); this.data = data;
+            if (data.definition() != TrackAssemblyDefinition.CUSTOM) {
+                for (var mesh : tongues.values()) mesh.close();
+                tongues.clear();
+            }
+            this.data = data;
         }
         @Override public void close() {
             for (var mesh : meshes.values()) mesh.close();
             for (var mesh : tongues.values()) mesh.close();
-            meshes.clear(); tongues.clear();
+            meshes.clear(); tongues.clear(); missingReported = false;
         }
     }
 

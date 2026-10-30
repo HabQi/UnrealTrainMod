@@ -15,6 +15,7 @@ import com.unrealtrainmod.client.StaticModelShader;
 import com.unrealtrainmod.client.gui.ActivationWarningOverlay;
 import com.unrealtrainmod.client.gui.TrainDebugOverlay;
 import com.unrealtrainmod.client.network.ClientPayloadHandlers;
+import com.unrealtrainmod.client.map.TrainMapClient;
 import com.unrealtrainmod.client.renderer.TrainModelRenderer;
 import com.unrealtrainmod.client.track.ClientTrackCache;
 import com.unrealtrainmod.client.track.ClientRailModelManager;
@@ -73,6 +74,10 @@ public class UnrealTrainModClient {
         NeoForge.EVENT_BUS.addListener(TrainDebugOverlay::onUnload);
         NeoForge.EVENT_BUS.addListener(TrainDebugOverlay::onLogout);
         NeoForge.EVENT_BUS.addListener(TrainDebugOverlay::onClone);
+        NeoForge.EVENT_BUS.addListener(TrainMapClient::onSync);
+        NeoForge.EVENT_BUS.addListener(TrainMapClient::onUnload);
+        NeoForge.EVENT_BUS.addListener(TrainMapClient::onLogout);
+        NeoForge.EVENT_BUS.addListener(TrainMapClient::onClone);
         NeoForge.EVENT_BUS.addListener(ClientPayloadHandlers::openModelSelector);
         NeoForge.EVENT_BUS.addListener(ClientPayloadHandlers::modelSelectionResult);
         NeoForge.EVENT_BUS.addListener(ClientPayloadHandlers::railSelectionResult);

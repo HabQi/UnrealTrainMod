@@ -20,6 +20,7 @@ import net.minecraft.resources.ResourceLocation;
 public record TrackConstructionPayload(ResourceLocation dimension, Phase phase,
         TrackPlacementEndpoint start, TrackPlacementEndpoint end, double gauge, Feedback feedback,
         UUID revision, TrackCurveParameters startCurve, TrackCurveParameters endCurve,
+        boolean startHorizontalDirected, boolean endHorizontalDirected,
         TrackVerticalCurveParameters startVertical, TrackVerticalCurveParameters endVertical,
         boolean startVerticalLocked, boolean endVerticalLocked,
         boolean startVerticalInferred, boolean endVerticalInferred, Feedback validation)
@@ -27,7 +28,7 @@ public record TrackConstructionPayload(ResourceLocation dimension, Phase phase,
     public enum Phase { EMPTY, START, READY }
 
     public enum Feedback {
-        START, READY, CANCELLED, CLEARED, CREATED, SELECT_POINT, TOP_FACE, INVALID_POINT,
+        TURNOUT_A, TURNOUT_B, NON_HORIZONTAL, INVALID_NODE, VEHICLE_PRESENT, START, READY, CANCELLED, CLEARED, CREATED, SELECT_POINT, TOP_FACE, INVALID_POINT,
         INVALID_GEOMETRY, TOO_LONG, SAME_NODE, GAUGE_MISMATCH, STALE_START, STALE_END,
         STORAGE, NO_PERMISSION, INVALID_ITEM, SELECT_MODEL, MISSING_MODEL, LINE_NOT_READY,
         VERTICAL_HANDLES, FLAT_PORT, NO_DRAFT, AIM_NODE, STALE_EDIT, INVALID_PARAMETERS, BLOCKED_VOLUME, UNLOADED_VOLUME, VOLUME_TOO_LARGE;
@@ -50,6 +51,8 @@ public record TrackConstructionPayload(ResourceLocation dimension, Phase phase,
                 buffer.writeUUID(payload.revision());
                 TrackPayloadCodec.writeCurve(buffer, payload.startCurve());
                 TrackPayloadCodec.writeCurve(buffer, payload.endCurve());
+                buffer.writeBoolean(payload.startHorizontalDirected());
+                buffer.writeBoolean(payload.endHorizontalDirected());
                 TrackPayloadCodec.writeVertical(buffer, payload.startVertical());
                 TrackPayloadCodec.writeVertical(buffer, payload.endVertical());
                 buffer.writeBoolean(payload.startVerticalLocked());
@@ -61,10 +64,11 @@ public record TrackConstructionPayload(ResourceLocation dimension, Phase phase,
                     buffer.readEnum(Phase.class), readEndpoint(buffer), readEndpoint(buffer),
                     buffer.readDouble(), buffer.readEnum(Feedback.class), buffer.readUUID(),
                     TrackPayloadCodec.readCurve(buffer), TrackPayloadCodec.readCurve(buffer),
+                    buffer.readBoolean(), buffer.readBoolean(),
                     TrackPayloadCodec.readVertical(buffer), TrackPayloadCodec.readVertical(buffer),
                     buffer.readBoolean(), buffer.readBoolean(), buffer.readBoolean(), buffer.readBoolean(), buffer.readEnum(Feedback.class)));
 
-    private static void writeEndpoint(RegistryFriendlyByteBuf buffer, TrackPlacementEndpoint endpoint) {
+    public static void writeEndpoint(RegistryFriendlyByteBuf buffer, TrackPlacementEndpoint endpoint) {
         buffer.writeBoolean(endpoint != null);
         if (endpoint == null) return;
         var point = endpoint.position();
@@ -75,7 +79,7 @@ public record TrackConstructionPayload(ResourceLocation dimension, Phase phase,
         if (endpoint.nodeId() != null) buffer.writeUUID(endpoint.nodeId());
     }
 
-    private static TrackPlacementEndpoint readEndpoint(RegistryFriendlyByteBuf buffer) {
+    public static TrackPlacementEndpoint readEndpoint(RegistryFriendlyByteBuf buffer) {
         if (!buffer.readBoolean()) return null;
         TrackVector point = new TrackVector(buffer.readDouble(), buffer.readDouble(), buffer.readDouble());
         return new TrackPlacementEndpoint(buffer.readBoolean() ? buffer.readUUID() : null, point);

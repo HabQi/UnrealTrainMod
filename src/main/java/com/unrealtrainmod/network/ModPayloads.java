@@ -19,12 +19,12 @@ import com.unrealtrainmod.network.payload.TrackSegmentRemovePayload;
 import com.unrealtrainmod.network.payload.TrackAssemblyPayload;
 import com.unrealtrainmod.network.payload.TrackAssemblyStatePayload;
 import com.unrealtrainmod.network.payload.TrackAssemblyRemovePayload;
-import com.unrealtrainmod.network.payload.OpenTurnoutPayload;
-import com.unrealtrainmod.network.payload.TurnoutActionPayload;
-import com.unrealtrainmod.network.payload.TurnoutResultPayload;
 import com.unrealtrainmod.network.payload.TrainDebugPayload;
-import com.unrealtrainmod.track.construction.TurnoutConstructionManager;
-import net.minecraft.server.level.ServerPlayer;
+import com.unrealtrainmod.network.payload.TurnoutConstructionPayload;
+import com.unrealtrainmod.network.payload.TrainMapSessionPayload;
+import com.unrealtrainmod.network.payload.TrainMapUpdatePayload;
+import com.unrealtrainmod.train.map.TrainMapService;
+import net.minecraft.network.protocol.PacketFlow;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
 
@@ -32,16 +32,18 @@ public final class ModPayloads {
     private ModPayloads() {}
 
     public static void register(RegisterPayloadHandlersEvent event) {
-        var registrar = event.registrar("11");
+        var registrar = event.registrar("14");
+        registrar.playBidirectional(TrainMapSessionPayload.TYPE, TrainMapSessionPayload.STREAM_CODEC,
+                (payload, context) -> {
+                    if (context.flow() == PacketFlow.CLIENTBOUND) NeoForge.EVENT_BUS.post(new TrackSyncEvent(payload));
+                    else TrainMapService.handleSession(payload, context);
+                });
+        registrar.playToClient(TrainMapUpdatePayload.TYPE, TrainMapUpdatePayload.STREAM_CODEC,
+                (payload, context) -> NeoForge.EVENT_BUS.post(new TrackSyncEvent(payload)));
         registrar.playToClient(TrainDebugPayload.TYPE, TrainDebugPayload.STREAM_CODEC,
                 (payload, context) -> NeoForge.EVENT_BUS.post(new TrackSyncEvent(payload)));
-        registrar.playToClient(OpenTurnoutPayload.TYPE, OpenTurnoutPayload.STREAM_CODEC,
+        registrar.playToClient(TurnoutConstructionPayload.TYPE, TurnoutConstructionPayload.STREAM_CODEC,
                 (payload, context) -> NeoForge.EVENT_BUS.post(new TrackSyncEvent(payload)));
-        registrar.playToClient(TurnoutResultPayload.TYPE, TurnoutResultPayload.STREAM_CODEC,
-                (payload, context) -> NeoForge.EVENT_BUS.post(new TrackSyncEvent(payload)));
-        registrar.playToServer(TurnoutActionPayload.TYPE, TurnoutActionPayload.STREAM_CODEC, (payload, context) -> {
-            if (context.player() instanceof ServerPlayer player) TurnoutConstructionManager.handle(player, payload);
-        });
         registrar.playToClient(TrackAssemblyPayload.TYPE, TrackAssemblyPayload.STREAM_CODEC,
                 (payload, context) -> NeoForge.EVENT_BUS.post(new TrackSyncEvent(payload)));
         registrar.playToClient(TrackAssemblyStatePayload.TYPE, TrackAssemblyStatePayload.STREAM_CODEC,

@@ -8,7 +8,8 @@ import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.ByteBufferBuilder;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
-import com.unrealtrainmod.network.payload.TurnoutResultPayload.Feedback;
+import com.unrealtrainmod.network.payload.TrackConstructionPayload.Feedback;
+import com.unrealtrainmod.track.geometry.BezierTrackGeometry;
 import com.unrealtrainmod.track.geometry.TrackGeometry;
 import com.unrealtrainmod.track.geometry.TrackPose;
 import com.unrealtrainmod.track.geometry.TrackVector;
@@ -27,9 +28,9 @@ public final class TurnoutConstructionRenderer {
         if (event.getStage() != RenderLevelStageEvent.Stage.AFTER_SOLID_BLOCKS) return;
         var state = ClientTurnoutConstruction.INSTANCE;
         var draft = state.draft(); var geometry = state.geometry();
-        if (draft == null || geometry == null) return;
-        int color = state.feedback() == Feedback.READY ? 0xFF50E070
-                : state.feedback() == null ? 0xFFFFCC55 : 0xFFFF5555;
+        if (!state.isActive()) return;
+        int color = state.previewFeedback() == Feedback.READY ? 0xFF50E070
+                : (state.previewFeedback() == Feedback.START || state.previewFeedback() == Feedback.TURNOUT_A || state.previewFeedback() == Feedback.TURNOUT_B) ? 0xFFFFCC55 : 0xFFFF5555;
         var previousShader = RenderSystem.getShader();
         float[] previousColor = RenderSystem.getShaderColor().clone();
         var view = RenderSystem.getModelViewStack();
@@ -39,8 +40,21 @@ public final class TurnoutConstructionRenderer {
             var buffers = MultiBufferSource.immediate(bytes);
             var lines = buffers.getBuffer(TrackRenderTypes.PREVIEW);
             var camera = event.getCamera().getPosition();
-            for (var parts : geometry.paths().values()) {
-                for (var part : parts) path(lines, part, draft.gauge(), camera, color);
+            for (var point : draft.points()) {
+                var p = point.position();
+                line(lines, new TrackVector(p.x() - 0.16, p.y(), p.z()), new TrackVector(p.x() + 0.16, p.y(), p.z()), camera, color);
+                line(lines, new TrackVector(p.x(), p.y() - 0.16, p.z()), new TrackVector(p.x(), p.y() + 0.16, p.z()), camera, color);
+                line(lines, new TrackVector(p.x(), p.y(), p.z() - 0.16), new TrackVector(p.x(), p.y(), p.z() + 0.16), camera, color);
+            }
+            if (geometry != null) for (var parts : geometry.paths().values()) {
+                for (var part : parts) {
+                    path(lines, part, draft.gauge(), camera, color);
+                    if (part instanceof BezierTrackGeometry bezier) {
+                        var start = part.sample(0).position(); var end = part.sample(part.getLength()).position();
+                        line(lines, start, new TrackVector(bezier.control1().x(), start.y(), bezier.control1().z()), camera, 0xFF70C8FF);
+                        line(lines, end, new TrackVector(bezier.control2().x(), end.y(), bezier.control2().z()), camera, 0xFF70C8FF);
+                    }
+                }
             }
             var volume = state.volume();
             for (var entry : volume.entrySet()) {
@@ -55,16 +69,20 @@ public final class TurnoutConstructionRenderer {
                 if (!volume.containsKey(p.south())) line(lines, c, d, camera, color);
                 if (!volume.containsKey(p.west())) line(lines, d, a, camera, color);
             }
-            for (var port : geometry.ports().values()) arrow(lines, port.position(), port.outwardYaw(), camera, color);
+            if (geometry != null) for (var port : geometry.ports().values()) arrow(lines, port.position(), port.outwardYaw(), camera, color);
             buffers.endBatch(TrackRenderTypes.PREVIEW);
             var font = Minecraft.getInstance().font;
-            for (var entry : geometry.ports().entrySet()) {
-                var point = entry.getValue().position();
+            for (int i = 0; i < draft.points().size(); i++) {
+                String name = java.util.List.of("A", "B", "C").get(i);
+                var point = draft.points().get(i).position();
                 var pose = new PoseStack();
                 pose.translate(point.x() - camera.x, point.y() - camera.y + 0.6, point.z() - camera.z);
                 pose.mulPose(event.getCamera().rotation()); pose.scale(0.025f, -0.025f, 0.025f);
-                double direction = ((entry.getValue().outwardYaw() % 360) + 540) % 360 - 180;
-                String label = String.format(Locale.ROOT, "%s  %.1f°", entry.getKey(), direction);
+                var port = geometry == null ? null : geometry.ports().get(name);
+                double direction = port == null ? 0 : ((port.outwardYaw() % 360) + 540) % 360 - 180;
+                String label = port == null ? name : String.format(Locale.ROOT, "%s  %.1f°", name, direction);
+                if (i == 1) label += " " + net.minecraft.network.chat.Component.translatable("commands.unrealtrainmod.turnout.line_one").getString();
+                if (i == 2) label += " " + net.minecraft.network.chat.Component.translatable("commands.unrealtrainmod.turnout.line_two").getString();
                 font.drawInBatch(label, -font.width(label) / 2f, 0, color, true, pose.last().pose(),
                         buffers, Font.DisplayMode.NORMAL, 0x80000000, 0xF000F0);
             }

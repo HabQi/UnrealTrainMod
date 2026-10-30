@@ -9,6 +9,7 @@ import com.unrealtrainmod.client.gui.theme.GuiTheme;
 import com.unrealtrainmod.client.gui.widget.AngleSlider;
 import com.unrealtrainmod.client.gui.widget.TrainIconButton;
 import com.unrealtrainmod.client.track.ClientTrackConstruction;
+import com.unrealtrainmod.client.track.ClientTurnoutConstruction;
 import com.unrealtrainmod.network.payload.OpenTrackCurvePayload;
 import com.unrealtrainmod.network.payload.SetTrackCurvePayload;
 import com.unrealtrainmod.network.payload.TrackConstructionPayload.Feedback;
@@ -150,6 +151,10 @@ public final class TrackCurveScreen extends Screen {
     }
 
     private void preview() {
+        if (open.turnout()) {
+            ClientTurnoutConstruction.INSTANCE.editPreview(open.endpoint(), automatic ? null : parsed, horizontalEdited);
+            return;
+        }
         var state = ClientTrackConstruction.INSTANCE;
         state.editPreview(open.start(), automatic ? null : parsed, verticalAutomatic ? null : parsedVertical,
                 horizontalEdited, verticalEdited);
@@ -192,6 +197,8 @@ public final class TrackCurveScreen extends Screen {
     private void updateWidgets() {
         apply.active = horizontalValid && verticalValid && !pending;
         reset.active = !pending;
+        horizontalTab.visible = !open.turnout();
+        verticalTab.visible = !open.turnout();
         horizontalTab.active = !pending && verticalPage;
         verticalTab.active = !pending && !verticalPage;
         angle.visible = !verticalPage;
@@ -202,11 +209,11 @@ public final class TrackCurveScreen extends Screen {
         length.setVisible(!verticalPage);
         grade.setVisible(verticalPage);
         verticalLength.setVisible(verticalPage);
-        angle.active = !pending;
-        angleDecreaseLarge.active = !pending;
-        angleDecreaseSmall.active = !pending;
-        angleIncreaseSmall.active = !pending;
-        angleIncreaseLarge.active = !pending;
+        angle.active = !pending && !open.horizontalLocked();
+        angleDecreaseLarge.active = !pending && !open.horizontalLocked();
+        angleDecreaseSmall.active = !pending && !open.horizontalLocked();
+        angleIncreaseSmall.active = !pending && !open.horizontalLocked();
+        angleIncreaseLarge.active = !pending && !open.horizontalLocked();
         length.setEditable(!pending);
         grade.setEditable(!pending && !open.verticalLocked());
         verticalLength.setEditable(!pending);
@@ -218,14 +225,14 @@ public final class TrackCurveScreen extends Screen {
         status = label("pending");
         updateWidgets();
         PacketDistributor.sendToServer(new SetTrackCurvePayload(open.dimension(), open.revision(), open.editorId(),
-                open.start(), horizontalEdited, verticalEdited, automatic, parsed.angle(), parsed.length(),
+                open.kind(), open.endpoint(), horizontalEdited, verticalEdited, automatic, parsed.angle(), parsed.length(),
                 verticalAutomatic, parsedVertical.grade(), parsedVertical.length()));
     }
 
     public void acceptResult(TrackCurveResultPayload result) {
         if (!pending || !open.editorId().equals(result.editorId())) return;
         pending = false;
-        ClientTrackConstruction.INSTANCE.restorePreview();
+        restorePreview();
         if (result.accepted()) {
             onClose();
             return;
@@ -237,17 +244,19 @@ public final class TrackCurveScreen extends Screen {
     @Override
     public void tick() {
         var player = minecraft.player;
+        boolean matches = open.turnout() ? ClientTurnoutConstruction.INSTANCE.matches(open.dimension(), open.revision())
+                : ClientTrackConstruction.INSTANCE.matches(open.dimension(), open.revision());
         if (player == null || !player.isAlive() || !player.hasPermissions(2)
                 || !player.getMainHandItem().is(UnrealTrainMod.TRACK_WRENCH.get())
                 || minecraft.level == null || !minecraft.level.dimension().location().equals(open.dimension())
-                || (!pending && !ClientTrackConstruction.INSTANCE.matches(open.dimension(), open.revision()))) onClose();
+                || (!pending && !matches)) onClose();
     }
 
     @Override
     public void renderBackground(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
         GuiTheme.panel(graphics, left, top, panelWidth, panelHeight, GuiTheme.BACKGROUND);
         drawLabel(graphics, title, 10, GuiTheme.TEXT);
-        drawLabel(graphics, label(open.start() ? "start" : "end"), 25, GuiTheme.ACCENT);
+        drawLabel(graphics, label(open.turnout() ? "turnout_" + open.endpoint() : open.start() ? "start" : "end"), 25, GuiTheme.ACCENT);
         drawLabel(graphics, label(verticalPage ? "grade" : "angle"), 65, GuiTheme.TEXT);
         drawLabel(graphics, label(verticalPage ? "vertical_length" : "length"), 102, GuiTheme.TEXT);
         boolean auto = verticalPage ? verticalAutomatic : automatic;
@@ -268,9 +277,14 @@ public final class TrackCurveScreen extends Screen {
     private Component message() {
         if (status != null) return status;
         if (!horizontalValid || !verticalValid) return Component.translatable(Feedback.INVALID_PARAMETERS.translationKey());
-        Feedback feedback = ClientTrackConstruction.INSTANCE.previewFeedback();
-        if (feedback != null && feedback != Feedback.START && feedback != Feedback.READY) {
+        Feedback feedback = open.turnout() ? ClientTurnoutConstruction.INSTANCE.previewFeedback()
+                : ClientTrackConstruction.INSTANCE.previewFeedback();
+        if (feedback != null && feedback != Feedback.START && feedback != Feedback.READY && feedback != Feedback.TURNOUT_A && feedback != Feedback.TURNOUT_B) {
             return Component.translatable(feedback.translationKey());
+        }
+        if (open.horizontalLocked() && !verticalPage) return label("direction_locked");
+        if (!open.turnout() && !verticalPage && !automatic && ClientTrackConstruction.INSTANCE.horizontalDirected(open.start())) {
+            return label("outward_hint");
         }
         return label(verticalPage ? open.verticalLocked() ? "flat_port_hint" : "vertical_hint" : "hint");
     }
@@ -282,11 +296,16 @@ public final class TrackCurveScreen extends Screen {
                 && mouseY < top + panelHeight - 78) graphics.renderTooltip(font, message(), mouseX, mouseY);
     }
 
+    private void restorePreview() {
+        if (open.turnout()) ClientTurnoutConstruction.INSTANCE.restorePreview();
+        else ClientTrackConstruction.INSTANCE.restorePreview();
+    }
+
     @Override public boolean isPauseScreen() { return false; }
 
     @Override
     public void removed() {
-        ClientTrackConstruction.INSTANCE.restorePreview();
+        restorePreview();
         super.removed();
     }
 }

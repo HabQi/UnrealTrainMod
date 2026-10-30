@@ -4,7 +4,7 @@
  */
 package com.unrealtrainmod.track;
 
-/** An unoriented horizontal tangent axis, using Minecraft yaw, and its Bezier handle length. */
+/** Minecraft yaw and Bezier handle length; placement determines whether the angle is an axis or a direction. */
 public record TrackCurveParameters(double angle, double length) {
     public static final double MIN_LENGTH = 0.01;
     public static final double MAX_LENGTH = 256;

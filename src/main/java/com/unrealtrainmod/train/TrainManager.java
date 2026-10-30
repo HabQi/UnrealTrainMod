@@ -14,6 +14,7 @@ import com.unrealtrainmod.track.assembly.TrackTransitionResolver;
 import com.unrealtrainmod.track.block.TrackBlockManager;
 import com.unrealtrainmod.track.geometry.TrackVector;
 import com.unrealtrainmod.train.TrainConsist.StopReason;
+import com.unrealtrainmod.train.map.TrainMapData;
 import com.unrealtrainmod.vehicle.VehicleCatalog;
 import com.unrealtrainmod.vehicle.VehicleMotionSpec;
 import com.unrealtrainmod.vehicle.VehiclePose;
@@ -204,30 +205,95 @@ public final class TrainManager {
 
     private void seedOccupancy(TrainConsist train) {
         if (train.anchor() == null) return;
-        var intervals = new ArrayList<TrackOccupancyManager.Interval>();
+        List<TrackOccupancyManager.Interval> intervals;
         try {
-            if (train.cars().stream().anyMatch(car -> VehicleCatalog.find(car.modelId()) == null)) {
-                throw new IllegalArgumentException("Missing saved vehicle model");
-            }
-            var snapshot = new TrainConsist(train.id(), train.cars(), train.configuredSpeed());
-            snapshot.setWindow(TrainRouteWindow.initial(graph, train.anchor(), snapshot));
-            for (var car : train.cars()) {
-                if (!TrainMotion.matchesAt(snapshot.window(), car.anchor(), snapshot.progress() + car.offset())) {
-                    throw new IllegalArgumentException("Saved member anchors disagree");
-                }
-            }
-            intervals.addAll(TrackOccupancyManager.footprint(snapshot, snapshot.progress()));
+            intervals = savedFootprint(train, graph);
         } catch (IllegalArgumentException exception) {
             // A damaged/closed route must not silently make the known member segments removable.
-            for (var car : train.cars()) {
-                var anchor = car.anchor();
-                if (anchor == null) continue;
-                var segment = graph.segments().stream().filter(value -> value.id().equals(anchor.segmentId())).findFirst();
-                segment.ifPresent(value -> intervals.add(new TrackOccupancyManager.Interval(value.id(), 0, value.geometry().getLength())));
-            }
+            intervals = anchorFootprint(train, graph);
             LOGGER.warn("Consist {} occupancy limited to saved member segments: {}", train.id(), exception.getMessage());
         }
         occupancy.update(train.id(), intervals);
+    }
+
+    private static List<TrackOccupancyManager.Interval> savedFootprint(TrainConsist train, TrackGraph tracks) {
+        if (train.anchor() == null) return List.of();
+        if (train.cars().stream().anyMatch(car -> VehicleCatalog.find(car.modelId()) == null)) {
+            throw new IllegalArgumentException("Missing saved vehicle model");
+        }
+        var snapshot = new TrainConsist(train.id(), train.cars(), train.configuredSpeed());
+        snapshot.setWindow(TrainRouteWindow.initial(tracks, train.anchor(), snapshot));
+        for (var car : train.cars()) {
+            if (!TrainMotion.matchesAt(snapshot.window(), car.anchor(), snapshot.progress() + car.offset())) {
+                throw new IllegalArgumentException("Saved member anchors disagree");
+            }
+        }
+        return TrackOccupancyManager.footprint(snapshot, snapshot.progress());
+    }
+
+    private static List<TrackOccupancyManager.Interval> anchorFootprint(TrainConsist train, TrackGraph tracks) {
+        var segments = tracks.segments().stream().collect(java.util.stream.Collectors.toMap(value -> value.id(), value -> value));
+        var intervals = new ArrayList<TrackOccupancyManager.Interval>();
+        for (var car : train.cars()) {
+            var segment = car.anchor() == null ? null : segments.get(car.anchor().segmentId());
+            if (segment != null) intervals.add(new TrackOccupancyManager.Interval(segment.id(), 0, segment.geometry().getLength()));
+        }
+        return intervals;
+    }
+
+    /** No info(), graph(), recovery, reservations or world-loading queries belong to this path. */
+    public List<TrainMapData.Entry> monitoringSnapshot(TrackGraph tracks) {
+        data();
+        var entries = new ArrayList<TrainMapData.Entry>();
+        var displayOccupancy = new TrackOccupancyManager();
+        var segments = tracks.segments().stream().collect(java.util.stream.Collectors.toMap(value -> value.id(), value -> value));
+        var ordered = trains.values().stream().sorted(java.util.Comparator.comparing(TrainConsist::id)).toList();
+        for (var train : ordered) {
+            var cars = new ArrayList<TrainMapData.Car>();
+            for (var car : train.cars()) {
+                var entity = level.getEntity(car.entityId()) instanceof TrainEntity value && !value.isRemoved() ? value : null;
+                var source = TrainMapData.PositionSource.MISSING_ANCHOR;
+                TrackVector position = null;
+                double dx = 0, dz = 0;
+                var anchor = car.anchor();
+                if (anchor != null) {
+                    var segment = segments.get(anchor.segmentId());
+                    if (segment == null) source = TrainMapData.PositionSource.MISSING_TRACK;
+                    else if (anchor.distance() > segment.geometry().getLength()) source = TrainMapData.PositionSource.INVALID_ANCHOR;
+                    else {
+                        var pose = segment.geometry().sample(anchor.distance());
+                        position = pose.position();
+                        source = TrainMapData.PositionSource.SAVED;
+                        double direction = (anchor.fromStart() ? 1 : -1) * Math.signum(train.configuredSpeed());
+                        dx = pose.tangent().x() * direction;
+                        dz = pose.tangent().z() * direction;
+                    }
+                }
+                if (entity != null) {
+                    position = new TrackVector(entity.getX(), entity.getY(), entity.getZ());
+                    source = TrainMapData.PositionSource.LIVE;
+                }
+                cars.add(new TrainMapData.Car(car.entityId(), car.modelId(), entity != null, source, position, dx, dz));
+            }
+            entries.add(new TrainMapData.Train(train.id(), train.running(), train.stopReason(), isRestored(train),
+                    train.configuredSpeed(), train.actualSpeed(), cars));
+            List<TrackOccupancyManager.Interval> intervals;
+            if (graph != null) intervals = occupancy.intervals(train.id());
+            else {
+                try { intervals = savedFootprint(train, tracks); }
+                catch (IllegalArgumentException exception) { intervals = anchorFootprint(train, tracks); }
+            }
+            displayOccupancy.update(train.id(), intervals);
+            for (var interval : displayOccupancy.intervals(train.id())) entries.add(new TrainMapData.Occupancy(train.id(), null,
+                    interval.segmentId(), interval.start(), interval.end()));
+        }
+        for (var train : ordered) {
+            for (var conflict : displayOccupancy.conflicts(train.id())) {
+                if (train.id().compareTo(conflict.trainId()) < 0) entries.add(new TrainMapData.Occupancy(train.id(),
+                        conflict.trainId(), conflict.segmentId(), conflict.start(), conflict.end()));
+            }
+        }
+        return List.copyOf(entries);
     }
 
     public TrackOccupancyManager occupancy() {
@@ -442,7 +508,7 @@ public final class TrainManager {
             if (anchor.distance() > tracks.segment(anchor.segmentId()).geometry().getLength()) {
                 throw new StateException(StopReason.INVALID_ANCHOR);
             }
-            if (!TrackTransitionResolver.isSegmentEnabled(tracks, anchor.segmentId())) {
+            if (!TrackTransitionResolver.isSegmentEnabled(tracks, anchor.segmentId(), TrainRouteWindow.context(train, false))) {
                 throw new StateException(StopReason.TURNOUT_ROUTE_UNAVAILABLE);
             }
             train.setWindow(TrainRouteWindow.initial(tracks, anchor, train));
@@ -500,13 +566,17 @@ public final class TrainManager {
     }
 
     private void check(TrainConsist train, List<AABB> areas, List<TrackOccupancyManager.Interval> intervals) {
+        check(train, areas, intervals, train.progress(), false);
+    }
+
+    private void check(TrainConsist train, List<AABB> areas, List<TrackOccupancyManager.Interval> intervals,
+                       double at, boolean candidates) {
         for (var area : areas) {
             var failure = areaFailure(area);
             if (failure != null) throw new StateException(failure);
         }
-        for (var assembly : graph.assemblies()) {
-            if (intervals.stream().anyMatch(interval -> assembly.segments().contains(interval.segmentId()))
-                    && !TrackTransitionResolver.usesEnabledPath(assembly, train::usesSegment)) throw new StateException(StopReason.TURNOUT_ROUTE_UNAVAILABLE);
+        if (!train.window().pathsEnabledAt(graph, train, at, TrainRouteWindow.context(train, candidates))) {
+            throw new StateException(StopReason.TURNOUT_ROUTE_UNAVAILABLE);
         }
         if (!reservations.available(memberIds(train), areas, intervals)) throw new StateException(StopReason.TURNOUT_OCCUPIED);
     }
@@ -654,7 +724,7 @@ public final class TrainManager {
             var areas = swept(currentAreas(entities), candidate.areas());
             reservations.refreshLoaded();
             var intervals = TrackOccupancyManager.footprint(train, candidate.progress());
-            check(train, areas, intervals);
+            check(train, areas, intervals, candidate.progress(), true);
             reservations.acquire(memberIds(train), areas, intervals);
             commit(train, candidate, true);
             reservations.releaseOutside(memberIds(train), candidate.areas(), intervals);
@@ -853,48 +923,53 @@ public final class TrainManager {
     }
 
     private void advance(TrainConsist train) {
-        Candidate accepted = null;
-        StopReason failure = null;
-        List<AABB> previous;
-        List<TrainEntity> entities;
-        double target;
+        boolean moved = false;
         var owners = memberIds(train);
         try {
-            entities = loadedMembers(train);
-            maintainWindow(train, entities);
-            previous = currentAreas(entities);
-            check(train, previous, occupancy.intervals(train.id()));
-            var range = TrainMotion.range(train);
-            target = Math.clamp(train.progress() + train.actualSpeed() / 20, range.min(), range.max());
-        } catch (StateException exception) {
-            stop(train, exception.reason());
-            return;
-        }
-        double progress = train.progress();
-        var sampleOffsets = TrainMotion.sampleOffsets(train);
-        while (progress != target) {
-            try {
+            var entities = loadedMembers(train);
+            var previous = currentAreas(entities);
+            double remaining = train.actualSpeed() / 20;
+            var sampleOffsets = TrainMotion.sampleOffsets(train);
+            while (remaining != 0 && train.running()) {
+                maintainWindow(train, entities);
+                double progress = train.progress();
+                check(train, previous, occupancy.intervals(train.id()), progress, true);
+                var range = TrainMotion.range(train);
+                double requested = progress + remaining;
+                double target = Math.clamp(requested, range.min(), range.max());
+                if (target == progress) break;
                 double next = TrainMotion.nextStep(train.route(), train.sampler(), sampleOffsets, progress, target);
+                var turnoutMovement = new TrainTurnoutMovement(graph, train);
+                next = turnoutMovement.nextBoundary(progress, next);
                 var candidate = calculate(train, entities, next);
                 var areas = swept(previous, candidate.areas());
                 var intervals = TrackOccupancyManager.footprint(train, next);
-                check(train, areas, intervals);
-                reservations.acquire(owners, areas, intervals);
-                accepted = candidate;
-                progress = next;
+                check(train, areas, intervals, next, true);
+                List<TrainTurnoutMovement.Action> actions;
+                try {
+                    actions = turnoutMovement.propose(progress, next);
+                    for (var action : actions) graph.validateTrailingPass(action.assemblyId(), owners, action.pathId());
+                } catch (IllegalArgumentException exception) {
+                    throw new StateException(StopReason.TURNOUT_ROUTE_UNAVAILABLE, exception);
+                }
+                if (!reservations.acquire(owners, areas, intervals)) throw new StateException(StopReason.TURNOUT_OCCUPIED);
+                for (var action : actions) if (action.begin()) graph.beginTrailingPass(action.assemblyId(), owners, action.pathId());
+                for (var action : actions) if (action.throwSwitch()) graph.throwTrailingPass(action.assemblyId(), owners);
+                // Commit each accepted substep before release can restore a turnout and notify route observers.
+                commit(train, candidate, false);
+                moved = true;
                 previous = candidate.areas();
-            } catch (StateException exception) {
-                failure = exception.reason();
-                break;
+                remaining = next == requested ? 0 : remaining - (next - progress);
+                reservations.releaseOutside(owners, previous, occupancy.intervals(train.id()));
             }
-        }
-        if (accepted != null) commit(train, accepted, level.getGameTime() % 2 == 0);
-        reservations.releaseOutside(owners, previous, occupancy.intervals(train.id()));
-        var range = TrainMotion.range(train);
-        if (failure != null) stop(train, failure);
-        else if ((train.actualSpeed() < 0 && progress == range.min() && train.window().startBoundary())
-                || (train.actualSpeed() > 0 && progress == range.max() && train.window().endBoundary())) {
-            stop(train, StopReason.END_OF_ROUTE);
+            if (moved && level.getGameTime() % 2 == 0) sync(train);
+            var range = TrainMotion.range(train);
+            if ((train.actualSpeed() < 0 && train.progress() == range.min() && train.window().startBoundary())
+                    || (train.actualSpeed() > 0 && train.progress() == range.max() && train.window().endBoundary())) {
+                stop(train, StopReason.END_OF_ROUTE);
+            }
+        } catch (StateException exception) {
+            stop(train, exception.reason());
         }
     }
 

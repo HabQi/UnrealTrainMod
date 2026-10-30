@@ -36,7 +36,7 @@ public final class TurnoutCommands {
 
     public static void register(RegisterCommandsEvent event) {
         var create = literal("create");
-        for (var definition : TrackAssemblyDefinition.values()) {
+        for (var definition : List.of(TrackAssemblyDefinition.LEFT, TrackAssemblyDefinition.RIGHT)) {
             create.then(literal(definition.name().toLowerCase(Locale.ROOT))
                     .then(argument("originNodeId", UuidArgument.uuid()).suggests((c, b) -> SharedSuggestionProvider.suggest(
                             graph(c).nodes().stream().filter(n -> graph(c).assemblyAtPort(n.id()) == null
@@ -98,7 +98,18 @@ public final class TurnoutCommands {
                 : Component.translatable(PREFIX + (source.getLevel().getEntity(value.occupant()) == null ? "waiting" : "occupied"), id(value.occupant()));
         source.sendSuccess(() -> Component.translatable(PREFIX + "info", id(value.id()),
                 Component.translatable(PREFIX + value.definition().name().toLowerCase(Locale.ROOT)),
-                Component.translatable(PREFIX + (value.state().controls().get("main") == SwitchPosition.NORMAL ? "straight" : "diverging")), value.revision(), occupancy), false);
+                Component.translatable(PREFIX + (value.definition() == TrackAssemblyDefinition.CUSTOM
+                        ? value.state().controls().get("main") == SwitchPosition.NORMAL ? "line_one" : "line_two"
+                        : value.state().controls().get("main") == SwitchPosition.NORMAL ? "straight" : "diverging")), value.revision(), occupancy), false);
+        if (value.trailingPass() != null) {
+            var passage = value.trailingPass();
+            String exit = value.definition().routes().get(passage.pathId()).exit();
+            boolean thrown = value.definition().routes().get(passage.pathId()).enabled(value.state());
+            var returning = Component.translatable(PREFIX + (passage.returnState().controls().get("main") == SwitchPosition.NORMAL
+                    ? "line_one" : "line_two"));
+            source.sendSuccess(() -> Component.translatable(PREFIX + "trailing_info", exit,
+                    Component.translatable(PREFIX + (thrown ? "trailing_return" : "trailing_approach")), returning), false);
+        }
         for (var entry : value.ports().entrySet()) {
             var port = entry.getValue();
             var node = graph.node(port.nodeId());

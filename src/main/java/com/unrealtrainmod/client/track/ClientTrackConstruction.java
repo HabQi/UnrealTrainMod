@@ -47,7 +47,9 @@ public final class ClientTrackConstruction {
     public void onSync(TrackSyncEvent event) {
         if (event.payload() instanceof OpenTrackCurvePayload open) {
             var minecraft = Minecraft.getInstance();
-            if (minecraft.screen == null && matches(open.dimension(), open.revision()) && minecraft.player != null
+            if (minecraft.screen == null && (open.turnout()
+                    ? ClientTurnoutConstruction.INSTANCE.matches(open.dimension(), open.revision())
+                    : matches(open.dimension(), open.revision())) && minecraft.player != null
                     && minecraft.player.getMainHandItem().is(UnrealTrainMod.TRACK_WRENCH.get())) {
                 minecraft.setScreen(new TrackCurveScreen(open));
             }
@@ -106,7 +108,12 @@ public final class ClientTrackConstruction {
 
     public TrackVector endpointTangent(boolean start, double fallbackYaw) {
         return TrackPlacementGeometry.endpointTangent(draft.start().position(),
-                draft.end() == null ? null : draft.end().position(), startCurve, endCurve, start, fallbackYaw);
+                draft.end() == null ? null : draft.end().position(), startCurve, endCurve, start, fallbackYaw,
+                draft.startHorizontalDirected(), draft.endHorizontalDirected());
+    }
+
+    public boolean horizontalDirected(boolean start) {
+        return draft != null && (start ? draft.startHorizontalDirected() : draft.endHorizontalDirected());
     }
 
     public TrackVerticalCurveParameters previewVertical(boolean start) { return start ? startVertical : endVertical; }
@@ -117,7 +124,8 @@ public final class ClientTrackConstruction {
         if (draft.end() != null) {
             try {
                 var flat = horizontalGeometry != null ? horizontalGeometry : TrackPlacementGeometry.horizontal(
-                        draft.start().position(), draft.end().position(), draft.gauge(), startCurve, endCurve);
+                        draft.start().position(), draft.end().position(), draft.gauge(), startCurve, endCurve,
+                        draft.startHorizontalDirected(), draft.endHorizontalDirected());
                 grade = (draft.end().position().y() - draft.start().position().y()) / flat.getLength() * 1000;
                 length = Math.clamp(flat.getLength() / 3, TrackCurveParameters.MIN_LENGTH, TrackCurveParameters.MAX_LENGTH);
             } catch (IllegalArgumentException exception) {
@@ -156,7 +164,8 @@ public final class ClientTrackConstruction {
         }
         try {
             if (startVertical != null || endVertical != null) {
-                horizontalGeometry = TrackPlacementGeometry.horizontal(a, b, draft.gauge(), startCurve, endCurve);
+                horizontalGeometry = TrackPlacementGeometry.horizontal(a, b, draft.gauge(), startCurve, endCurve,
+                        draft.startHorizontalDirected(), draft.endHorizontalDirected());
                 double length = Math.clamp(horizontalGeometry.getLength() / 3,
                         TrackCurveParameters.MIN_LENGTH, TrackCurveParameters.MAX_LENGTH);
                 if (draft.startVerticalInferred() && !startVerticalEdited && startVertical != null) {
@@ -166,7 +175,8 @@ public final class ClientTrackConstruction {
                     endVertical = new TrackVerticalCurveParameters(endVertical.grade(), length, endVertical.referenceYaw());
                 }
                 geometry = TrackPlacementGeometry.withVertical(horizontalGeometry, a.y(), b.y(), startVertical, endVertical);
-            } else geometry = TrackPlacementGeometry.create(a, b, draft.gauge(), startCurve, endCurve);
+            } else geometry = TrackPlacementGeometry.create(a, b, draft.gauge(), startCurve, endCurve, null, null,
+                    draft.startHorizontalDirected(), draft.endHorizontalDirected());
             if (geometry.getLength() > TrackPlacementGeometry.MAX_LENGTH) {
                 previewFeedback = Feedback.TOO_LONG;
             }

@@ -34,7 +34,7 @@ import net.minecraft.world.level.storage.LevelResource;
 public final class TrackSavedData extends SavedData {
     public static final int MAX_VOLUME_BLOCKS = 16_384;
     private static final String NAME = "unrealtrainmod_tracks";
-    private static final int FORMAT_VERSION = 7;
+    private static final int FORMAT_VERSION = 9;
     private static final Factory<TrackSavedData> FACTORY =
             new Factory<>(TrackSavedData::new, (tag, registries) -> load(tag));
     private final TrackGraph graph = new TrackGraph(this::setDirty);

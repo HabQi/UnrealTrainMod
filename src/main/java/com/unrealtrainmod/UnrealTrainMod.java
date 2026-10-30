@@ -11,6 +11,7 @@ import com.unrealtrainmod.command.TrainCommands;
 import com.unrealtrainmod.command.TurnoutCommands;
 import com.unrealtrainmod.train.TrainManager;
 import com.unrealtrainmod.train.TrainDiagnostics;
+import com.unrealtrainmod.train.map.TrainMapService;
 import com.unrealtrainmod.entity.PlacedModelEntity;
 import com.unrealtrainmod.entity.TrainEntity;
 import com.unrealtrainmod.item.ModelPlacerItem;
@@ -117,5 +118,6 @@ public class UnrealTrainMod {
         TurnoutConstructionManager.register(NeoForge.EVENT_BUS);
         TrainManager.register(NeoForge.EVENT_BUS);
         TrainDiagnostics.register(NeoForge.EVENT_BUS);
+        TrainMapService.register(NeoForge.EVENT_BUS);
     }
 }

@@ -18,7 +18,7 @@ public record TrackAssemblyPayload(ResourceLocation dimension, int chunkX, int c
     public static final StreamCodec<RegistryFriendlyByteBuf, TrackAssemblyPayload> STREAM_CODEC = StreamCodec.of(
             (b, p) -> {
                 b.writeResourceLocation(p.dimension()); b.writeInt(p.chunkX()); b.writeInt(p.chunkZ());
-                b.writeNbt(p.assembly().withOccupant(null).save());
+                b.writeNbt(p.assembly().saveForClient());
             }, b -> new TrackAssemblyPayload(b.readResourceLocation(), b.readInt(), b.readInt(),
                     TrackAssemblyInstance.load(java.util.Objects.requireNonNull(b.readNbt()))));
     @Override public Type<TrackAssemblyPayload> type() { return TYPE; }

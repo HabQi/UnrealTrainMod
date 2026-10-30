@@ -11,6 +11,7 @@ import com.unrealtrainmod.track.geometry.TrackVector;
 import com.unrealtrainmod.track.geometry.VerticalTrackGeometry;
 import com.unrealtrainmod.track.assembly.TrackAssemblyDefinition;
 import com.unrealtrainmod.track.assembly.TrackAssemblyInstance;
+import com.unrealtrainmod.track.assembly.TrailingPass;
 import com.unrealtrainmod.track.assembly.JunctionState;
 import com.unrealtrainmod.track.assembly.TrackPath;
 import com.unrealtrainmod.track.assembly.TrackPort;
@@ -99,13 +100,22 @@ public final class TrackGraph {
                                      boolean startEdited, boolean endEdited,
                                      TrackVerticalCurveParameters startVertical, TrackVerticalCurveParameters endVertical,
                                      boolean startVerticalEdited, boolean endVerticalEdited) {
+        return addPlacement(id, start, end, gauge, modelId, startCurve, endCurve, startEdited, endEdited,
+                startVertical, endVertical, startVerticalEdited, endVerticalEdited, false, false);
+    }
+
+    public TrackSegment addPlacement(UUID id, TrackPlacementEndpoint start, TrackPlacementEndpoint end, double gauge,
+                                     String modelId, TrackCurveParameters startCurve, TrackCurveParameters endCurve,
+                                     boolean startEdited, boolean endEdited,
+                                     TrackVerticalCurveParameters startVertical, TrackVerticalCurveParameters endVertical,
+                                     boolean startVerticalEdited, boolean endVerticalEdited, boolean startDirected, boolean endDirected) {
         TrackNode a = placementNode(start, gauge), b = placementNode(end, gauge);
         if ((start.nodeId() == null && nodes.containsKey(a.id()))
                 || (end.nodeId() == null && nodes.containsKey(b.id()))) {
             throw new TrackGraphException(TrackGraphException.Reason.DUPLICATE_ID);
         }
         TrackGeometry geometry = TrackPlacementGeometry.create(a.position(), b.position(), gauge, startCurve, endCurve,
-                startVertical, endVertical);
+                startVertical, endVertical, startDirected, endDirected);
         if (geometry.getLength() > TrackPlacementGeometry.MAX_LENGTH) {
             throw new IllegalArgumentException("Construction track exceeds 256 blocks");
         }
@@ -345,11 +355,63 @@ public final class TrackGraph {
         return new PreparedAssembly(instance, List.copyOf(preparedNodes.values()), List.copyOf(batch));
     }
 
+    public PreparedAssembly prepareTurnout(List<TrackPlacementEndpoint> endpoints, double gauge,
+                                           List<TrackCurveParameters> curves, List<Boolean> edited, String modelId) {
+        if (endpoints.size() != 3 || curves.size() != 3 || edited.size() != 3) {
+            throw new IllegalArgumentException("A turnout needs three endpoints");
+        }
+        var preparedNodes = new LinkedHashMap<UUID, TrackNode>();
+        var ports = new LinkedHashMap<String, TrackPort>();
+        var endpointNodes = new ArrayList<TrackNode>();
+        for (int i = 0; i < 3; i++) {
+            var endpoint = endpoints.get(i);
+            var node = placementNode(endpoint, gauge);
+            if (endpoint.nodeId() != null && (assemblyAtPort(node.id()) != null || connections(node.id()).size() > 1)) {
+                throw new IllegalArgumentException("Turnout ports must be free endpoints");
+            }
+            if (preparedNodes.containsKey(node.id())) throw new IllegalArgumentException("Duplicate turnout endpoint");
+            var curve = endpoint.nodeId() == null || edited.get(i) ? curves.get(i) : node.curve();
+            var updated = new TrackNode(node.id(), node.position(), gauge, curve, node.verticalCurve());
+            preparedNodes.put(updated.id(), updated); endpointNodes.add(updated);
+        }
+        var a = endpointNodes.get(0);
+        var geometry = TurnoutPlacementGeometry.create(a.position(), endpointNodes.get(1).position(),
+                endpointNodes.get(2).position(), gauge, curves.get(0), curves.get(1), curves.get(2),
+                endpoints.get(1).nodeId() != null && !connections(endpointNodes.get(1).id()).isEmpty(),
+                endpoints.get(2).nodeId() != null && !connections(endpointNodes.get(2).id()).isEmpty());
+        for (int i = 0; i < 3; i++) {
+            String name = List.of("A", "B", "C").get(i);
+            ports.put(name, new TrackPort(endpointNodes.get(i).id(), geometry.ports().get(name).outwardYaw()));
+        }
+        var batch = new ArrayList<TrackSegment>();
+        var paths = new LinkedHashMap<String, TrackPath>();
+        for (int i = 1; i < 3; i++) {
+            String name = i == 1 ? "straight" : "diverging";
+            var part = (BezierTrackGeometry) geometry.paths().get(name).getFirst();
+            var segment = prepareSegment(UUID.randomUUID(), a, endpointNodes.get(i), part.control1(), part.control2(), modelId, part);
+            batch.add(segment); paths.put(name, new TrackPath(List.of(new TrackConnection(segment.id(), true))));
+        }
+        var definition = TrackAssemblyDefinition.CUSTOM;
+        var instance = new TrackAssemblyInstance(UUID.randomUUID(), definition, ports, paths, a.position(), curves.get(0).angle(),
+                gauge, definition.initialState(), 0, null, geometry, modelId);
+        var byId = batch.stream().collect(java.util.stream.Collectors.toMap(TrackSegment::id, segment -> segment));
+        validateAssembly(instance, preparedNodes::get, byId::get);
+        return new PreparedAssembly(instance, List.copyOf(preparedNodes.values()), List.copyOf(batch));
+    }
+
+    public TrackAssemblyInstance createTurnout(List<TrackPlacementEndpoint> endpoints, double gauge,
+                                              List<TrackCurveParameters> curves, List<Boolean> edited, String modelId) {
+        return commitAssembly(prepareTurnout(endpoints, gauge, curves, edited, modelId));
+    }
+
     public record PreparedAssembly(TrackAssemblyInstance instance, List<TrackNode> nodes, List<TrackSegment> segments) {}
 
     public TrackAssemblyInstance createTurnout(TrackPlacementEndpoint origin, double gauge,
                                                TrackAssemblyDefinition definition, double yaw) {
-        var prepared = prepareTurnout(origin, gauge, definition, yaw);
+        return commitAssembly(prepareTurnout(origin, gauge, definition, yaw));
+    }
+
+    private TrackAssemblyInstance commitAssembly(PreparedAssembly prepared) {
         var instance = prepared.instance();
         segmentValidator.accept(prepared.segments());
         // All rejecting validation precedes mutation; observers see complete ownership and topology.
@@ -461,8 +523,46 @@ public final class TrackGraph {
     public void setAssemblyOccupant(UUID id, UUID occupant) {
         var old = assembly(id);
         if (Objects.equals(old.occupant(), occupant)) return;
-        assemblies.put(id, old.withOccupant(occupant));
+        var updated = occupant == null ? old.finishTrailingPass() : old.withOccupant(occupant);
+        assemblies.put(id, updated);
         onChange.run();
+        if (old.revision() != updated.revision()) for (var listener : assemblyListeners) listener.accept(updated);
+    }
+
+    /** Validate all requested passages before acquiring any movement reservations. */
+    public void validateTrailingPass(UUID id, List<UUID> owners, String pathId) {
+        var value = assembly(id);
+        if (!value.paths().containsKey(pathId)
+                || value.occupant() != null && !owners.contains(value.occupant())
+                || value.trailingPass() != null && !value.trailingPass().pathId().equals(pathId)) {
+            throw new IllegalArgumentException("Turnout passage is owned by another path or consist");
+        }
+    }
+
+    /** Called only after the complete movement step has passed validation and acquired ownership. */
+    public void beginTrailingPass(UUID id, List<UUID> owners, String pathId) {
+        var old = assembly(id);
+        validateTrailingPass(id, owners, pathId);
+        if (old.occupant() == null) throw new IllegalArgumentException("Trailing passage needs an occupied turnout");
+        if (old.trailingPass() != null) return;
+        var passage = new TrailingPass(pathId, old.state());
+        assemblies.put(id, old.withTrailingPass(passage));
+        onChange.run();
+    }
+
+    public void throwTrailingPass(UUID id, List<UUID> owners) {
+        var old = assembly(id);
+        if (old.trailingPass() == null || !owners.contains(old.occupant())) {
+            throw new IllegalArgumentException("No owned trailing passage");
+        }
+        var state = old.state();
+        for (var control : old.definition().routes().get(old.trailingPass().pathId()).requirements().entrySet()) {
+            state = state.withControl(control.getKey(), control.getValue());
+        }
+        if (state.equals(old.state())) return;
+        var updated = old.withState(state);
+        assemblies.put(id, updated); onChange.run();
+        for (var listener : assemblyListeners) listener.accept(updated);
     }
 
     public void removeAssembly(UUID id) {

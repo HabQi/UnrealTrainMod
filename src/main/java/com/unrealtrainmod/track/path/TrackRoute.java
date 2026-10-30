@@ -8,6 +8,7 @@ import com.unrealtrainmod.track.TrackConnection;
 import com.unrealtrainmod.track.TrackGraph;
 import com.unrealtrainmod.track.geometry.TrackGeometry;
 import com.unrealtrainmod.track.assembly.TrackTransitionResolver;
+import com.unrealtrainmod.track.assembly.TrackTraversalContext;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -45,9 +46,13 @@ public final class TrackRoute {
 
     /** Builds a snapshot in the supplied order; repeated segment IDs are allowed. */
     public static TrackRoute of(TrackGraph graph, List<TrackConnection> connections) {
+        return of(graph, connections, TrackTraversalContext.STRICT);
+    }
+
+    public static TrackRoute of(TrackGraph graph, List<TrackConnection> connections, TrackTraversalContext context) {
         var steps = List.copyOf(connections);
         if (steps.isEmpty()) throw new IllegalArgumentException("Route must contain at least one segment");
-        if (!TrackTransitionResolver.isRouteEnabled(graph, steps)) throw new IllegalArgumentException("Illegal or closed assembly path sequence");
+        if (!TrackTransitionResolver.isRouteEnabled(graph, steps, context)) throw new IllegalArgumentException("Illegal or closed assembly path sequence");
         var geometries = new ArrayList<TrackGeometry>(steps.size());
         for (var connection : steps) {
             var geometry = graph.segment(connection.segmentId()).geometry();
@@ -77,8 +82,8 @@ public final class TrackRoute {
         for (var connection : core) {
             if (!visited.add(connection.segmentId())) throw new IllegalArgumentException("Route core repeats a segment");
         }
-        extendEnd(graph, core.getLast(), steps, visited, true, cutNode, Double.POSITIVE_INFINITY);
-        extendEnd(graph, reversed(core.getFirst()), steps, visited, false, cutNode, Double.POSITIVE_INFINITY);
+        extendEnd(graph, core.getLast(), steps, visited, true, cutNode, Double.POSITIVE_INFINITY, TrackTraversalContext.STRICT);
+        extendEnd(graph, reversed(core.getFirst()), steps, visited, false, cutNode, Double.POSITIVE_INFINITY, TrackTraversalContext.STRICT);
         return of(graph, List.copyOf(steps));
     }
 
@@ -87,19 +92,23 @@ public final class TrackRoute {
      * Repeated segments are allowed. A boundary means an end or ambiguous continuation, not a budget limit.
      */
     public static Extension extend(TrackGraph graph, List<TrackConnection> core, double before, double after) {
+        return extend(graph, core, before, after, TrackTraversalContext.STRICT);
+    }
+
+    public static Extension extend(TrackGraph graph, List<TrackConnection> core, double before, double after, TrackTraversalContext context) {
         if (core.isEmpty()) throw new IllegalArgumentException("Route core must not be empty");
         if (!Double.isFinite(before) || before < 0 || !Double.isFinite(after) || after < 0) {
             throw new IllegalArgumentException("Extension distances must be finite and nonnegative");
         }
-        if (!TrackTransitionResolver.isRouteEnabled(graph, core)) throw new IllegalArgumentException("Route core contains a closed assembly path");
+        if (!TrackTransitionResolver.isRouteEnabled(graph, core, context)) throw new IllegalArgumentException("Route core contains a closed assembly path");
         var steps = new ArrayDeque<>(core);
-        var end = extendEnd(graph, core.getLast(), steps, null, true, null, after);
-        var start = extendEnd(graph, reversed(core.getFirst()), steps, null, false, null, before);
-        return new Extension(of(graph, List.copyOf(steps)), start.count(), start.boundary(), end.boundary());
+        var end = extendEnd(graph, core.getLast(), steps, null, true, null, after, context);
+        var start = extendEnd(graph, reversed(core.getFirst()), steps, null, false, null, before, context.reversed());
+        return new Extension(of(graph, List.copyOf(steps), context), start.count(), start.boundary(), end.boundary());
     }
 
     private static Growth extendEnd(TrackGraph graph, TrackConnection current, ArrayDeque<TrackConnection> steps,
-                                     Set<UUID> visited, boolean append, UUID cutNode, double distance) {
+                                     Set<UUID> visited, boolean append, UUID cutNode, double distance, TrackTraversalContext context) {
         var owner = graph.assemblyForSegment(current.segmentId());
         var run = new ArrayList<TrackConnection>();
         if (owner != null) {
@@ -120,11 +129,11 @@ public final class TrackRoute {
             TrackConnection next = null;
             for (var candidate : graph.connections(exit)) {
                 if (candidate.segmentId().equals(current.segmentId())) continue;
-                if (!TrackTransitionResolver.permits(graph, current, candidate)) continue;
+                if (!TrackTransitionResolver.permits(graph, current, candidate, context)) continue;
                 if (owner != null && graph.assemblyForSegment(candidate.segmentId()) == owner) {
                     var continued = new ArrayList<>(run);
                     continued.add(candidate);
-                    if (!TrackTransitionResolver.isSequenceEnabled(owner, continued)) continue;
+                    if (!TrackTransitionResolver.isSequenceEnabled(owner, continued, context)) continue;
                 }
                 // Count all choices before checking visited IDs: a branch must never select a side.
                 if (next != null) return new Growth(count, true);

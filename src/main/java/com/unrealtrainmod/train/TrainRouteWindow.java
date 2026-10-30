@@ -7,6 +7,7 @@ package com.unrealtrainmod.train;
 import com.unrealtrainmod.track.TrackConnection;
 import com.unrealtrainmod.track.TrackGraph;
 import com.unrealtrainmod.track.assembly.TrackTransitionResolver;
+import com.unrealtrainmod.track.assembly.TrackTraversalContext;
 import com.unrealtrainmod.track.path.TrackCursor;
 import com.unrealtrainmod.track.path.TrackPathSampler;
 import com.unrealtrainmod.track.path.TrackRoute;
@@ -76,7 +77,7 @@ final class TrainRouteWindow {
         double ahead = Math.max(64, 2 * Math.abs(speed));
         double before = Math.max(0, (speed > 0 ? REAR_MARGIN : ahead) - (local + min));
         double after = Math.max(0, local + max + (speed > 0 ? ahead : REAR_MARGIN) - length);
-        var extension = TrackRoute.extend(graph, List.of(seed), before, after);
+        var extension = TrackRoute.extend(graph, List.of(seed), before, after, context(train, false));
         var window = new TrainRouteWindow(graph, extension.route(), 0,
                 extension.startBoundary(), extension.endBoundary(), speed);
         window.setProgress(window.sampler().distance(new TrackCursor(extension.prefixCount(), local)));
@@ -89,6 +90,8 @@ final class TrainRouteWindow {
                 window.setProgress(range.max());
             }
         }
+        // Initial binding/recovery is strict; the first read-only maintenance may discover trailing candidates.
+        window.requestRefresh();
         return window;
     }
 
@@ -113,8 +116,16 @@ final class TrainRouteWindow {
     }
 
     boolean occupiedPathsEnabled(TrackGraph graph, TrainConsist train) {
-        var occupied = core(train);
-        return TrackTransitionResolver.isRouteEnabled(graph, route.connections().subList(occupied.first(), occupied.end()));
+        return pathsEnabledAt(graph, train, progress, context(train, false));
+    }
+
+    static TrackTraversalContext context(TrainConsist train, boolean candidates) {
+        return new TrackTraversalContext(train.cars().stream().map(TrainCarState::entityId).toList(), candidates, train.configuredSpeed() > 0);
+    }
+
+    boolean pathsEnabledAt(TrackGraph graph, TrainConsist train, double at, TrackTraversalContext context) {
+        var occupied = core(train, at);
+        return TrackTransitionResolver.isRouteEnabled(graph, route.connections().subList(occupied.first(), occupied.end()), context);
     }
 
     TrainRouteWindow copyAt(TrackGraph graph, double reference) {
@@ -142,7 +153,7 @@ final class TrainRouteWindow {
         double coreEnd = sampler.distance(new TrackCursor(core.end() - 1, route.segmentLength(core.end() - 1)));
         double extendBefore = Math.max(0, before - (span.min() - coreStart));
         double extendAfter = Math.max(0, after - (coreEnd - span.max()));
-        var extension = TrackRoute.extend(graph, route.connections().subList(core.first(), core.end()), extendBefore, extendAfter);
+        var extension = TrackRoute.extend(graph, route.connections().subList(core.first(), core.end()), extendBefore, extendAfter, context(train, true));
         var candidate = new TrainRouteWindow(graph, extension.route(), 0,
                 extension.startBoundary(), extension.endBoundary(), speed);
         var reference = sampler.locate(progress);
@@ -167,12 +178,14 @@ final class TrainRouteWindow {
         return candidate;
     }
 
-    private Span span(TrainConsist train) {
-        double min = progress, max = progress;
+    private Span span(TrainConsist train) { return span(train, progress); }
+
+    private Span span(TrainConsist train, double at) {
+        double min = at, max = at;
         for (var car : train.cars()) {
             var spec = VehicleCatalog.find(car.modelId()).motionSpec();
             var range = VehiclePoseSolver.range(route.getLength(), spec);
-            double reference = TrainMotion.carProgress(progress, car.offset(), range);
+            double reference = TrainMotion.carProgress(at, car.offset(), range);
             // Match solve()'s arithmetic order and exact endpoints; combined offsets can round
             // to the other side of a joint and accidentally omit a bogie's outgoing segment.
             double front = reference == range.max() && spec.frontBogieOffset() >= 0
@@ -189,8 +202,10 @@ final class TrainRouteWindow {
         return new Span(Math.clamp(min, 0, route.getLength()), Math.clamp(max, 0, route.getLength()));
     }
 
-    private Slice core(TrainConsist train) {
-        var span = span(train);
+    private Slice core(TrainConsist train) { return core(train, progress); }
+
+    private Slice core(TrainConsist train, double at) {
+        var span = span(train, at);
         var first = sampler.locate(span.min());
         // Keep the previous side of an exact joint for saved endpoint aliases and committed choices.
         int begin = first.segmentIndex();

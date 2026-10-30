@@ -15,7 +15,7 @@ import java.util.Map;
 
 /** Built-in flat, mirrored ordinary turnout. Dimensions scale with gauge. */
 public enum TrackAssemblyDefinition {
-    LEFT(TurnoutDirection.LEFT), RIGHT(TurnoutDirection.RIGHT);
+    LEFT(TurnoutDirection.LEFT), RIGHT(TurnoutDirection.RIGHT), CUSTOM(null);
 
     public static final double ANGLE = Math.atan(1.0 / 8);
     private static final Map<String, TrackRouteDefinition> ROUTES = Map.of(
@@ -47,6 +47,7 @@ public enum TrackAssemblyDefinition {
     }
 
     public Geometry geometry(TrackVector origin, double yaw, double gauge) {
+        if (this == CUSTOM) throw new IllegalArgumentException("Custom turnouts require explicit geometry");
         if (!Double.isFinite(yaw) || !Double.isFinite(gauge) || gauge <= 0 || 32 * gauge / 1.435 > 256
                 || !Double.isFinite(origin.x()) || !Double.isFinite(origin.y()) || !Double.isFinite(origin.z())) {
             throw new IllegalArgumentException("Invalid turnout geometry parameters");

@@ -10,6 +10,8 @@ import org.slf4j.LoggerFactory;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.VertexBuffer;
 import com.unrealtrainmod.track.mesh.TrackMeshBuilder;
+import com.unrealtrainmod.track.assembly.TrackAssemblyDefinition;
+import com.unrealtrainmod.track.geometry.TrackGeometry;
 import com.unrealtrainmod.track.mesh.TrackMeshData;
 import com.unrealtrainmod.track.mesh.RailTrackMeshBuilder;
 import java.util.UUID;
@@ -63,7 +65,7 @@ public final class TrackWorldRenderer {
                 }
             }
             for (var entry : cache.assemblies.values()) {
-                if (!event.getFrustum().isVisible(entry.data.bounds())) continue;
+                if (!event.getFrustum().isVisible(entry.broadBounds())) continue;
                 for (long chunk : entry.chunks) {
                     int x = ChunkPos.getX(chunk), z = ChunkPos.getZ(chunk);
                     if (!level.hasChunk(x, z)) continue;
@@ -73,8 +75,13 @@ public final class TrackWorldRenderer {
                         var mesh = meshes.get(chunk);
                         if (mesh == null) {
                             if (builds == 0) continue;
-                            try { mesh = new TrackGpuMesh(TrackMeshBuilder.buildTurnout(entry.data, x, z, tongue)); }
-                            catch (IllegalArgumentException exception) {
+                            try {
+                                if (entry.data.definition() == TrackAssemblyDefinition.CUSTOM) {
+                                    var geometry = entry.data.geometry().paths().get(tongue ? "diverging" : "straight").getFirst();
+                                    mesh = build(geometry, entry.data.gauge(), entry.data.modelId(), entry.data.id(), x, z, !entry.missingReported);
+                                    entry.missingReported = true;
+                                } else mesh = new TrackGpuMesh(TrackMeshBuilder.buildTurnout(entry.data, x, z, tongue));
+                            } catch (IllegalArgumentException exception) {
                                 LOGGER.warn("Cannot build turnout {} in chunk {}, {}: {}", entry.data.id(), x, z, exception.getMessage());
                                 mesh = new TrackGpuMesh(TrackMeshData.EMPTY);
                             }
@@ -98,25 +105,30 @@ public final class TrackWorldRenderer {
     }
 
     private static TrackRenderMesh build(ClientTrackCache.Entry entry, UUID id, int x, int z) {
-        String modelId = entry.data.modelId();
+        var mesh = build(entry.geometry, entry.data.gauge(), entry.data.modelId(), id, x, z, !entry.missingReported);
+        entry.missingReported = true;
+        return mesh;
+    }
+
+    private static TrackRenderMesh build(TrackGeometry geometry, double gauge, String modelId, UUID id,
+                                         int x, int z, boolean reportMissing) {
         if (modelId != null) {
             var model = ClientRailModelManager.INSTANCE.model(modelId);
             if (model != null) {
                 try {
-                    return new RailTrackGpuMesh(RailTrackMeshBuilder.build(entry.geometry,
+                    return new RailTrackGpuMesh(RailTrackMeshBuilder.build(geometry,
                             model.batches().stream().map(ClientRailModelManager.Batch::mesh).toList(), x, z,
-                            model.scaleForGauge(entry.data.gauge()), model.period()), model, false);
+                            model.scaleForGauge(gauge), model.period()), model, false);
                 } catch (IllegalArgumentException exception) {
                     LOGGER.warn("Cannot build rail {} using {} in chunk {}, {}: {}; using native appearance",
                             id, modelId, x, z, exception.getMessage());
                 }
-            } else if (!entry.missingReported) {
-                entry.missingReported = true;
+            } else if (reportMissing) {
                 LOGGER.warn("Rail model {} is missing or unavailable for track {}; using native appearance", modelId, id);
             }
         }
         try {
-            return new TrackGpuMesh(TrackMeshBuilder.build(entry.geometry, x, z));
+            return new TrackGpuMesh(TrackMeshBuilder.build(geometry, x, z));
         } catch (IllegalArgumentException exception) {
             // Retain an empty batch so invalid/oversized input does not retry on every frame.
             LOGGER.warn("Cannot build track {} in chunk {}, {}: {}", id, x, z, exception.getMessage());

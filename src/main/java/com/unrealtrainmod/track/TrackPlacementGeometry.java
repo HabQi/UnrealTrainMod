@@ -27,8 +27,17 @@ public final class TrackPlacementGeometry {
     public static TrackGeometry create(TrackVector start, TrackVector end, double gauge,
                                        TrackCurveParameters startCurve, TrackCurveParameters endCurve,
                                        TrackVerticalCurveParameters startVertical, TrackVerticalCurveParameters endVertical) {
-        if (startVertical == null && endVertical == null) return base(start, end, gauge, startCurve, endCurve, false);
-        var horizontal = base(start, end, gauge, startCurve, endCurve, true);
+        return create(start, end, gauge, startCurve, endCurve, startVertical, endVertical, false, false);
+    }
+
+    public static TrackGeometry create(TrackVector start, TrackVector end, double gauge,
+                                       TrackCurveParameters startCurve, TrackCurveParameters endCurve,
+                                       TrackVerticalCurveParameters startVertical, TrackVerticalCurveParameters endVertical,
+                                       boolean startDirected, boolean endDirected) {
+        if (startVertical == null && endVertical == null) {
+            return base(start, end, gauge, startCurve, endCurve, false, startDirected, endDirected);
+        }
+        var horizontal = horizontal(start, end, gauge, startCurve, endCurve, startDirected, endDirected);
         return withVertical(horizontal, start.y(), end.y(), startVertical, endVertical);
     }
 
@@ -52,32 +61,55 @@ public final class TrackPlacementGeometry {
 
     public static TrackGeometry horizontal(TrackVector start, TrackVector end, double gauge,
                                            TrackCurveParameters startCurve, TrackCurveParameters endCurve) {
-        return base(start, end, gauge, startCurve, endCurve, true);
+        return horizontal(start, end, gauge, startCurve, endCurve, false, false);
+    }
+
+    public static TrackGeometry horizontal(TrackVector start, TrackVector end, double gauge,
+                                           TrackCurveParameters startCurve, TrackCurveParameters endCurve,
+                                           boolean startDirected, boolean endDirected) {
+        return base(start, end, gauge, startCurve, endCurve, true, startDirected, endDirected);
     }
 
     private static TrackGeometry base(TrackVector start, TrackVector end, double gauge,
-                                      TrackCurveParameters startCurve, TrackCurveParameters endCurve, boolean flat) {
+                                      TrackCurveParameters startCurve, TrackCurveParameters endCurve, boolean flat,
+                                      boolean startDirected, boolean endDirected) {
         TrackPoint a = new TrackPoint(start.x(), start.z()), b = new TrackPoint(end.x(), end.z());
         LinearGrade grade = flat ? new LinearGrade(0, 0) : new LinearGrade(start.y(), end.y());
         if (start.x() == end.x() && start.z() == end.z()) {
             throw new IllegalArgumentException("Track endpoints need horizontal separation");
         }
         return startCurve == null && endCurve == null ? new StraightTrackGeometry(a, b, grade, gauge)
-                : new BezierTrackGeometry(a, control(start, end, startCurve), control(end, start, endCurve), b, grade, gauge);
+                : new BezierTrackGeometry(a, control(start, end, startCurve, startDirected),
+                        control(end, start, endCurve, endDirected), b, grade, gauge);
     }
 
     public static TrackPoint control(TrackVector from, TrackVector to, TrackCurveParameters curve) {
+        return control(from, to, curve, false);
+    }
+
+    public static TrackPoint control(TrackVector from, TrackVector to, TrackCurveParameters curve, boolean directed) {
         double dx = to.x() - from.x(), dz = to.z() - from.z();
         if (curve == null) return new TrackPoint(from.x() + dx / 3, from.z() + dz / 3);
         double radians = Math.toRadians(curve.angle());
         double x = -Math.sin(radians), z = Math.cos(radians);
-        // At a perpendicular axis choose a consistent side of the chord, independent of the axis sign.
-        double dot = x * dx + z * dz;
-        if (dot < -1e-12 || (Math.abs(dot) <= 1e-12 && dx * z - dz * x < 0)) {
+        if (!directed && reverseAxis(x, z, dx, dz)) {
             x = -x;
             z = -z;
         }
         return new TrackPoint(from.x() + x * curve.length(), from.z() + z * curve.length());
+    }
+
+    /** Keep a saved tangent axis and handle length, selecting the side facing out of the existing track. */
+    public static TrackCurveParameters facing(TrackCurveParameters curve, TrackVector outward) {
+        double angle = Math.toRadians(curve.angle());
+        return reverseAxis(-Math.sin(angle), Math.cos(angle), outward.x(), outward.z())
+                ? new TrackCurveParameters(curve.angle() + 180, curve.length()) : curve;
+    }
+
+    private static boolean reverseAxis(double x, double z, double dx, double dz) {
+        double dot = x * dx + z * dz;
+        // At a perpendicular axis choose a consistent side, independent of the axis sign.
+        return dot < -1e-12 || (Math.abs(dot) <= 1e-12 && dx * z - dz * x < 0);
     }
 
     public static TrackCurveParameters defaults(TrackVector from, TrackVector to, double playerYaw) {
@@ -91,10 +123,16 @@ public final class TrackPlacementGeometry {
     public static TrackVector endpointTangent(TrackVector start, TrackVector end,
                                               TrackCurveParameters startCurve, TrackCurveParameters endCurve,
                                               boolean atStart, double fallbackYaw) {
+        return endpointTangent(start, end, startCurve, endCurve, atStart, fallbackYaw, false, false);
+    }
+
+    public static TrackVector endpointTangent(TrackVector start, TrackVector end,
+                                              TrackCurveParameters startCurve, TrackCurveParameters endCurve,
+                                              boolean atStart, double fallbackYaw, boolean startDirected, boolean endDirected) {
         if (end != null) {
             var from = atStart ? start : end;
             var to = atStart ? end : start;
-            var control = control(from, to, atStart ? startCurve : endCurve);
+            var control = control(from, to, atStart ? startCurve : endCurve, atStart ? startDirected : endDirected);
             double sign = atStart ? 1 : -1;
             double x = (control.x() - from.x()) * sign, z = (control.z() - from.z()) * sign;
             double magnitude = Math.hypot(x, z);

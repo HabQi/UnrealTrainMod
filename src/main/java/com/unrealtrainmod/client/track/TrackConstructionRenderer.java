@@ -74,9 +74,11 @@ public final class TrackConstructionRenderer {
             }
             if (draft.end() != null && (state.startCurve() != null || state.endCurve() != null)) {
                 handle(lines, draft.start().position(),
-                        TrackPlacementGeometry.control(draft.start().position(), draft.end().position(), state.startCurve()), camera);
+                        TrackPlacementGeometry.control(draft.start().position(), draft.end().position(), state.startCurve(),
+                                draft.startHorizontalDirected()), camera);
                 handle(lines, draft.end().position(),
-                        TrackPlacementGeometry.control(draft.end().position(), draft.start().position(), state.endCurve()), camera);
+                        TrackPlacementGeometry.control(draft.end().position(), draft.start().position(), state.endCurve(),
+                                draft.endHorizontalDirected()), camera);
             } else if (draft.end() == null && state.startCurve() != null) {
                 var p = draft.start().position();
                 var curve = state.startCurve();

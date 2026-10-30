@@ -5,6 +5,11 @@
 package com.unrealtrainmod.track.assembly;
 
 import com.unrealtrainmod.track.TrackConnection;
+import com.unrealtrainmod.track.TrackGeometryDefinition;
+import com.unrealtrainmod.track.TrackPlacementGeometry;
+import com.unrealtrainmod.track.geometry.BezierTrackGeometry;
+import com.unrealtrainmod.track.geometry.TrackGeometry;
+import com.unrealtrainmod.track.geometry.TrackPoint;
 import com.unrealtrainmod.track.geometry.TrackVector;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -13,6 +18,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.TreeMap;
 import java.util.UUID;
 import net.minecraft.nbt.CompoundTag;
@@ -33,12 +39,27 @@ public final class TrackAssemblyInstance {
     private final long revision;
     private final TrackAssemblyDefinition.Geometry geometry;
     private final AABB bounds;
+    private final String modelId;
+    private final TrailingPass trailingPass;
 
     public TrackAssemblyInstance(UUID id, TrackAssemblyDefinition definition,
                                  Map<String, TrackPort> ports, Map<String, TrackPath> paths,
                                  TrackVector origin, double yaw, double gauge,
                                  JunctionState state, long revision, UUID occupant,
                                  TrackAssemblyDefinition.Geometry geometry) {
+        this(id, definition, ports, paths, origin, yaw, gauge, state, revision, occupant, geometry, null);
+    }
+
+    public TrackAssemblyInstance(UUID id, TrackAssemblyDefinition definition,
+                                 Map<String, TrackPort> ports, Map<String, TrackPath> paths,
+                                 TrackVector origin, double yaw, double gauge,
+                                 JunctionState state, long revision, UUID occupant,
+                                 TrackAssemblyDefinition.Geometry geometry, String modelId) {
+        this.modelId = modelId;
+        this.trailingPass = null;
+        if (!Double.isFinite(yaw) || !Double.isFinite(gauge) || gauge <= 0
+                || !Double.isFinite(origin.x()) || !Double.isFinite(origin.y()) || !Double.isFinite(origin.z())
+                || (modelId != null && modelId.isBlank())) throw new IllegalArgumentException("Invalid assembly parameters");
         if (revision < 0) throw new IllegalArgumentException("Invalid assembly revision");
         this.id = Objects.requireNonNull(id);
         this.definition = Objects.requireNonNull(definition);
@@ -48,7 +69,8 @@ public final class TrackAssemblyInstance {
         definition.validateState(state);
         this.state = state; this.revision = revision; this.occupant = occupant;
         this.geometry = geometry;
-        if (!ports.keySet().equals(geometry.ports().keySet()) || !paths.keySet().equals(definition.routes().keySet())) {
+        if (!ports.keySet().equals(Set.of("A", "B", "C")) || !ports.keySet().equals(geometry.ports().keySet())
+                || !paths.keySet().equals(definition.routes().keySet()) || !paths.keySet().equals(geometry.paths().keySet())) {
             throw new IllegalArgumentException("Assembly ports or paths do not match definition");
         }
         var nodeIds = new HashSet<UUID>();
@@ -68,16 +90,35 @@ public final class TrackAssemblyInstance {
                 throw new IllegalArgumentException("Assembly path does not match definition geometry");
             }
         }
+        if (definition == TrackAssemblyDefinition.CUSTOM) {
+            var a = geometry.ports().get("A").position();
+            for (var parts : geometry.paths().values()) {
+                if (parts.size() != 1 || !(parts.getFirst() instanceof BezierTrackGeometry)) {
+                    throw new IllegalArgumentException("Custom turnout requires two single Bezier paths");
+                }
+                var part = parts.getFirst();
+                var t = part.sample(0).tangent();
+                double angle = Math.toRadians(geometry.ports().get("A").outwardYaw());
+                if (part.getLength() > TrackPlacementGeometry.MAX_LENGTH
+                        || Math.abs(part.sample(0).position().y() - a.y()) > 1e-6
+                        || Math.abs(part.sample(part.getLength()).position().y() - a.y()) > 1e-6
+                        || Math.sin(angle) * t.x() - Math.cos(angle) * t.z() < 1 - 1e-6) {
+                    throw new IllegalArgumentException("Custom turnout paths must share a flat entrance tangent");
+                }
+            }
+        }
         bounds = createBounds();
     }
 
-    private TrackAssemblyInstance(TrackAssemblyInstance source, JunctionState state, long revision, UUID occupant) {
+    private TrackAssemblyInstance(TrackAssemblyInstance source, JunctionState state, long revision, UUID occupant, TrailingPass trailingPass) {
         id = source.id; definition = source.definition; ports = source.ports; paths = source.paths; segments = source.segments;
         origin = source.origin; yaw = source.yaw; gauge = source.gauge;
         this.state = state; this.revision = revision; this.occupant = occupant;
-        geometry = source.geometry; bounds = source.bounds;
+        geometry = source.geometry; bounds = source.bounds; modelId = source.modelId; this.trailingPass = trailingPass;
     }
 
+    public TrailingPass trailingPass() { return trailingPass; }
+    public String modelId() { return modelId; }
     public UUID id() { return id; }
     public UUID occupant() { return occupant; }
     public TrackAssemblyDefinition definition() { return definition; }
@@ -101,10 +142,26 @@ public final class TrackAssemblyInstance {
     public TrackAssemblyInstance withState(JunctionState value, long version) {
         if (version < 0) throw new IllegalArgumentException("Invalid assembly state revision");
         definition.validateState(value);
-        return new TrackAssemblyInstance(this, value, version, occupant);
+        return new TrackAssemblyInstance(this, value, version, occupant, trailingPass);
     }
     public TrackAssemblyInstance withOccupant(UUID value) {
-        return new TrackAssemblyInstance(this, state, revision, value);
+        return new TrackAssemblyInstance(this, state, revision, value, trailingPass);
+    }
+
+    public TrackAssemblyInstance withTrailingPass(TrailingPass passage) {
+        if (passage != null) {
+            if (occupant == null || !paths.containsKey(passage.pathId())) throw new IllegalArgumentException("Invalid trailing passage owner/path");
+            definition.validateState(passage.returnState());
+            if (definition.routes().get(passage.pathId()).enabled(passage.returnState())) {
+                throw new IllegalArgumentException("Trailing passage must originate on a closed path");
+            }
+        }
+        return new TrackAssemblyInstance(this, state, revision, occupant, passage);
+    }
+
+    public TrackAssemblyInstance finishTrailingPass() {
+        var restored = trailingPass == null ? state : trailingPass.returnState();
+        return new TrackAssemblyInstance(this, restored, state.equals(restored) ? revision : Math.incrementExact(revision), null, null);
     }
 
     /** Conservative protection covers all paths and vehicle overhang. */
@@ -115,6 +172,12 @@ public final class TrackAssemblyInstance {
         for (var port : geometry.ports().values()) {
             minX = Math.min(minX, port.position().x()); maxX = Math.max(maxX, port.position().x());
             minZ = Math.min(minZ, port.position().z()); maxZ = Math.max(maxZ, port.position().z());
+        }
+        for (var parts : geometry.paths().values()) for (var part : parts) {
+            for (var control : TrackGeometryDefinition.from(part).controls()) {
+                minX = Math.min(minX, control.x()); maxX = Math.max(maxX, control.x());
+                minZ = Math.min(minZ, control.z()); maxZ = Math.max(maxZ, control.z());
+            }
         }
         double padding = Math.max(2, (gauge + 0.9) / 2);
         return new AABB(minX - padding, origin.y() - 1, minZ - padding,
@@ -136,6 +199,25 @@ public final class TrackAssemblyInstance {
             savedPorts.add(entry);
         });
         tag.put("Ports", savedPorts);
+        if (modelId != null) tag.putString("ModelId", modelId);
+        var savedGeometry = new CompoundTag();
+        geometry.ports().forEach((name, port) -> savedGeometry.put(name, vectorTag(port.position())));
+        geometry.paths().forEach((name, parts) -> {
+            var list = new ListTag();
+            for (var part : parts) {
+                var item = new CompoundTag();
+                item.put("Start", vectorTag(part.sample(0).position()));
+                item.put("End", vectorTag(part.sample(part.getLength()).position()));
+                var controls = new ListTag();
+                for (var point : TrackGeometryDefinition.from(part).controls()) {
+                    var control = new CompoundTag(); control.putDouble("X", point.x()); control.putDouble("Z", point.z());
+                    controls.add(control);
+                }
+                item.put("Controls", controls); list.add(item);
+            }
+            savedGeometry.put(name, list);
+        });
+        tag.put("Geometry", savedGeometry);
         var savedPaths = new ListTag();
         paths.forEach((name, path) -> {
             var entry = new CompoundTag();
@@ -152,7 +234,16 @@ public final class TrackAssemblyInstance {
         tag.putDouble("Yaw", yaw); tag.putDouble("Gauge", gauge);
         tag.put("Controls", state.save()); tag.putLong("Revision", revision);
         if (occupant != null) tag.putUUID("Occupant", occupant);
+        if (trailingPass != null) {
+            var passage = new CompoundTag(); passage.putString("Path", trailingPass.pathId());
+            passage.put("ReturnState", trailingPass.returnState().save()); tag.put("TrailingPass", passage);
+        }
         return tag;
+    }
+
+    /** Geometry and actual control state only; private ownership and return state stay on the server. */
+    public CompoundTag saveForClient() {
+        var tag = save(); tag.remove("Occupant"); tag.remove("TrailingPass"); return tag;
     }
 
     public static TrackAssemblyInstance load(CompoundTag tag) {
@@ -209,13 +300,71 @@ public final class TrackAssemblyInstance {
 
     private static TrackAssemblyInstance create(CompoundTag tag, Map<String, TrackPort> ports,
                                                  Map<String, TrackPath> paths, JunctionState state) {
+        if (tag.contains("ModelId") && !tag.contains("ModelId", Tag.TAG_STRING)) {
+            throw new IllegalArgumentException("Invalid turnout model ID");
+        }
         var definition = TrackAssemblyDefinition.valueOf(tag.getString("Definition"));
         var origin = new TrackVector(tag.getDouble("X"), tag.getDouble("Y"), tag.getDouble("Z"));
         double yaw = ((tag.getDouble("Yaw") % 360) + 540) % 360 - 180;
         double gauge = tag.getDouble("Gauge");
-        return new TrackAssemblyInstance(readUuid(tag, "Id"), definition, ports, paths, origin, yaw, gauge,
+        var value = new TrackAssemblyInstance(readUuid(tag, "Id"), definition, ports, paths, origin, yaw, gauge,
                 state, tag.getLong("Revision"), tag.hasUUID("Occupant") ? tag.getUUID("Occupant") : null,
-                definition.geometry(origin, yaw, gauge));
+                tag.contains("Geometry", Tag.TAG_COMPOUND) ? readGeometry(tag.getCompound("Geometry"), ports, paths, gauge)
+                        : definition.geometry(origin, yaw, gauge),
+                tag.contains("ModelId", Tag.TAG_STRING) ? net.minecraft.resources.ResourceLocation.parse(tag.getString("ModelId")).toString() : null);
+        if (tag.contains("TrailingPass")) {
+            if (!tag.contains("TrailingPass", Tag.TAG_COMPOUND)) throw new IllegalArgumentException("Invalid trailing passage");
+            var passage = tag.getCompound("TrailingPass");
+            if (!passage.contains("Path", Tag.TAG_STRING) || !passage.contains("ReturnState", Tag.TAG_COMPOUND)) {
+                throw new IllegalArgumentException("Incomplete trailing passage");
+            }
+            value = value.withTrailingPass(new TrailingPass(passage.getString("Path"), JunctionState.load(passage.getCompound("ReturnState"))));
+        }
+        return value;
+    }
+
+    private static CompoundTag vectorTag(TrackVector p) {
+        var tag = new CompoundTag(); tag.putDouble("X", p.x()); tag.putDouble("Y", p.y()); tag.putDouble("Z", p.z());
+        return tag;
+    }
+
+    private static TrackVector readVector(CompoundTag tag) {
+        for (String key : List.of("X", "Y", "Z")) {
+            if (!tag.contains(key, Tag.TAG_DOUBLE) || !Double.isFinite(tag.getDouble(key))) {
+                throw new IllegalArgumentException("Invalid turnout position");
+            }
+        }
+        return new TrackVector(tag.getDouble("X"), tag.getDouble("Y"), tag.getDouble("Z"));
+    }
+
+    private static TrackAssemblyDefinition.Geometry readGeometry(CompoundTag tag, Map<String, TrackPort> ports,
+                                                                 Map<String, TrackPath> paths, double gauge) {
+        var portGeometry = new LinkedHashMap<String, TrackAssemblyDefinition.PortGeometry>();
+        ports.forEach((name, port) -> portGeometry.put(name,
+                new TrackAssemblyDefinition.PortGeometry(readVector(tag.getCompound(name)), port.outwardYaw())));
+        var pathGeometry = new LinkedHashMap<String, List<TrackGeometry>>();
+        paths.forEach((name, path) -> {
+            var parts = new ArrayList<TrackGeometry>();
+            var list = readList(tag, name);
+            for (int i = 0; i < list.size(); i++) {
+                var item = list.getCompound(i);
+                var controls = new ArrayList<TrackPoint>();
+                var savedControls = readList(item, "Controls");
+                for (int j = 0; j < savedControls.size(); j++) {
+                    var control = savedControls.getCompound(j);
+                    if (!control.contains("X", Tag.TAG_DOUBLE) || !control.contains("Z", Tag.TAG_DOUBLE)) {
+                        throw new IllegalArgumentException("Missing turnout control point");
+                    }
+                    controls.add(new TrackPoint(control.getDouble("X"), control.getDouble("Z")));
+                }
+                var start = readVector(item.getCompound("Start"));
+                var end = readVector(item.getCompound("End"));
+                if (Math.abs(start.y() - end.y()) > 1e-6) throw new IllegalArgumentException("Turnout must be horizontal");
+                parts.add(new TrackGeometryDefinition(controls, List.of()).create(start, end, gauge));
+            }
+            pathGeometry.put(name, parts);
+        });
+        return new TrackAssemblyDefinition.Geometry(portGeometry, pathGeometry);
     }
 
     private static void validateHeader(CompoundTag tag) {
