@@ -24,6 +24,9 @@ import com.unrealtrainmod.network.payload.TurnoutConstructionPayload;
 import com.unrealtrainmod.network.payload.TrainMapSessionPayload;
 import com.unrealtrainmod.network.payload.TrainMapUpdatePayload;
 import com.unrealtrainmod.train.map.TrainMapService;
+import com.unrealtrainmod.train.TrainDriverManager;
+import com.unrealtrainmod.network.payload.TrainControlInputPayload;
+import com.unrealtrainmod.network.payload.TrainControlSyncPayload;
 import net.minecraft.network.protocol.PacketFlow;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
@@ -32,7 +35,11 @@ public final class ModPayloads {
     private ModPayloads() {}
 
     public static void register(RegisterPayloadHandlersEvent event) {
-        var registrar = event.registrar("14");
+        var registrar = event.registrar("16");
+        registrar.playToServer(TrainControlInputPayload.TYPE, TrainControlInputPayload.STREAM_CODEC,
+                TrainDriverManager::handleInput);
+        registrar.playToClient(TrainControlSyncPayload.TYPE, TrainControlSyncPayload.STREAM_CODEC,
+                (payload, context) -> NeoForge.EVENT_BUS.post(new TrackSyncEvent(payload)));
         registrar.playBidirectional(TrainMapSessionPayload.TYPE, TrainMapSessionPayload.STREAM_CODEC,
                 (payload, context) -> {
                     if (context.flow() == PacketFlow.CLIENTBOUND) NeoForge.EVENT_BUS.post(new TrackSyncEvent(payload));

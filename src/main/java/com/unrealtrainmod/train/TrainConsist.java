@@ -16,7 +16,7 @@ public final class TrainConsist {
         INVALID_ANCHOR, MISSING_MODEL, STORAGE_ERROR, UNBOUND,
         INSUFFICIENT_ROUTE, DEGENERATE_GEOMETRY, TURNOUT_OCCUPIED, TURNOUT_ROUTE_UNAVAILABLE,
         MEMBER_MISMATCH, INCOMPLETE_CONSIST, CONSIST_NOT_STOPPED, CONSIST_NOT_READY,
-        COUPLING_REJECTED, UNCOUPLE_REQUIRED, TURNOUT_OPERATION_BLOCKED, NOT_COUPLED
+        COUPLING_REJECTED, UNCOUPLE_REQUIRED, TURNOUT_OPERATION_BLOCKED, NOT_COUPLED, DRIVER_PRESENT
     }
 
     public static final double DEFAULT_SPEED = 4;
@@ -25,7 +25,11 @@ public final class TrainConsist {
     private List<TrainCarState> cars;
     private TrainRouteWindow window;
     private double configuredSpeed;
-    private boolean running;
+    private boolean simulationActive;
+    private boolean commandControlled;
+    private double commandTarget;
+    private TrainControlState control;
+    private final TrainDynamicsState dynamics = new TrainDynamicsState();
     private boolean routeDirty = true;
     private StopReason stopReason = StopReason.STOPPED;
 
@@ -33,6 +37,9 @@ public final class TrainConsist {
         this.id = id;
         this.cars = List.copyOf(cars);
         this.configuredSpeed = configuredSpeed;
+        this.control = new TrainControlState(configuredSpeed < 0 ? TrainControlState.Reverser.REVERSE
+                : TrainControlState.Reverser.FORWARD, 0, 1, false);
+        dynamics.resetBrakes(this.cars);
     }
 
     public UUID id() { return id; }
@@ -44,8 +51,26 @@ public final class TrainConsist {
     public TrackRoute route() { return window == null ? null : window.route(); }
     public double progress() { return window == null ? 0 : window.progress(); }
     public double configuredSpeed() { return configuredSpeed; }
-    public double actualSpeed() { return running ? configuredSpeed : 0; }
-    public boolean running() { return running; }
+    public double actualSpeed() { return dynamics.speed(); }
+    public boolean running() { return actualSpeed() != 0; }
+    public TrainControlState control() { return control; }
+    public TrainDynamicsState dynamics() { return dynamics; }
+    boolean simulationActive() { return simulationActive; }
+    boolean commandControlled() { return commandControlled; }
+    double commandTarget() { return commandTarget; }
+
+    int planningDirection() {
+        if (actualSpeed() != 0) return actualSpeed() > 0 ? 1 : -1;
+        if (commandControlled && commandTarget != 0) return commandTarget > 0 ? 1 : -1;
+        return control.reverser().direction() != 0 ? control.reverser().direction() : configuredSpeed > 0 ? 1 : -1;
+    }
+
+    double planningSpeed() {
+        double target = commandControlled ? Math.abs(commandTarget) : 0;
+        double magnitude = Math.max(Math.abs(actualSpeed()), target);
+        // Stable lookahead buckets avoid rebuilding the route for every accelerating tick.
+        return planningDirection() * Math.max(16, Math.ceil(magnitude / 16) * 16);
+    }
     public boolean routeDirty() { return routeDirty; }
     public StopReason stopReason() { return stopReason; }
 
@@ -62,16 +87,36 @@ public final class TrainConsist {
     void setProgress(double progress) { window.setProgress(progress); }
     void setCars(List<TrainCarState> cars) { this.cars = List.copyOf(cars); }
     void setConfiguredSpeed(double speed) { configuredSpeed = speed; }
-    void start() { running = true; }
+    void startCommand(double target) {
+        commandTarget = target;
+        commandControlled = true;
+        simulationActive = true;
+        stopReason = StopReason.STOPPED;
+    }
+
+    void setControl(TrainControlState control) { this.control = control; }
+
+    void startManual(TrainControlState control) {
+        commandControlled = false;
+        simulationActive = true;
+        this.control = control;
+        stopReason = StopReason.STOPPED;
+    }
+
+    void safetyBrake() {
+        startManual(new TrainControlState(control.reverser(), 0, 1, control.emergencyBrake()));
+    }
 
     void stop(StopReason reason) {
-        running = false;
+        simulationActive = false;
+        commandControlled = false;
+        dynamics.stop();
+        control = new TrainControlState(control.reverser(), 0, 1, false);
         stopReason = reason;
     }
 
     void invalidate() {
         routeDirty = true;
-        stop(StopReason.TRACK_CHANGED);
     }
 
     void clearRoute() {

@@ -73,7 +73,7 @@ final class TrainRouteWindow {
             min = Math.min(min, car.offset() + TrackOccupancyManager.rear(model));
             max = Math.max(max, car.offset() + TrackOccupancyManager.front(model));
         }
-        double speed = train.configuredSpeed();
+        double speed = train.planningSpeed();
         double ahead = Math.max(64, 2 * Math.abs(speed));
         double before = Math.max(0, (speed > 0 ? REAR_MARGIN : ahead) - (local + min));
         double after = Math.max(0, local + max + (speed > 0 ? ahead : REAR_MARGIN) - length);
@@ -120,7 +120,7 @@ final class TrainRouteWindow {
     }
 
     static TrackTraversalContext context(TrainConsist train, boolean candidates) {
-        return new TrackTraversalContext(train.cars().stream().map(TrainCarState::entityId).toList(), candidates, train.configuredSpeed() > 0);
+        return new TrackTraversalContext(train.cars().stream().map(TrainCarState::entityId).toList(), candidates, train.planningDirection() > 0);
     }
 
     boolean pathsEnabledAt(TrackGraph graph, TrainConsist train, double at, TrackTraversalContext context) {
@@ -136,14 +136,15 @@ final class TrainRouteWindow {
 
     /** Returns a candidate only; the manager validates all member checkpoints before installing it. */
     TrainRouteWindow maintain(TrackGraph graph, TrainConsist train) {
-        double speed = train.configuredSpeed();
+        double speed = train.planningSpeed();
         var span = span(train);
         double ahead = Math.max(64, 2 * Math.abs(speed));
         double before = speed > 0 ? REAR_MARGIN : ahead;
         double after = speed > 0 ? ahead : REAR_MARGIN;
         // The lookahead also covers the next full tick before movement is split into substeps.
         double movement = speed / 20;
-        boolean refill = refreshRequested || speed != preparedSpeed
+        boolean refill = refreshRequested || speed * preparedSpeed < 0
+                || ahead > Math.max(64, 2 * Math.abs(preparedSpeed))
                 || (!startBoundary && span.min() < before / 2 + Math.max(0, -movement))
                 || (!endBoundary && route.getLength() - span.max() < after / 2 + Math.max(0, movement));
         if (!refill) return crop(graph, train);

@@ -6,6 +6,7 @@
 package com.unrealtrainmod;
 
 import com.unrealtrainmod.client.ClientConfig;
+import com.unrealtrainmod.client.TrainDrivingClient;
 import com.unrealtrainmod.client.ClientButtonTextureManager;
 import com.unrealtrainmod.client.ClientModelManager;
 import com.unrealtrainmod.client.ClientThumbnailManager;
@@ -37,11 +38,15 @@ import net.neoforged.neoforge.client.gui.IConfigScreenFactory;
 import net.neoforged.neoforge.client.event.EntityRenderersEvent;
 import net.neoforged.neoforge.client.event.RegisterClientReloadListenersEvent;
 import net.neoforged.neoforge.client.event.RegisterShadersEvent;
+import net.neoforged.neoforge.client.event.RegisterKeyMappingsEvent;
 
 // This class will not load on dedicated servers. Accessing client side code from here is safe.
 @Mod(value = UnrealTrainMod.MODID, dist = Dist.CLIENT)
 @EventBusSubscriber(modid = UnrealTrainMod.MODID, value = Dist.CLIENT)
 public class UnrealTrainModClient {
+    @SubscribeEvent
+    static void registerDrivingKeys(RegisterKeyMappingsEvent event) { TrainDrivingClient.registerKeys(event); }
+
     @SubscribeEvent
     static void registerShaders(RegisterShadersEvent event) {
         StaticModelShader.register(event);
@@ -74,6 +79,15 @@ public class UnrealTrainModClient {
         NeoForge.EVENT_BUS.addListener(TrainDebugOverlay::onUnload);
         NeoForge.EVENT_BUS.addListener(TrainDebugOverlay::onLogout);
         NeoForge.EVENT_BUS.addListener(TrainDebugOverlay::onClone);
+        NeoForge.EVENT_BUS.addListener(TrainDrivingClient::onSync);
+        NeoForge.EVENT_BUS.addListener(TrainDrivingClient::tick);
+        NeoForge.EVENT_BUS.addListener(TrainDrivingClient::keyPressed);
+        NeoForge.EVENT_BUS.addListener(TrainDrivingClient::mousePressed);
+        NeoForge.EVENT_BUS.addListener(TrainDrivingClient::movement);
+        NeoForge.EVENT_BUS.addListener(TrainDrivingClient::render);
+        NeoForge.EVENT_BUS.addListener(TrainDrivingClient::unload);
+        NeoForge.EVENT_BUS.addListener(TrainDrivingClient::logout);
+        NeoForge.EVENT_BUS.addListener(TrainDrivingClient::clonePlayer);
         NeoForge.EVENT_BUS.addListener(TrainMapClient::onSync);
         NeoForge.EVENT_BUS.addListener(TrainMapClient::onUnload);
         NeoForge.EVENT_BUS.addListener(TrainMapClient::onLogout);
@@ -105,6 +119,7 @@ public class UnrealTrainModClient {
     }
 
     private static void onGameShuttingDown(GameShuttingDownEvent event) {
+        TrainDrivingClient.clear();
         ClientThumbnailManager.INSTANCE.close();
         ClientModelManager.INSTANCE.close();
         TrainModelRenderer.closeWorld();

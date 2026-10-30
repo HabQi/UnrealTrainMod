@@ -17,6 +17,7 @@ import com.unrealtrainmod.resource.PackageAsset;
 import com.unrealtrainmod.resource.ResourceIds;
 import com.unrealtrainmod.vehicle.VehicleDefinition;
 import com.unrealtrainmod.vehicle.VehicleMotionSpec;
+import com.unrealtrainmod.vehicle.VehiclePerformanceSpec;
 import com.unrealtrainmod.vehicle.VehiclePartRole;
 import com.unrealtrainmod.track.geometry.TrackVector;
 import java.io.IOException;
@@ -106,7 +107,8 @@ final class IrVehicleAdapter {
             parts.add(new VehicleDefinition.Instance(source, new ModelData.Position(0, 0, 0), role,
                     new TrackVector(0, 0, z), builder.build()));
         });
-        return new VehicleDefinition(id, name, config, null, type, parts, bounds, spec);
+        return new VehicleDefinition(id, name, config, null, type, parts, bounds, spec,
+                VehiclePerformanceSpec.DEFAULT);
     }
 
     private static VehicleMotionSpec readMotionSpec(JsonObject json, ModelBounds bounds, double scale) {

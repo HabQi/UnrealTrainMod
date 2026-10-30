@@ -49,6 +49,7 @@ public final class TrainManager {
     private static final Logger LOGGER = LoggerFactory.getLogger(TrainManager.class);
     private static final Map<ServerLevel, TrainManager> LEVELS = new IdentityHashMap<>();
     private final ServerLevel level;
+    private final TrainDriverManager drivers;
     private final Map<UUID, TrainConsist> trains = new HashMap<>();
     private final Map<UUID, UUID> entityTrains = new HashMap<>();
     private final Set<UUID> attached = new HashSet<>();
@@ -71,7 +72,12 @@ public final class TrainManager {
         List<AABB> areas() { return cars.stream().map(CarCandidate::bounds).toList(); }
     }
 
-    private TrainManager(ServerLevel level) { this.level = level; }
+    private TrainManager(ServerLevel level) {
+        this.level = level;
+        this.drivers = new TrainDriverManager(level, this);
+    }
+
+    public TrainDriverManager drivers() { return drivers; }
 
     public static TrainManager get(ServerLevel level) {
         return LEVELS.computeIfAbsent(level, TrainManager::new);
@@ -114,8 +120,9 @@ public final class TrainManager {
 
     private static void levelUnloaded(LevelEvent.Unload event) {
         if (event.getLevel() instanceof ServerLevel level) {
-            var manager = LEVELS.remove(level);
+            var manager = LEVELS.get(level);
             if (manager != null) manager.close();
+            LEVELS.remove(level);
         }
     }
 
@@ -125,6 +132,7 @@ public final class TrainManager {
     }
 
     private void close() {
+        drivers.closeAll();
         if (graph != null) {
             graph.removeSegmentListener(listener);
             graph.removeAssemblyListener(assemblyListener);
@@ -222,7 +230,7 @@ public final class TrainManager {
             throw new IllegalArgumentException("Missing saved vehicle model");
         }
         var snapshot = new TrainConsist(train.id(), train.cars(), train.configuredSpeed());
-        snapshot.setWindow(TrainRouteWindow.initial(tracks, train.anchor(), snapshot));
+        snapshot.setWindow(TrainRouteWindow.initial(tracks, train.anchor(), train));
         for (var car : train.cars()) {
             if (!TrainMotion.matchesAt(snapshot.window(), car.anchor(), snapshot.progress() + car.offset())) {
                 throw new IllegalArgumentException("Saved member anchors disagree");
@@ -264,7 +272,7 @@ public final class TrainManager {
                         var pose = segment.geometry().sample(anchor.distance());
                         position = pose.position();
                         source = TrainMapData.PositionSource.SAVED;
-                        double direction = (anchor.fromStart() ? 1 : -1) * Math.signum(train.configuredSpeed());
+                        double direction = (anchor.fromStart() ? 1 : -1) * Math.signum(train.actualSpeed());
                         dx = pose.tangent().x() * direction;
                         dz = pose.tangent().z() * direction;
                     }
@@ -421,13 +429,26 @@ public final class TrainManager {
 
     public boolean isRestored(TrainConsist train) { return restored.contains(train.id()); }
 
+    boolean drivingReady(TrainConsist train) {
+        if (!isRestored(train) || train.routeDirty()) return false;
+        try {
+            loadedMembers(train);
+            return true;
+        } catch (StateException exception) {
+            return false;
+        }
+    }
+
     public TrainConsist knownTrain(UUID entityId) {
         data();
         return trains.get(entityTrains.get(entityId));
     }
 
     private List<TrainEntity> requireReady(TrainConsist train) {
-        if (train.running()) throw new StateException(StopReason.CONSIST_NOT_STOPPED);
+        if (drivers.hasDriver(train)) throw new StateException(StopReason.DRIVER_PRESENT);
+        if (train.running() || train.commandControlled() && train.commandTarget() != 0) {
+            throw new StateException(StopReason.CONSIST_NOT_STOPPED);
+        }
         var entities = loadedMembers(train);
         if (!isRestored(train) || train.routeDirty()) throw new StateException(StopReason.CONSIST_NOT_READY);
         for (int i = 0; i < entities.size(); i++) {
@@ -611,6 +632,7 @@ public final class TrainManager {
             restored.remove(train.id());
         }
         train.stop(reason);
+        drivers.close(train);
         sync(train);
     }
 
@@ -647,6 +669,7 @@ public final class TrainManager {
                 }
             }
             reservations.releaseOutside(memberIds(train), areas, intervals);
+            train.dynamics().resetBrakes(train.cars());
             restored.add(train.id());
             sync(train);
             return null;
@@ -675,6 +698,7 @@ public final class TrainManager {
     private StopReason bind(TrainEntity entity, TrainAnchor anchor, Predicate<BlockPos> allowed, boolean spawn) {
         data();
         var previous = trains.get(entityTrains.get(entity.getUUID()));
+        if (previous != null && drivers.hasDriver(previous)) return StopReason.DRIVER_PRESENT;
         if (previous != null && previous.cars().size() > 1) return StopReason.UNCOUPLE_REQUIRED;
         var train = single(entity, previous == null ? UUID.randomUUID() : previous.id(), anchor,
                 previous == null ? TrainConsist.DEFAULT_SPEED : previous.configuredSpeed());
@@ -710,11 +734,18 @@ public final class TrainManager {
 
     public StopReason start(TrainEntity entity) {
         var train = state(entity);
+        if (drivers.hasDriver(train)) return StopReason.DRIVER_PRESENT;
+        return activate(train, entity, train.configuredSpeed());
+    }
+
+    /** Validates/refreshes the route without replacing current speed or control inputs. */
+    private StopReason activate(TrainConsist train, TrainEntity entity, Double commandTarget) {
         attached.add(entity.getUUID());
         if (!isRestored(train)) {
             var failure = restore(train);
             if (failure != null) return failure;
         }
+        if (commandTarget != null) train.startCommand(commandTarget);
         try {
             var entities = loadedMembers(train);
             if (train.routeDirty()) prepare(train, entities);
@@ -728,12 +759,19 @@ public final class TrainManager {
             reservations.acquire(memberIds(train), areas, intervals);
             commit(train, candidate, true);
             reservations.releaseOutside(memberIds(train), candidate.areas(), intervals);
-            train.start();
             return null;
         } catch (StateException exception) {
             stop(train, exception.reason());
             return exception.reason();
         }
+    }
+
+    TrainConsist prepareDriving(TrainEntity entity) {
+        var train = state(entity);
+        if (drivers.hasDriver(train)) throw new StateException(StopReason.DRIVER_PRESENT);
+        var failure = activate(train, entity, null);
+        if (failure != null) throw new StateException(failure);
+        return train;
     }
 
     public void stop(TrainEntity entity) {
@@ -745,26 +783,31 @@ public final class TrainManager {
         if (!Double.isFinite(speed) || Math.abs(speed) > TrainConsist.MAX_SPEED) {
             throw new IllegalArgumentException("blocksPerSecond must be finite and within [-100, 100]");
         }
-        if (speed == 0) {
-            stop(entity);
-            return null;
-        }
         var train = state(entity);
-        train.setConfiguredSpeed(speed);
-        savedData.setDirty();
-        return start(entity);
+        if (drivers.hasDriver(train)) return StopReason.DRIVER_PRESENT;
+        if (speed != 0) {
+            train.setConfiguredSpeed(speed);
+            savedData.setDirty();
+        }
+        return activate(train, entity, speed);
     }
 
     public StopReason reverse(TrainEntity entity) {
         var train = info(entity);
+        if (drivers.hasDriver(train)) return StopReason.DRIVER_PRESENT;
+        if (train.running()) return StopReason.CONSIST_NOT_STOPPED;
+        stop(train, StopReason.STOPPED);
         train.setConfiguredSpeed(-train.configuredSpeed());
+        train.setControl(new TrainControlState(train.configuredSpeed() > 0 ? TrainControlState.Reverser.FORWARD
+                : TrainControlState.Reverser.REVERSE, 0, 1, false));
         savedData.setDirty();
-        return train.running() ? start(entity) : null;
+        return null;
     }
 
     public StopReason dismantleFailure(TrainEntity entity) {
         data();
         var train = trains.get(entityTrains.get(entity.getUUID()));
+        if (train != null && drivers.hasDriver(train)) return StopReason.DRIVER_PRESENT;
         return train != null && train.cars().size() > 1 ? StopReason.UNCOUPLE_REQUIRED : null;
     }
 
@@ -773,6 +816,7 @@ public final class TrainManager {
         try {
             var first = registered(front);
             var second = registered(rear);
+            if (drivers.hasDriver(first) || drivers.hasDriver(second)) return StopReason.DRIVER_PRESENT;
             if (first == second || first.cars().size() != 1 || second.cars().size() != 1) return StopReason.UNCOUPLE_REQUIRED;
             requireReady(first);
             requireReady(second);
@@ -838,6 +882,7 @@ public final class TrainManager {
     public StopReason uncouple(TrainEntity member) {
         try {
             var train = registered(member);
+            if (drivers.hasDriver(train)) return StopReason.DRIVER_PRESENT;
             if (train.cars().size() != 2) return StopReason.NOT_COUPLED;
             var entities = requireReady(train);
             if (reservations.touchesTurnout(currentAreas(entities), occupancy.intervals(train.id()))) return StopReason.TURNOUT_OPERATION_BLOCKED;
@@ -875,7 +920,7 @@ public final class TrainManager {
             if (change.type() == TrackSegmentChange.Type.REMOVED
                     && (occupancy.occupies(train.id(), segment.id()) || (train.window() != null && train.window().occupies(segment.id(), train)))) {
                 train.invalidate();
-                sync(train);
+                stop(train, StopReason.TRACK_CHANGED);
             } else if (!train.routeDirty() && (train.usesNode(segment.startNodeId()) || train.usesNode(segment.endNodeId()))) {
                 train.window().requestRefresh();
             }
@@ -917,9 +962,11 @@ public final class TrainManager {
             }
         }
         if (!level.tickRateManager().runsNormally()) return;
+        drivers.tick();
         for (var train : List.copyOf(trains.values())) {
-            if (train.running()) advance(train);
+            if (train.simulationActive()) advance(train);
         }
+        drivers.publish();
     }
 
     private void advance(TrainConsist train) {
@@ -928,9 +975,16 @@ public final class TrainManager {
         try {
             var entities = loadedMembers(train);
             var previous = currentAreas(entities);
-            double remaining = train.actualSpeed() / 20;
+            maintainWindow(train, entities);
+            double oldSpeed = train.actualSpeed();
+            double remaining = TrainDynamics.advance(train);
+            double nextSpeed = train.actualSpeed();
+            double acceleration = train.dynamics().acceleration(), grade = train.dynamics().grade();
+            // The last braking tick still travels in the old direction before reaching zero.
+            if (nextSpeed == 0 && oldSpeed != 0) train.dynamics().update(oldSpeed, acceleration, grade);
+            double movementDirection = Math.signum(remaining);
             var sampleOffsets = TrainMotion.sampleOffsets(train);
-            while (remaining != 0 && train.running()) {
+            while (remaining != 0 && train.simulationActive()) {
                 maintainWindow(train, entities);
                 double progress = train.progress();
                 check(train, previous, occupancy.intervals(train.id()), progress, true);
@@ -962,10 +1016,11 @@ public final class TrainManager {
                 remaining = next == requested ? 0 : remaining - (next - progress);
                 reservations.releaseOutside(owners, previous, occupancy.intervals(train.id()));
             }
+            if (train.simulationActive()) train.dynamics().update(nextSpeed, acceleration, grade);
             if (moved && level.getGameTime() % 2 == 0) sync(train);
             var range = TrainMotion.range(train);
-            if ((train.actualSpeed() < 0 && train.progress() == range.min() && train.window().startBoundary())
-                    || (train.actualSpeed() > 0 && train.progress() == range.max() && train.window().endBoundary())) {
+            if ((movementDirection < 0 && train.progress() == range.min() && train.window().startBoundary())
+                    || (movementDirection > 0 && train.progress() == range.max() && train.window().endBoundary())) {
                 stop(train, StopReason.END_OF_ROUTE);
             }
         } catch (StateException exception) {

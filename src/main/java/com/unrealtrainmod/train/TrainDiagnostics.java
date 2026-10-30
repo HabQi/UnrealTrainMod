@@ -83,6 +83,15 @@ public final class TrainDiagnostics {
                     + (train.running() ? "running" : train.stopReason().name().toLowerCase(Locale.ROOT)));
             lines.add(Component.translatable(PREFIX + "state", state, manager.isRestored(train)));
             lines.add(Component.translatable(PREFIX + "speed", number(train.configuredSpeed()), number(train.actualSpeed())));
+            var dynamics = train.dynamics();
+            lines.add(Component.translatable(PREFIX + "forces", number(dynamics.tractionForce() / 1000),
+                    number(dynamics.brakeForce() / 1000), number(dynamics.tractionPower() / 1000)));
+            for (var car : train.cars()) {
+                var brake = dynamics.brake(car.entityId());
+                lines.add(brake == null ? Component.translatable(PREFIX + "brake_unavailable", car.entityId().toString())
+                        : Component.translatable(PREFIX + "brake_member", car.entityId().toString(),
+                                number(brake.targetForce(train.control()) / 1000), number(brake.actualForce() / 1000)));
+            }
             lines.add(Component.translatable(PREFIX + "window", number(train.progress()),
                     number(train.route() == null ? 0 : train.route().getLength()), train.routeDirty(),
                     train.window() != null && train.window().refreshRequested()));

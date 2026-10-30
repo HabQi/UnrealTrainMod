@@ -18,6 +18,7 @@ import com.unrealtrainmod.resource.PackageAsset;
 import com.unrealtrainmod.resource.ResourceIds;
 import com.unrealtrainmod.vehicle.VehicleDefinition;
 import com.unrealtrainmod.vehicle.VehicleMotionSpec;
+import com.unrealtrainmod.vehicle.VehiclePerformanceSpec;
 import com.unrealtrainmod.vehicle.VehiclePartRole;
 import com.unrealtrainmod.track.geometry.TrackVector;
 import java.io.IOException;
@@ -79,7 +80,7 @@ final class RtmVehicleAdapter {
             var bounds = combined.build();
             var definition = new VehicleDefinition(id, name, config, RtmButtonTexture.read(json, archive, prefix, config),
                     GsonHelper.getAsString(json, "trainType", ""), parts, bounds,
-                    readMotionSpec(json, bounds, bogiePositions));
+                    readMotionSpec(json, bounds, bogiePositions), VehiclePerformanceSpec.DEFAULT);
             definitions.put(id, definition);
             report.registered(LoadReport.Kind.RTM_VEHICLE);
         } catch (IOException | RuntimeException exception) {
