@@ -44,7 +44,7 @@ final class TrainTurnoutMovement {
             var connection = route.connections().get(i);
             double length = route.segmentLength(i);
             var assembly = graph.assemblyForSegment(connection.segmentId());
-            if (assembly != null) {
+            if (assembly != null && assembly.definition().supportsTrailingPass()) {
                 var bySegment = paths.computeIfAbsent(assembly.id(), ignored -> pathParts(graph, assembly));
                 for (var part : bySegment.get(connection.segmentId())) {
                     result.add(new Part(assembly.id(), part.pathId(), start, length, part.start(), part.length(),

@@ -18,6 +18,6 @@ public record TrackTraversalContext(List<UUID> members, boolean candidates, bool
         var passage = assembly.trailingPass();
         if (passage != null && owns(assembly)) return passage.pathId().equals(pathId);
         if (TrackTransitionResolver.isPathEnabled(assembly, pathId)) return true;
-        return passage == null && candidates && (forward == reversedPath);
+        return assembly.definition().supportsTrailingPass() && passage == null && candidates && (forward == reversedPath);
     }
 }

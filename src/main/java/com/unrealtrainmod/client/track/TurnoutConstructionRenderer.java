@@ -9,6 +9,7 @@ import com.mojang.blaze3d.vertex.ByteBufferBuilder;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import com.unrealtrainmod.network.payload.TrackConstructionPayload.Feedback;
+import com.unrealtrainmod.track.construction.TrackConstructionType;
 import com.unrealtrainmod.track.geometry.BezierTrackGeometry;
 import com.unrealtrainmod.track.geometry.TrackGeometry;
 import com.unrealtrainmod.track.geometry.TrackPose;
@@ -30,7 +31,8 @@ public final class TurnoutConstructionRenderer {
         var draft = state.draft(); var geometry = state.geometry();
         if (!state.isActive()) return;
         int color = state.previewFeedback() == Feedback.READY ? 0xFF50E070
-                : (state.previewFeedback() == Feedback.START || state.previewFeedback() == Feedback.TURNOUT_A || state.previewFeedback() == Feedback.TURNOUT_B) ? 0xFFFFCC55 : 0xFFFF5555;
+                : (state.previewFeedback() == Feedback.START || state.previewFeedback() == Feedback.TURNOUT_A
+                        || state.previewFeedback() == Feedback.TURNOUT_B || state.previewFeedback() == Feedback.CROSSING_POINT) ? 0xFFFFCC55 : 0xFFFF5555;
         var previousShader = RenderSystem.getShader();
         float[] previousColor = RenderSystem.getShaderColor().clone();
         var view = RenderSystem.getModelViewStack();
@@ -73,7 +75,7 @@ public final class TurnoutConstructionRenderer {
             buffers.endBatch(TrackRenderTypes.PREVIEW);
             var font = Minecraft.getInstance().font;
             for (int i = 0; i < draft.points().size(); i++) {
-                String name = java.util.List.of("A", "B", "C").get(i);
+                String name = java.util.List.of("A", "B", "C", "D").get(i);
                 var point = draft.points().get(i).position();
                 var pose = new PoseStack();
                 pose.translate(point.x() - camera.x, point.y() - camera.y + 0.6, point.z() - camera.z);
@@ -81,8 +83,13 @@ public final class TurnoutConstructionRenderer {
                 var port = geometry == null ? null : geometry.ports().get(name);
                 double direction = port == null ? 0 : ((port.outwardYaw() % 360) + 540) % 360 - 180;
                 String label = port == null ? name : String.format(Locale.ROOT, "%s  %.1f°", name, direction);
-                if (i == 1) label += " " + net.minecraft.network.chat.Component.translatable("commands.unrealtrainmod.turnout.line_one").getString();
-                if (i == 2) label += " " + net.minecraft.network.chat.Component.translatable("commands.unrealtrainmod.turnout.line_two").getString();
+                if (draft.kind() == TrackConstructionType.DIAMOND_CROSSING) {
+                    label += " " + net.minecraft.network.chat.Component.translatable("item.unrealtrainmod.diamond_crossing_builder."
+                            + (i < 2 ? "line_one" : "line_two")).getString();
+                } else {
+                    if (i == 1) label += " " + net.minecraft.network.chat.Component.translatable("commands.unrealtrainmod.turnout.line_one").getString();
+                    if (i == 2) label += " " + net.minecraft.network.chat.Component.translatable("commands.unrealtrainmod.turnout.line_two").getString();
+                }
                 font.drawInBatch(label, -font.width(label) / 2f, 0, color, true, pose.last().pose(),
                         buffers, Font.DisplayMode.NORMAL, 0x80000000, 0xF000F0);
             }

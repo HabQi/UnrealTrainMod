@@ -12,27 +12,36 @@ import com.unrealtrainmod.track.geometry.TrackPoint;
 import com.unrealtrainmod.track.geometry.TrackVector;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
-/** Built-in flat, mirrored ordinary turnout. Dimensions scale with gauge. */
+/** Built-in horizontal structures; ordinary turnout dimensions scale with gauge. */
 public enum TrackAssemblyDefinition {
-    LEFT(TurnoutDirection.LEFT), RIGHT(TurnoutDirection.RIGHT), CUSTOM(null);
+    LEFT(TurnoutDirection.LEFT), RIGHT(TurnoutDirection.RIGHT), CUSTOM(null), DIAMOND_CROSSING(null);
 
     public static final double ANGLE = Math.atan(1.0 / 8);
     private static final Map<String, TrackRouteDefinition> ROUTES = Map.of(
             "straight", new TrackRouteDefinition("A", "B", Map.of("main", SwitchPosition.NORMAL)),
             "diverging", new TrackRouteDefinition("A", "C", Map.of("main", SwitchPosition.REVERSE)));
     private static final JunctionState INITIAL_STATE = new JunctionState(Map.of("main", SwitchPosition.NORMAL));
+    private static final Map<String, TrackRouteDefinition> CROSSING_ROUTES = Map.of(
+            "line_one", new TrackRouteDefinition("A", "B", Map.of()),
+            "line_two", new TrackRouteDefinition("C", "D", Map.of()));
+    private static final JunctionState NO_CONTROLS = new JunctionState(Map.of());
     private final TurnoutDirection direction;
 
     TrackAssemblyDefinition(TurnoutDirection direction) { this.direction = direction; }
 
-    public TrackAssemblyType type() { return TrackAssemblyType.SIMPLE_TURNOUT; }
+    public TrackAssemblyType type() {
+        return this == DIAMOND_CROSSING ? TrackAssemblyType.DIAMOND_CROSSING : TrackAssemblyType.SIMPLE_TURNOUT;
+    }
     public TurnoutDirection direction() { return direction; }
-    public Map<String, TrackRouteDefinition> routes() { return ROUTES; }
-    public JunctionState initialState() { return INITIAL_STATE; }
+    public Set<String> portNames() { return this == DIAMOND_CROSSING ? Set.of("A", "B", "C", "D") : Set.of("A", "B", "C"); }
+    public Map<String, TrackRouteDefinition> routes() { return this == DIAMOND_CROSSING ? CROSSING_ROUTES : ROUTES; }
+    public JunctionState initialState() { return this == DIAMOND_CROSSING ? NO_CONTROLS : INITIAL_STATE; }
+    public boolean supportsTrailingPass() { return type() == TrackAssemblyType.SIMPLE_TURNOUT; }
 
     public void validateState(JunctionState state) {
-        if (!state.controls().keySet().equals(INITIAL_STATE.controls().keySet())) {
+        if (!state.controls().keySet().equals(initialState().controls().keySet())) {
             throw new IllegalArgumentException("Track controls do not match definition");
         }
     }
@@ -47,7 +56,7 @@ public enum TrackAssemblyDefinition {
     }
 
     public Geometry geometry(TrackVector origin, double yaw, double gauge) {
-        if (this == CUSTOM) throw new IllegalArgumentException("Custom turnouts require explicit geometry");
+        if (direction == null) throw new IllegalArgumentException("This structure requires explicit geometry");
         if (!Double.isFinite(yaw) || !Double.isFinite(gauge) || gauge <= 0 || 32 * gauge / 1.435 > 256
                 || !Double.isFinite(origin.x()) || !Double.isFinite(origin.y()) || !Double.isFinite(origin.z())) {
             throw new IllegalArgumentException("Invalid turnout geometry parameters");

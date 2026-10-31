@@ -53,6 +53,10 @@ public final class TurnoutCommands {
             set.then(literal(name).executes(c -> execute(c, g -> {
                 TrainManager.get(c.getSource().getLevel()).refreshTurnoutOccupancy();
                 UUID id = UuidArgument.getUuid(c, "assemblyId");
+                if (g.assembly(id).state().controls().isEmpty()) {
+                    c.getSource().sendFailure(Component.translatable(PREFIX + "no_controls"));
+                    return 0;
+                }
                 g.setAssemblyState(id, g.assembly(id).state().withControl("main", position));
                 describe(c, g, g.assembly(id));
                 return 1;
@@ -96,11 +100,13 @@ public final class TurnoutCommands {
         var source = c.getSource();
         Component occupancy = value.occupant() == null ? Component.translatable(PREFIX + "free")
                 : Component.translatable(PREFIX + (source.getLevel().getEntity(value.occupant()) == null ? "waiting" : "occupied"), id(value.occupant()));
+        Component controls = value.state().controls().isEmpty() ? Component.translatable(PREFIX + "no_controls")
+                : Component.translatable(PREFIX + (value.definition() == TrackAssemblyDefinition.CUSTOM
+                        ? value.state().controls().get("main") == SwitchPosition.NORMAL ? "line_one" : "line_two"
+                        : value.state().controls().get("main") == SwitchPosition.NORMAL ? "straight" : "diverging"));
         source.sendSuccess(() -> Component.translatable(PREFIX + "info", id(value.id()),
                 Component.translatable(PREFIX + value.definition().name().toLowerCase(Locale.ROOT)),
-                Component.translatable(PREFIX + (value.definition() == TrackAssemblyDefinition.CUSTOM
-                        ? value.state().controls().get("main") == SwitchPosition.NORMAL ? "line_one" : "line_two"
-                        : value.state().controls().get("main") == SwitchPosition.NORMAL ? "straight" : "diverging")), value.revision(), occupancy), false);
+                controls, value.revision(), occupancy), false);
         if (value.trailingPass() != null) {
             var passage = value.trailingPass();
             String exit = value.definition().routes().get(passage.pathId()).exit();

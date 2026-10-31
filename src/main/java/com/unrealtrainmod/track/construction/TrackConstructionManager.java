@@ -77,7 +77,7 @@ public final class TrackConstructionManager {
         if (event.getHand() == InteractionHand.MAIN_HAND
                 && (event.getItemStack().is(UnrealTrainMod.TRACK_BUILDER.get())
                 || event.getItemStack().is(UnrealTrainMod.RAIL_PLACER.get())
-                || event.getItemStack().is(UnrealTrainMod.TURNOUT_BUILDER.get())
+                || event.getItemStack().getItem() instanceof com.unrealtrainmod.item.TurnoutBuilderItem
                 || event.getItemStack().is(UnrealTrainMod.TRACK_WRENCH.get()))) {
             event.setUseBlock(TriState.FALSE);
         }

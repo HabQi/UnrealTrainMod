@@ -277,7 +277,8 @@ public final class TrainMapScreen extends Screen {
             if (turnout == null) lines.add(text("select_hint"));
             else {
                 lines.add(text("turnout_id", turnout.id().toString()));
-                lines.add(text("controls", turnout.controls()));
+                lines.add(text("controls", turnout.controls().isEmpty()
+                        ? Component.translatable("commands.unrealtrainmod.turnout.no_controls").getString() : turnout.controls()));
                 lines.add(text("occupant", turnout.occupant() == null ? text("none") : Component.literal(turnout.occupant().toString())));
                 lines.add(text("position", number(turnout.position().x()), number(turnout.position().y()), number(turnout.position().z())));
             }

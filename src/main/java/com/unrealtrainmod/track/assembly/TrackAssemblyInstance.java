@@ -5,9 +5,11 @@
 package com.unrealtrainmod.track.assembly;
 
 import com.unrealtrainmod.track.TrackConnection;
+import com.unrealtrainmod.track.DiamondCrossingGeometry;
 import com.unrealtrainmod.track.TrackGeometryDefinition;
 import com.unrealtrainmod.track.TrackPlacementGeometry;
 import com.unrealtrainmod.track.geometry.BezierTrackGeometry;
+import com.unrealtrainmod.track.geometry.StraightTrackGeometry;
 import com.unrealtrainmod.track.geometry.TrackGeometry;
 import com.unrealtrainmod.track.geometry.TrackPoint;
 import com.unrealtrainmod.track.geometry.TrackVector;
@@ -18,7 +20,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
 import java.util.TreeMap;
 import java.util.UUID;
 import net.minecraft.nbt.CompoundTag;
@@ -69,7 +70,7 @@ public final class TrackAssemblyInstance {
         definition.validateState(state);
         this.state = state; this.revision = revision; this.occupant = occupant;
         this.geometry = geometry;
-        if (!ports.keySet().equals(Set.of("A", "B", "C")) || !ports.keySet().equals(geometry.ports().keySet())
+        if (!ports.keySet().equals(definition.portNames()) || !ports.keySet().equals(geometry.ports().keySet())
                 || !paths.keySet().equals(definition.routes().keySet()) || !paths.keySet().equals(geometry.paths().keySet())) {
             throw new IllegalArgumentException("Assembly ports or paths do not match definition");
         }
@@ -105,6 +106,23 @@ public final class TrackAssemblyInstance {
                         || Math.sin(angle) * t.x() - Math.cos(angle) * t.z() < 1 - 1e-6) {
                     throw new IllegalArgumentException("Custom turnout paths must share a flat entrance tangent");
                 }
+            }
+        }
+        if (definition == TrackAssemblyDefinition.DIAMOND_CROSSING) {
+            var expected = DiamondCrossingGeometry.create(List.of("A", "B", "C", "D").stream()
+                    .map(name -> geometry.ports().get(name).position()).toList(), gauge);
+            for (var entry : geometry.paths().entrySet()) {
+                var route = definition.routes().get(entry.getKey());
+                var parts = entry.getValue();
+                if (parts.size() != 1 || !(parts.getFirst() instanceof StraightTrackGeometry)
+                        || !parts.getFirst().sample(0).position().equals(geometry.ports().get(route.entrance()).position())
+                        || !parts.getFirst().sample(parts.getFirst().getLength()).position().equals(geometry.ports().get(route.exit()).position())) {
+                    throw new IllegalArgumentException("Crossing requires two independent straight paths");
+                }
+            }
+            for (String name : definition.portNames()) {
+                double delta = ((ports.get(name).outwardYaw() - expected.ports().get(name).outwardYaw()) % 360 + 540) % 360 - 180;
+                if (Math.abs(delta) > 1e-6) throw new IllegalArgumentException("Invalid crossing port direction");
             }
         }
         bounds = createBounds();
@@ -150,7 +168,9 @@ public final class TrackAssemblyInstance {
 
     public TrackAssemblyInstance withTrailingPass(TrailingPass passage) {
         if (passage != null) {
-            if (occupant == null || !paths.containsKey(passage.pathId())) throw new IllegalArgumentException("Invalid trailing passage owner/path");
+            if (!definition.supportsTrailingPass() || occupant == null || !paths.containsKey(passage.pathId())) {
+                throw new IllegalArgumentException("Invalid trailing passage owner/path");
+            }
             definition.validateState(passage.returnState());
             if (definition.routes().get(passage.pathId()).enabled(passage.returnState())) {
                 throw new IllegalArgumentException("Trailing passage must originate on a closed path");

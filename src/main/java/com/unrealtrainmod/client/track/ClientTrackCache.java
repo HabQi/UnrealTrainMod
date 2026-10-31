@@ -178,7 +178,7 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
         TrackAssemblyInstance data;
         final Set<Long> chunks = new LinkedHashSet<>();
         final Map<Long, TrackRenderMesh> meshes = new HashMap<>();
-        // Standard tongue mesh, or the second static path of a custom turnout.
+        // Standard tongue mesh, or the second static path of a custom turnout/crossing.
         final Map<Long, TrackRenderMesh> tongues = new HashMap<>();
         boolean missingReported;
         AssemblyEntry(TrackAssemblyInstance data) { this.data = data; }
@@ -187,7 +187,8 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
             return model == null ? data.bounds() : data.bounds().inflate(model.padding() * model.scaleForGauge(data.gauge()));
         }
         void setState(TrackAssemblyInstance data) {
-            if (data.definition() != TrackAssemblyDefinition.CUSTOM) {
+            if (data.definition() != TrackAssemblyDefinition.CUSTOM
+                    && data.definition() != TrackAssemblyDefinition.DIAMOND_CROSSING) {
                 for (var mesh : tongues.values()) mesh.close();
                 tongues.clear();
             }

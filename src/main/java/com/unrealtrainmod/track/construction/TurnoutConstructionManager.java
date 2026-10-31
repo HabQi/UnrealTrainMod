@@ -5,6 +5,7 @@
 package com.unrealtrainmod.track.construction;
 
 import com.unrealtrainmod.UnrealTrainMod;
+import com.unrealtrainmod.item.TurnoutBuilderItem;
 import com.unrealtrainmod.network.payload.OpenTrackCurvePayload;
 import com.unrealtrainmod.network.payload.OpenTrackCurvePayload.ConstructionKind;
 import com.unrealtrainmod.network.payload.SetTrackCurvePayload;
@@ -19,6 +20,7 @@ import com.unrealtrainmod.track.TrackPlacementEndpoint;
 import com.unrealtrainmod.track.TrackPlacementGeometry;
 import com.unrealtrainmod.track.TrackVerticalCurveParameters;
 import com.unrealtrainmod.track.TurnoutPlacementGeometry;
+import com.unrealtrainmod.track.DiamondCrossingGeometry;
 import com.unrealtrainmod.track.assembly.TrackAssemblyDefinition;
 import com.unrealtrainmod.track.assembly.TrackAssemblyInstance;
 import com.unrealtrainmod.track.assembly.SwitchPosition;
@@ -49,7 +51,7 @@ import net.neoforged.neoforge.network.PacketDistributor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-/** Server-only three-point drafts; selection and preview never change the saved graph. */
+/** Server-only typed drafts; selection and preview never change the saved graph. */
 public final class TurnoutConstructionManager {
     private static final Logger LOGGER = LoggerFactory.getLogger(TurnoutConstructionManager.class);
     private static final Map<UUID, Session> SESSIONS = new HashMap<>();
@@ -70,8 +72,14 @@ public final class TurnoutConstructionManager {
 
     public static void interact(ServerPlayer player, UseOnContext context) {
         if (!player.isAlive() || !player.hasPermissions(2)) { clear(player, Feedback.NO_PERMISSION); return; }
-        if (!player.getMainHandItem().is(UnrealTrainMod.TURNOUT_BUILDER.get())) return;
+        if (!(player.getMainHandItem().getItem() instanceof TurnoutBuilderItem tool)) return;
         if (player.isShiftKeyDown()) { TrackConstructionManager.cancel(player); cancel(player); return; }
+        var kind = tool.constructionType();
+        if (!kind.implemented()) {
+            player.displayClientMessage(Component.translatable("item.unrealtrainmod.turnout_builder.unimplemented")
+                    .withStyle(ChatFormatting.RED), true);
+            return;
+        }
         Session s = SESSIONS.get(player.getUUID());
         if (s != null && !s.matches(player)) { clear(player, Feedback.CLEARED); s = null; }
         if (context == null) { publish(player, s, Feedback.SELECT_POINT); return; }
@@ -102,14 +110,14 @@ public final class TurnoutConstructionManager {
                     }
                 }
             }
-            if (s == null) {
-                TrackConstructionManager.cancel(player);
-                s = new Session(player); SESSIONS.put(player.getUUID(), s);
+            boolean newDraft = s == null || s.kind != kind;
+            if (newDraft) {
+                s = new Session(player, kind);
             } else {
                 Feedback stale = refresh(graph, s);
                 if (stale != null) { s.validation = stale; publish(player, s, stale); return; }
             }
-            int index = Math.min(s.points.size(), 2);
+            int index = Math.min(s.points.size(), kind.pointCount() - 1);
             for (int i = 0; i < index; i++) {
                 var other = s.points.get(i);
                 if (other.position().equals(selected.position()) || (selected.nodeId() != null && selected.nodeId().equals(other.nodeId()))) {
@@ -123,6 +131,10 @@ public final class TurnoutConstructionManager {
             double gauge = selected.nodeId() == null ? s.gauge : graph.node(selected.nodeId()).gauge();
             if (hasNode && selected.nodeId() != null && s.gauge != gauge) {
                 publish(player, s, Feedback.GAUGE_MISMATCH); return;
+            }
+            if (newDraft) {
+                TrackConstructionManager.cancel(player);
+                SESSIONS.put(player.getUUID(), s);
             }
             if (!hasNode) s.gauge = gauge;
             var curve = selected.nodeId() == null ? null : graph.node(selected.nodeId()).curve();
@@ -207,6 +219,15 @@ public final class TurnoutConstructionManager {
             var blocks = TrackBlockManager.get(player.serverLevel()); var graph = blocks.graph();
             Feedback stale = refresh(graph, s);
             if (stale != null) return s.validation = stale;
+            if (s.kind == TrackConstructionType.DIAMOND_CROSSING) {
+                DiamondCrossingGeometry.create(s.points.stream().map(TrackPlacementEndpoint::position).toList(), s.gauge);
+                if (s.points.size() == 4) {
+                    var prepared = graph.prepareDiamondCrossing(s.points, s.gauge, null);
+                    blocks.validatePlacement(prepared.segments());
+                    return s.validation = Feedback.READY;
+                }
+                return s.validation = Feedback.CROSSING_POINT;
+            }
             updateDefaults(graph, s);
             if (s.points.size() > 1) {
                 var curves = effective(s);
@@ -230,6 +251,11 @@ public final class TurnoutConstructionManager {
         if (player.isShiftKeyDown()) { cancel(player); return; }
         if (s == null || !s.matches(player)) { clear(player, Feedback.NO_DRAFT); return; }
         if (!player.getMainHandItem().is(UnrealTrainMod.TRACK_WRENCH.get())) { publish(player, s, Feedback.INVALID_ITEM); return; }
+        if (s.kind == TrackConstructionType.DIAMOND_CROSSING) {
+            player.displayClientMessage(Component.translatable("item.unrealtrainmod.diamond_crossing_builder.straight_only")
+                    .withStyle(ChatFormatting.GRAY), true);
+            return;
+        }
         validate(player, s);
         if (s.validation == Feedback.INVALID_NODE || s.validation == Feedback.INVALID_POINT
                 || s.validation == Feedback.NON_HORIZONTAL || s.validation == Feedback.STORAGE) {
@@ -255,7 +281,7 @@ public final class TurnoutConstructionManager {
         var s = SESSIONS.get(player.getUUID()); Feedback error = null;
         if (!player.isAlive() || !player.hasPermissions(2)) error = Feedback.NO_PERMISSION;
         else if (!player.getMainHandItem().is(UnrealTrainMod.TRACK_WRENCH.get())) error = Feedback.INVALID_ITEM;
-        else if (s == null || !s.matches(player) || !s.dimension().equals(payload.dimension())
+        else if (s == null || s.kind != TrackConstructionType.SIMPLE_TURNOUT || !s.matches(player) || !s.dimension().equals(payload.dimension())
                 || !s.revision.equals(payload.revision()) || !payload.editorId().equals(s.editorId)
                 || payload.endpoint() != s.editPoint || payload.endpoint() < 0 || payload.endpoint() >= s.points.size()) error = Feedback.STALE_EDIT;
         if (error == null) {
@@ -296,9 +322,13 @@ public final class TurnoutConstructionManager {
             publish(player, s, model == null ? Feedback.SELECT_MODEL : Feedback.MISSING_MODEL); return;
         }
         try {
-            var assembly = TrackBlockManager.get(player.serverLevel()).graph().createTurnout(s.points, s.gauge, effective(s), s.edited, model.toString());
+            var graph = TrackBlockManager.get(player.serverLevel()).graph();
+            var assembly = s.kind == TrackConstructionType.DIAMOND_CROSSING
+                    ? graph.createDiamondCrossing(s.points, s.gauge, model.toString())
+                    : graph.createTurnout(s.points, s.gauge, effective(s), s.edited, model.toString());
             clear(player, Feedback.CREATED);
-            player.sendSystemMessage(Component.translatable("item.unrealtrainmod.turnout_builder.created", assembly.id().toString()));
+            String prefix = s.kind == TrackConstructionType.DIAMOND_CROSSING ? "diamond_crossing_builder" : "turnout_builder";
+            player.sendSystemMessage(Component.translatable("item.unrealtrainmod." + prefix + ".created", assembly.id().toString()));
         } catch (TrackGraphException exception) { publish(player, s, failure(exception)); }
         catch (IllegalArgumentException exception) { publish(player, s, Feedback.INVALID_GEOMETRY); }
         catch (IllegalStateException exception) { LOGGER.error("Cannot place turnout", exception); publish(player, s, Feedback.STORAGE); }
@@ -339,6 +369,11 @@ public final class TurnoutConstructionManager {
             }
             TrainManager.get(player.serverLevel()).refreshTurnoutOccupancy();
             var assembly = graph.assembly(ids.getFirst());
+            if (assembly.state().controls().isEmpty()) {
+                player.displayClientMessage(Component.translatable("commands.unrealtrainmod.turnout.no_controls")
+                        .withStyle(ChatFormatting.GRAY), true);
+                return;
+            }
             if (assembly.occupant() != null) {
                 player.displayClientMessage(Component.translatable("item.unrealtrainmod.turnout_builder.occupied",
                         assembly.occupant().toString()).withStyle(ChatFormatting.RED), true); return;
@@ -360,14 +395,16 @@ public final class TurnoutConstructionManager {
         player.displayClientMessage(Component.translatable(feedback.translationKey(), detail).withStyle(ChatFormatting.RED), true);
     }
     private static void publish(ServerPlayer player, Session s, Feedback feedback) {
-        var curves = s == null ? new ArrayList<TrackCurveParameters>() : new ArrayList<>(s.curves);
-        if (s != null && !curves.isEmpty() && curves.get(0) != null && s.defaults.size() == curves.size()) {
+        boolean ordinary = s != null && s.kind == TrackConstructionType.SIMPLE_TURNOUT;
+        var curves = ordinary ? new ArrayList<>(s.curves) : new ArrayList<TrackCurveParameters>();
+        if (ordinary && !curves.isEmpty() && curves.get(0) != null && s.defaults.size() == curves.size()) {
             curves.set(0, effective(s).get(0));
         }
         PacketDistributor.sendToPlayer(player, new TurnoutConstructionPayload(player.serverLevel().dimension().location(),
-                s == null ? new UUID(0, 0) : s.revision, s == null ? List.of() : List.copyOf(s.points), s == null ? 1.435 : s.gauge,
-                curves, s == null ? List.of() : List.copyOf(s.defaults),
-                s == null ? List.of() : List.copyOf(s.locked), feedback, s == null ? Feedback.START : s.validation));
+                s == null ? new UUID(0, 0) : s.revision, s == null ? TrackConstructionType.SIMPLE_TURNOUT : s.kind,
+                s == null ? List.of() : List.copyOf(s.points), s == null ? 1.435 : s.gauge,
+                curves, ordinary ? List.copyOf(s.defaults) : List.of(),
+                ordinary ? List.copyOf(s.locked) : List.of(), feedback, s == null ? Feedback.START : s.validation));
     }
     private static void clear(ServerPlayer player, Feedback feedback) {
         if (SESSIONS.remove(player.getUUID()) != null || feedback != Feedback.CANCELLED) publish(player, null, feedback);
@@ -391,6 +428,7 @@ public final class TurnoutConstructionManager {
     private static final class Session {
         final ServerPlayer player;
         final ServerLevel level;
+        final TrackConstructionType kind;
         final double yaw;
         final List<TrackPlacementEndpoint> points = new ArrayList<>();
         final List<TrackCurveParameters> curves = new ArrayList<>(), defaults = new ArrayList<>();
@@ -400,7 +438,9 @@ public final class TurnoutConstructionManager {
         UUID revision = UUID.randomUUID(), editorId;
         int editPoint;
         Feedback validation = Feedback.TURNOUT_A;
-        Session(ServerPlayer player) { this.player = player; level = player.serverLevel(); yaw = player.getYRot(); }
+        Session(ServerPlayer player, TrackConstructionType kind) {
+            this.player = player; this.kind = kind; level = player.serverLevel(); yaw = player.getYRot();
+        }
         void changed() { revision = UUID.randomUUID(); editorId = null; }
         ResourceLocation dimension() { return level.dimension().location(); }
         boolean matches(ServerPlayer p) {

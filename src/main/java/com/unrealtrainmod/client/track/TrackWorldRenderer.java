@@ -76,8 +76,11 @@ public final class TrackWorldRenderer {
                         if (mesh == null) {
                             if (builds == 0) continue;
                             try {
-                                if (entry.data.definition() == TrackAssemblyDefinition.CUSTOM) {
-                                    var geometry = entry.data.geometry().paths().get(tongue ? "diverging" : "straight").getFirst();
+                                if (entry.data.definition() == TrackAssemblyDefinition.CUSTOM
+                                        || entry.data.definition() == TrackAssemblyDefinition.DIAMOND_CROSSING) {
+                                    boolean crossing = entry.data.definition() == TrackAssemblyDefinition.DIAMOND_CROSSING;
+                                    String path = crossing ? (tongue ? "line_two" : "line_one") : (tongue ? "diverging" : "straight");
+                                    var geometry = entry.data.geometry().paths().get(path).getFirst();
                                     mesh = build(geometry, entry.data.gauge(), entry.data.modelId(), entry.data.id(), x, z, !entry.missingReported);
                                     entry.missingReported = true;
                                 } else mesh = new TrackGpuMesh(TrackMeshBuilder.buildTurnout(entry.data, x, z, tongue));

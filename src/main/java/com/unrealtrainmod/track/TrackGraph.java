@@ -407,6 +407,46 @@ public final class TrackGraph {
 
     public record PreparedAssembly(TrackAssemblyInstance instance, List<TrackNode> nodes, List<TrackSegment> segments) {}
 
+    public PreparedAssembly prepareDiamondCrossing(List<TrackPlacementEndpoint> endpoints, double gauge, String modelId) {
+        if (endpoints.size() != 4) throw new IllegalArgumentException("A crossing needs four endpoints");
+        var geometry = DiamondCrossingGeometry.create(endpoints.stream().map(TrackPlacementEndpoint::position).toList(), gauge);
+        var preparedNodes = new ArrayList<TrackNode>();
+        var ports = new LinkedHashMap<String, TrackPort>();
+        var names = List.of("A", "B", "C", "D");
+        var nodeIds = new java.util.HashSet<UUID>();
+        for (int i = 0; i < endpoints.size(); i++) {
+            var endpoint = endpoints.get(i);
+            var node = placementNode(endpoint, gauge);
+            if (endpoint.nodeId() != null && (assemblyAtPort(node.id()) != null || connections(node.id()).size() > 1)) {
+                throw new IllegalArgumentException("Crossing ports must be free endpoints");
+            }
+            if (!nodeIds.add(node.id())) throw new IllegalArgumentException("Duplicate crossing endpoint");
+            preparedNodes.add(node);
+            ports.put(names.get(i), new TrackPort(node.id(), geometry.ports().get(names.get(i)).outwardYaw()));
+        }
+        var definition = TrackAssemblyDefinition.DIAMOND_CROSSING;
+        var batch = new ArrayList<TrackSegment>();
+        var paths = new LinkedHashMap<String, TrackPath>();
+        for (int i = 0; i < 2; i++) {
+            String name = i == 0 ? "line_one" : "line_two";
+            var part = geometry.paths().get(name).getFirst();
+            var segment = prepareSegment(UUID.randomUUID(), preparedNodes.get(i * 2), preparedNodes.get(i * 2 + 1),
+                    null, null, modelId, part);
+            batch.add(segment);
+            paths.put(name, new TrackPath(List.of(new TrackConnection(segment.id(), true))));
+        }
+        var instance = new TrackAssemblyInstance(UUID.randomUUID(), definition, ports, paths, preparedNodes.getFirst().position(),
+                geometry.ports().get("B").outwardYaw(), gauge, definition.initialState(), 0, null, geometry, modelId);
+        var nodesById = preparedNodes.stream().collect(java.util.stream.Collectors.toMap(TrackNode::id, n -> n));
+        var byId = batch.stream().collect(java.util.stream.Collectors.toMap(TrackSegment::id, s -> s));
+        validateAssembly(instance, nodesById::get, byId::get);
+        return new PreparedAssembly(instance, List.copyOf(preparedNodes), List.copyOf(batch));
+    }
+
+    public TrackAssemblyInstance createDiamondCrossing(List<TrackPlacementEndpoint> endpoints, double gauge, String modelId) {
+        return commitAssembly(prepareDiamondCrossing(endpoints, gauge, modelId));
+    }
+
     public TrackAssemblyInstance createTurnout(TrackPlacementEndpoint origin, double gauge,
                                                TrackAssemblyDefinition definition, double yaw) {
         return commitAssembly(prepareTurnout(origin, gauge, definition, yaw));
@@ -533,7 +573,7 @@ public final class TrackGraph {
     /** Validate all requested passages before acquiring any movement reservations. */
     public void validateTrailingPass(UUID id, List<UUID> owners, String pathId) {
         var value = assembly(id);
-        if (!value.paths().containsKey(pathId)
+        if (!value.definition().supportsTrailingPass() || !value.paths().containsKey(pathId)
                 || value.occupant() != null && !owners.contains(value.occupant())
                 || value.trailingPass() != null && !value.trailingPass().pathId().equals(pathId)) {
             throw new IllegalArgumentException("Turnout passage is owned by another path or consist");

@@ -5,11 +5,14 @@
 package com.unrealtrainmod.client.track;
 
 import com.unrealtrainmod.UnrealTrainMod;
+import com.unrealtrainmod.item.TurnoutBuilderItem;
 import com.unrealtrainmod.network.TrackSyncEvent;
 import com.unrealtrainmod.network.payload.TurnoutConstructionPayload;
 import com.unrealtrainmod.network.payload.TrackConstructionPayload.Feedback;
 import com.unrealtrainmod.track.TrackCurveParameters;
 import com.unrealtrainmod.track.TurnoutPlacementGeometry;
+import com.unrealtrainmod.track.DiamondCrossingGeometry;
+import com.unrealtrainmod.track.construction.TrackConstructionType;
 import com.unrealtrainmod.track.assembly.TrackAssemblyDefinition;
 import com.unrealtrainmod.track.block.TrackBlockVolume;
 import com.unrealtrainmod.track.geometry.BezierTrackGeometry;
@@ -49,10 +52,13 @@ public final class ClientTurnoutConstruction implements ResourceManagerReloadLis
         }
         if (payload.feedback() == Feedback.CLEARED) return;
         boolean success = switch (payload.feedback()) {
-            case TURNOUT_A, TURNOUT_B, READY, CREATED, CANCELLED -> true;
+            case TURNOUT_A, TURNOUT_B, CROSSING_POINT, READY, CREATED, CANCELLED -> true;
             default -> false;
         };
-        mc.player.displayClientMessage(Component.translatable(payload.feedback().translationKey())
+        var message = payload.feedback() == Feedback.CROSSING_POINT
+                ? Component.translatable(payload.feedback().translationKey(), payload.points().size(), payload.kind().pointCount())
+                : Component.translatable(payload.feedback().translationKey());
+        mc.player.displayClientMessage(message
                 .withStyle(success ? ChatFormatting.GREEN : ChatFormatting.RED), true);
     }
 
@@ -66,6 +72,13 @@ public final class ClientTurnoutConstruction implements ResourceManagerReloadLis
     public void editPreview(int endpoint, TrackCurveParameters curve, boolean edited) {
         if (draft == null) return;
         geometry = null; volume = Map.of(); feedback = draft.validation();
+        if (draft.kind() == TrackConstructionType.DIAMOND_CROSSING) {
+            try {
+                geometry = DiamondCrossingGeometry.create(draft.points().stream().map(p -> p.position()).toList(), draft.gauge());
+                volume = footprint(geometry);
+            } catch (IllegalArgumentException exception) { feedback = Feedback.INVALID_GEOMETRY; }
+            return;
+        }
         var curves = new ArrayList<TrackCurveParameters>();
         for (int i = 0; i < draft.points().size(); i++) {
             var raw = edited && endpoint == i ? curve : draft.curves().get(i);
@@ -83,13 +96,17 @@ public final class ClientTurnoutConstruction implements ResourceManagerReloadLis
                     draft.points().size() > 2 ? draft.points().get(2).position() : null, draft.gauge(),
                     curves.get(0), curves.size() > 1 ? curves.get(1) : null, curves.size() > 2 ? curves.get(2) : null,
                     curves.size() > 1 && draft.locked().get(1), curves.size() > 2 && draft.locked().get(2));
-            var cells = new HashMap<BlockPos, Integer>();
-            for (var parts : geometry.paths().values()) for (var part : parts) {
-                TrackBlockVolume.create(part).forEach((pos, height) -> cells.merge(pos, height, Math::max));
-            }
-            volume = cells;
+            volume = footprint(geometry);
             if (edited) feedback = Feedback.START;
         } catch (IllegalArgumentException exception) { feedback = Feedback.INVALID_GEOMETRY; }
+    }
+
+    private static Map<BlockPos, Integer> footprint(TrackAssemblyDefinition.Geometry geometry) {
+        var cells = new HashMap<BlockPos, Integer>();
+        for (var parts : geometry.paths().values()) for (var part : parts) {
+            TrackBlockVolume.create(part).forEach((pos, height) -> cells.merge(pos, height, Math::max));
+        }
+        return cells;
     }
 
     /** The free exit's editor values follow the current preview, including after restoring automatic. */
@@ -105,7 +122,7 @@ public final class ClientTurnoutConstruction implements ResourceManagerReloadLis
     boolean isActive() {
         var player = Minecraft.getInstance().player;
         return draft != null && Minecraft.getInstance().level == world && player != null && player.isAlive()
-                && (player.getMainHandItem().is(UnrealTrainMod.TURNOUT_BUILDER.get())
+                && ((player.getMainHandItem().getItem() instanceof TurnoutBuilderItem tool && tool.constructionType() == draft.kind())
                 || player.getMainHandItem().is(UnrealTrainMod.TRACK_WRENCH.get())
                 || player.getMainHandItem().is(UnrealTrainMod.RAIL_PLACER.get()));
     }
