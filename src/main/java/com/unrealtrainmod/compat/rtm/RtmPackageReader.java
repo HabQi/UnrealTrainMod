@@ -14,10 +14,10 @@ import net.minecraft.resources.ResourceLocation;
 
 /** Discovers supported RTM configuration entries inside one shared ZIP session. */
 public final class RtmPackageReader {
-    private static final String TRAIN_DIRECTORY = "mods/RTM/train/";
-    private static final String RAIL_DIRECTORY = "mods/RTM/rail/";
-    private static final Pattern TRAIN = Pattern.compile("^(?:[^/]+/)?mods/RTM/train/ModelTrain[^/]*\\.json$");
-    private static final Pattern RAIL = Pattern.compile("^(?:[^/]+/)?mods/RTM/rail/ModelRail[^/]*\\.json$");
+    private static final Pattern TRAIN = Pattern.compile(
+            "^([^/]+/)?(?:mods/RTM/train/|assets/minecraft/models/json/)ModelTrain[^/]*\\.json$");
+    private static final Pattern RAIL = Pattern.compile(
+            "^([^/]+/)?(?:mods/RTM/rail/|assets/minecraft/models/json/)ModelRail[^/]*\\.json$");
     private final RtmVehicleAdapter vehicles;
     private final RtmRailAdapter rails;
 
@@ -29,13 +29,15 @@ public final class RtmPackageReader {
 
     public void read(PackageArchive archive) {
         for (String entry : archive.entries()) {
-            if (TRAIN.matcher(entry).matches()) {
-                vehicles.read(archive, entry, entry.substring(0, entry.indexOf(TRAIN_DIRECTORY)));
+            var matcher = TRAIN.matcher(entry);
+            if (matcher.matches()) {
+                vehicles.read(archive, entry, matcher.group(1) == null ? "" : matcher.group(1));
             }
         }
         for (String entry : archive.entries()) {
-            if (RAIL.matcher(entry).matches()) {
-                rails.read(archive, entry, entry.substring(0, entry.indexOf(RAIL_DIRECTORY)));
+            var matcher = RAIL.matcher(entry);
+            if (matcher.matches()) {
+                rails.read(archive, entry, matcher.group(1) == null ? "" : matcher.group(1));
             }
         }
     }
