@@ -65,6 +65,11 @@ public final class ModelRenderQueue implements AutoCloseable {
 
     /** Geometry-only submission for a caller that already applied a component's complete transform. */
     public void submitGeometry(LoadedModel.Source source, PartSelection selection, PoseStack pose, int light) {
+        submitGeometry(source, selection, pose.last(), light);
+    }
+
+    /** Records an already captured pose so script commands can be discarded until the script succeeds. */
+    public void submitGeometry(LoadedModel.Source source, PartSelection selection, PoseStack.Pose pose, int light) {
         RenderSystem.assertOnRenderThread();
         if (!started) {
             modelView.set(RenderSystem.getModelViewMatrix());
@@ -72,7 +77,7 @@ public final class ModelRenderQueue implements AutoCloseable {
             customShader = StaticModelShader.state() != null;
             started = true;
         }
-        var snapshot = pose.last().copy();
+        var snapshot = pose.copy();
         var gpu = source.gpu();
         for (var batch : selection.batches()) {
             draws.add(new Draw(batch, customShader && gpu != null ? gpu.part(batch) : null, snapshot, light));

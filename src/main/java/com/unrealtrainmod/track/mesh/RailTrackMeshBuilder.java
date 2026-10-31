@@ -12,10 +12,19 @@ import it.unimi.dsi.fastutil.ints.IntArrayList;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.IntStream;
+import net.minecraft.resources.ResourceLocation;
 
-/** Rail-only static repetition with endpoint tangent extension. No textures, Minecraft classes, or GPU resources. */
+/** Rail-only static repetition with endpoint tangent extension. No GPU resources; textures are identifiers only. */
 public final class RailTrackMeshBuilder {
     private static final int MAX_VERTICES = 262_144;
+    /** One prepared model object and its material batch. */
+    public record Source(String part, ResourceLocation texture, boolean doubleSided, IndexedMesh mesh) {}
+    /** Legacy shouldRenderObject filter; index is the repeated module number and count the module total. */
+    public interface Filter {
+        Filter ALL = (part, index, count) -> true;
+        boolean shouldRender(String part, long index, long count);
+    }
+
     private final TrackGeometry geometry;
     private final int chunkX, chunkZ;
     private final double length;
@@ -41,15 +50,15 @@ public final class RailTrackMeshBuilder {
         origin = new TrackVector((double)chunkX * 16, Math.floor(geometry.sample(0).position().y() / 16) * 16, (double)chunkZ * 16);
     }
 
-    public static RailTrackMeshData build(TrackGeometry geometry, List<IndexedMesh> sources, int chunkX, int chunkZ,
-                                          double scale, double referencePeriod) {
+    public static RailTrackMeshData build(TrackGeometry geometry, List<Source> sources, int chunkX, int chunkZ,
+                                          double scale, double referencePeriod, Filter filter) {
         var builder = new RailTrackMeshBuilder(geometry, chunkX, chunkZ, scale, referencePeriod);
         var batches = new ArrayList<RailTrackMeshData.Batch>();
-        for (int i = 0; i < sources.size(); i++) {
+        for (var source : sources) {
             var vertices = new FloatArrayList();
             var colors = new IntArrayList();
-            builder.cells(sources.get(i), 0, builder.count, vertices, colors);
-            if (!colors.isEmpty()) batches.add(new RailTrackMeshData.Batch(i,
+            builder.cells(source, 0, builder.count, vertices, colors, filter);
+            if (!colors.isEmpty()) batches.add(new RailTrackMeshData.Batch(source.texture(), source.doubleSided(),
                     new IndexedMesh(vertices.toFloatArray(), colors.toIntArray(), IntStream.range(0, colors.size()).toArray())));
         }
         var bounds = batches.isEmpty() ? new TrackMeshData.Bounds(0, 0, 0, 0, 0, 0)
@@ -57,7 +66,7 @@ public final class RailTrackMeshBuilder {
         return new RailTrackMeshData(builder.origin, bounds, batches);
     }
 
-    private void cells(IndexedMesh source, long first, long end, FloatArrayList vertices, IntArrayList colors) {
+    private void cells(Source source, long first, long end, FloatArrayList vertices, IntArrayList colors, Filter filter) {
         double a = first * period, b = Math.min(length, end * period);
         TrackVector middle = geometry.sample(a + (b - a) / 2).position();
         double radius = (b - a) / 2 + 0.001, x = (double)chunkX * 16, z = (double)chunkZ * 16;
@@ -65,15 +74,16 @@ public final class RailTrackMeshBuilder {
                 || middle.z() + radius < z || middle.z() - radius >= z + 16) return;
         if (end - first > 1) {
             long split = first + (end - first) / 2;
-            cells(source, first, split, vertices, colors);
-            cells(source, split, end, vertices, colors);
+            cells(source, first, split, vertices, colors, filter);
+            cells(source, split, end, vertices, colors, filter);
             return;
         }
         // Own an entire repeated module by its within-track interval midpoint, never by individual faces.
         if (Math.floor(middle.x() / 16) != chunkX || Math.floor(middle.z() / 16) != chunkZ) return;
-        double center = first * period + period / 2;
-        int[] indices = source.indices();
-        for (int index : indices) emit(source, index, center, vertices, colors);
+        if (!filter.shouldRender(source.part(), first, count)) return;        double center = first * period + period / 2;
+        var mesh = source.mesh();
+        int[] indices = mesh.indices();
+        for (int index : indices) emit(mesh, index, center, vertices, colors);
     }
 
     private void emit(IndexedMesh mesh, int index, double center, FloatArrayList vertices, IntArrayList colors) {

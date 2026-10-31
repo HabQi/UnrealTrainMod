@@ -16,6 +16,9 @@ import com.unrealtrainmod.client.model.ModelPreparer;
 import com.unrealtrainmod.client.model.ModelPreparer.PreparedReload;
 import com.unrealtrainmod.client.model.TextureLoader;
 import com.unrealtrainmod.client.renderer.TrainModelRenderer;
+import com.unrealtrainmod.compat.rtm.script.RtmScriptSource;
+import com.unrealtrainmod.compat.rtm.script.ScriptDiagnostics;
+import com.unrealtrainmod.compat.rtm.script.VehicleScriptManager;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
@@ -113,6 +116,9 @@ public final class ClientModelManager extends SimplePreparableReloadListener<Pre
             return;
         }
         TrainModelRenderer.clearWorld();
+        VehicleScriptManager.clear();
+        RtmScriptSource.clearCache();
+        ScriptDiagnostics.clear();
         models = Map.of();
         releaseSources(sources);
         sources = Map.of();

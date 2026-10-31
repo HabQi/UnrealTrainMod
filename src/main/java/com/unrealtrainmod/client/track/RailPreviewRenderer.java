@@ -13,7 +13,8 @@ import com.unrealtrainmod.client.renderer.preview.PreviewRenderer;
 import com.unrealtrainmod.track.geometry.TrackVector;
 import com.unrealtrainmod.track.mesh.RailTrackMeshData;
 import com.unrealtrainmod.track.mesh.TrackMeshData;
-import java.util.stream.IntStream;
+import java.util.ArrayList;
+import java.util.List;
 import net.minecraft.client.gui.GuiGraphics;
 
 /** Shows one authored rail module using the same textured buffers as world rails. */
@@ -41,10 +42,22 @@ public final class RailPreviewRenderer implements AutoCloseable {
         if (model != selected) {
             clearMesh();
             var b = selected.bounds();
-            var batches = IntStream.range(0, selected.batches().size())
-                    .mapToObj(i -> new RailTrackMeshData.Batch(i, selected.batches().get(i).mesh())).toList();
+            var batches = new ArrayList<RailTrackMeshData.Batch>();
+            if (selected.script() == null) {
+                for (var batch : selected.batches()) {
+                    batches.add(new RailTrackMeshData.Batch(batch.texture(), batch.doubleSided(), batch.mesh()));
+                }
+            } else {
+                // The preview shows one authored module; apply the same part filter as world generation.
+                for (var part : selected.parts()) {
+                    if (!selected.script().shouldRender(part.name(), 0, 1)) continue;
+                    for (var batch : part.batches()) {
+                        batches.add(new RailTrackMeshData.Batch(batch.texture(), batch.doubleSided(), batch.mesh()));
+                    }
+                }
+            }
             mesh = new RailTrackGpuMesh(new RailTrackMeshData(new TrackVector(0, 0, 0),
-                    new TrackMeshData.Bounds(b.minX(), b.minY(), b.minZ(), b.maxX(), b.maxY(), b.maxZ()), batches), selected, true);
+                    new TrackMeshData.Bounds(b.minX(), b.minY(), b.minZ(), b.maxX(), b.maxY(), b.maxZ()), List.copyOf(batches)), true);
             model = selected;
         }
         try {

@@ -20,4 +20,6 @@ This project's GPL grant covers rights held by HabQi. Pre-existing
 NeoForge MDK template material remains available under its original MIT
 license; see TEMPLATE_LICENSE.txt. Rights independently granted by the
 template's copyright holders under that MIT license remain available.
+Nashorn (org.openjdk.nashorn:nashorn-core, provided by NeoForge at
+runtime) remains subject to GPL version 2 with the Classpath Exception.
 Other third-party components remain subject to their respective licenses.

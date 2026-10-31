@@ -10,13 +10,19 @@ import java.util.Map;
 /** Geometry reference and import/render options, independent of vehicle catalogs. */
 public record ModelSource(PackageAsset model, Map<String, ModelTexture> textures,
                           Map<String, MaterialRenderMode> materialRenderModes, boolean smoothing, boolean cullFaces,
-                          Format format, float scale) {
+                          Format format, float scale, PackageAsset rendererPath) {
     public static final float MQO_SCALE = 0.01f;
     public enum Format { MQO, IR_OBJ }
 
     public ModelSource(PackageAsset model, Map<String, ModelTexture> textures,
                        Map<String, MaterialRenderMode> materialRenderModes, boolean smoothing, boolean cullFaces) {
-        this(model, textures, materialRenderModes, smoothing, cullFaces, Format.MQO, MQO_SCALE);
+        this(model, textures, materialRenderModes, smoothing, cullFaces, Format.MQO, MQO_SCALE, null);
+    }
+
+    public ModelSource(PackageAsset model, Map<String, ModelTexture> textures,
+                       Map<String, MaterialRenderMode> materialRenderModes, boolean smoothing, boolean cullFaces,
+                       Format format, float scale) {
+        this(model, textures, materialRenderModes, smoothing, cullFaces, format, scale, null);
     }
 
     public ModelSource {

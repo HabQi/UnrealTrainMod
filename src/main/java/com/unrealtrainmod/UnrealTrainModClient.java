@@ -26,6 +26,7 @@ import com.unrealtrainmod.client.track.TrackConstructionRenderer;
 import com.unrealtrainmod.client.track.ClientTurnoutConstruction;
 import com.unrealtrainmod.client.track.TurnoutConstructionRenderer;
 import com.unrealtrainmod.client.track.TrackWorldRenderer;
+import com.unrealtrainmod.compat.rtm.script.VehicleScriptManager;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.GameShuttingDownEvent;
 import net.neoforged.api.distmarker.Dist;
@@ -101,6 +102,9 @@ public class UnrealTrainModClient {
         NeoForge.EVENT_BUS.addListener(ClientPayloadHandlers::modelSelectionResult);
         NeoForge.EVENT_BUS.addListener(ClientPayloadHandlers::railSelectionResult);
         NeoForge.EVENT_BUS.addListener(TrainModelRenderer::onFramePre);
+        NeoForge.EVENT_BUS.addListener(VehicleScriptManager::onFramePre);
+        NeoForge.EVENT_BUS.addListener(VehicleScriptManager::onLevelUnload);
+        NeoForge.EVENT_BUS.addListener(VehicleScriptManager::onLogout);
         NeoForge.EVENT_BUS.addListener(ClientThumbnailManager.INSTANCE::onFramePre);
         NeoForge.EVENT_BUS.addListener(ClientThumbnailManager.INSTANCE::onFramePost);
         NeoForge.EVENT_BUS.addListener(TrainModelRenderer::onRenderStage);
@@ -126,6 +130,7 @@ public class UnrealTrainModClient {
     private static void onGameShuttingDown(GameShuttingDownEvent event) {
         TrainDrivingClient.clear();
         TrainPoseClient.clear();
+        VehicleScriptManager.clear();
         ClientThumbnailManager.INSTANCE.close();
         ClientModelManager.INSTANCE.close();
         TrainModelRenderer.closeWorld();

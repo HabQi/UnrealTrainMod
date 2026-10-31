@@ -27,16 +27,14 @@ final class RailTrackGpuMesh implements TrackRenderMesh {
     private static final Vector3f LIGHT_0 = new Vector3f(0.2f, 1, -0.7f).normalize();
     private static final Vector3f LIGHT_1 = new Vector3f(-0.2f, 1, 0.7f).normalize();
     private final RailTrackMeshData data;
-    private final ClientRailModelManager.Model model;
     private final AABB bounds;
     private final VertexBuffer[] buffers;
     private final TrackLighting lighting;
     private int uploaded;
     private int nextUpload;
 
-    RailTrackGpuMesh(RailTrackMeshData data, ClientRailModelManager.Model model, boolean fullBright) {
+    RailTrackGpuMesh(RailTrackMeshData data, boolean fullBright) {
         this.data = data;
-        this.model = model;
         var b = data.bounds();
         bounds = new AABB(b.minX(), b.minY(), b.minZ(), b.maxX(), b.maxY(), b.maxZ()).inflate(0.001);
         buffers = new VertexBuffer[data.batches().size()];
@@ -89,7 +87,7 @@ final class RailTrackGpuMesh implements TrackRenderMesh {
     @Override
     public void draw(Matrix4f modelView, Matrix4f projection) {
         for (int i = 0; i < uploaded; i++) {
-            var batch = model.batches().get(data.batches().get(i).sourceIndex());
+            var batch = data.batches().get(i);
             var type = TrackRenderTypes.textured(batch.texture(), batch.doubleSided());
             type.setupRenderState();
             try {

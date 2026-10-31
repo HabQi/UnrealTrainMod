@@ -55,8 +55,8 @@ public final class TrainEntityRenderer extends EntityRenderer<TrainEntity> {
                     }
                 } else lineBox(definition == null ? ModelBounds.MISSING : definition.bounds(), pose, buffers);
             } else {
-                if (vehiclePose == null) TrainModelRenderer.render(model, pose, buffers, light);
-                else TrainModelRenderer.render(model, vehiclePose, pose, light);
+                if (vehiclePose == null) TrainModelRenderer.renderPlaced(model, pose, light);
+                else TrainModelRenderer.render(model, vehiclePose, entity, partialTick, pose, light);
             }
         } finally {
             pose.popPose();

@@ -35,7 +35,7 @@ public final class PlacedModelRenderer extends EntityRenderer<PlacedModelEntity>
                         bounds.minX(), bounds.minY(), bounds.minZ(),
                         bounds.maxX(), bounds.maxY(), bounds.maxZ(), 1, 0, 1, 1);
             } else {
-                TrainModelRenderer.render(model, pose, buffers, light);
+                TrainModelRenderer.renderPlaced(model, pose, light);
             }
         } finally {
             pose.popPose();

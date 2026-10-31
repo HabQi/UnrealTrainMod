@@ -103,7 +103,7 @@ public final class TrackWorldRenderer {
                         while (builds > 0 && group.size() < entry.geometries.size()) {
                             var geometry = entry.geometries.get(group.size());
                             group.add(build(geometry, entry.data.gauge(), entry.data.modelId(), entry.data.id(),
-                                    x, z, !entry.missingReported));
+                                    x, z, !entry.missingReported, false));
                             entry.missingReported = true;
                             builds--;
                         }
@@ -133,20 +133,37 @@ public final class TrackWorldRenderer {
     }
 
     private static TrackRenderMesh build(ClientTrackCache.Entry entry, UUID id, int x, int z) {
-        var mesh = build(entry.geometry, entry.data.gauge(), entry.data.modelId(), id, x, z, !entry.missingReported);
+        var mesh = build(entry.geometry, entry.data.gauge(), entry.data.modelId(), id, x, z, !entry.missingReported, true);
         entry.missingReported = true;
         return mesh;
     }
 
     private static TrackRenderMesh build(TrackGeometry geometry, double gauge, String modelId, UUID id,
-                                         int x, int z, boolean reportMissing) {
+                                         int x, int z, boolean reportMissing, boolean filterScript) {
         if (modelId != null) {
             var model = ClientRailModelManager.INSTANCE.model(modelId);
             if (model != null) {
                 try {
-                    return new RailTrackGpuMesh(RailTrackMeshBuilder.build(geometry,
-                            model.batches().stream().map(ClientRailModelManager.Batch::mesh).toList(), x, z,
-                            model.scaleForGauge(gauge), model.period()), model, false);
+                    var sources = new ArrayList<RailTrackMeshBuilder.Source>();
+                    RailTrackMeshBuilder.Filter filter;
+                    if (filterScript && model.script() != null) {
+                        for (var part : model.parts()) {
+                            for (var batch : part.batches()) {
+                                sources.add(new RailTrackMeshBuilder.Source(part.name(), batch.texture(),
+                                        batch.doubleSided(), batch.mesh()));
+                            }
+                        }
+                        filter = model.script()::shouldRender;
+                    } else {
+                        // No script or a dynamic assembly: use the flat material merge and keep every part.
+                        for (var batch : model.batches()) {
+                            sources.add(new RailTrackMeshBuilder.Source("", batch.texture(),
+                                    batch.doubleSided(), batch.mesh()));
+                        }
+                        filter = RailTrackMeshBuilder.Filter.ALL;
+                    }
+                    return new RailTrackGpuMesh(RailTrackMeshBuilder.build(geometry, sources, x, z,
+                            model.scaleForGauge(gauge), model.period(), filter), false);
                 } catch (IllegalArgumentException exception) {
                     LOGGER.warn("Cannot build rail {} using {} in chunk {}, {}: {}; using native appearance",
                             id, modelId, x, z, exception.getMessage());

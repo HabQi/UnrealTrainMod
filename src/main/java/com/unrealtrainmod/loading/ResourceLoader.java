@@ -56,7 +56,10 @@ public final class ResourceLoader {
         VehicleCatalog.register(List.copyOf(vehicles.values()));
         var railDefinitions = List.copyOf(rails.values());
         RailCatalog.register(railDefinitions);
-        report.logSummary(LoadReport.Kind.RTM_VEHICLE, rtmDirectory, "");
+        long scriptedModels = vehicles.values().stream().filter(definition -> definition.parts().stream()
+                .anyMatch(part -> part.source().rendererPath() != null)).count();
+        report.logSummary(LoadReport.Kind.RTM_VEHICLE, rtmDirectory,
+                scriptedModels + " models with scripts (client runtime)");
         report.logSummary(LoadReport.Kind.IR_VEHICLE, irDirectory, "");
         var rtmRails = railDefinitions.stream().filter(definition -> definition.source().format() == RailDefinition.Format.MQO).toList();
         var usage = new HashMap<PackageAsset, Integer>();
@@ -65,7 +68,7 @@ public final class ResourceLoader {
         long scripts = rtmRails.stream().filter(definition -> definition.source().rendererPath() != null).count();
         report.logSummary(LoadReport.Kind.RTM_RAIL, rtmDirectory, usage.size() + " unique MQO models (" + shared
                 + " shared, " + (rtmRails.size() - usage.size()) + " reused references), "
-                + scripts + " declared scripts (not executed)");
+                + scripts + " declared scripts (client runtime)");
         long irModels = railDefinitions.stream().filter(definition -> definition.source().format() == RailDefinition.Format.IR_OBJ)
                 .map(definition -> definition.source().model()).distinct().count();
         report.logSummary(LoadReport.Kind.IR_RAIL, irDirectory, irModels + " unique OBJ models; name must contain rail or Rail");

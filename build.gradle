@@ -27,7 +27,9 @@ sourceSets.main.resources {
 }
 
 repositories {
-    // Add here additional repositories if required by some of the dependencies below.
+    // Nashorn is provided by NeoForge; Maven Central covers this compile-time reference and
+    // any library that is not mirrored by the NeoForged repository.
+    mavenCentral()
 }
 
 base {
@@ -123,6 +125,10 @@ configurations {
 }
 
 dependencies {
+    // Legacy RTM packs are written for Nashorn. NeoForge 21.1 already ships nashorn-core 15.4 and
+    // ASM on the game classpath, so this is a compile-time reference only and must not be nested again.
+    compileOnly 'org.openjdk.nashorn:nashorn-core:15.4'
+
     // Example optional mod dependency with JEI
     // The JEI API is declared for compile time use, while the full JEI artifact is used at runtime
     // compileOnly "mezz.jei:jei-${mc_version}-common-api:${jei_version}"

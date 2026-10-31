@@ -140,6 +140,12 @@ final class RtmVehicleAdapter {
         String model = GsonHelper.getAsString(json, "modelFile");
         if (!model.toLowerCase(Locale.ROOT).endsWith(".mqo")) throw new IOException("Only text MQO models are supported: " + model);
         var asset = archive.resolve(prefix, "minecraft:models/" + model);
+        PackageAsset renderer = null;
+        if (json.has("rendererPath")) {
+            String path = GsonHelper.getAsString(json, "rendererPath");
+            if (path.isBlank()) throw new IOException("rendererPath must not be blank");
+            renderer = archive.resolve(prefix, "minecraft:" + path);
+        }
         var textures = new HashMap<String, ModelTexture>();
         for (var element : GsonHelper.getAsJsonArray(json, "textures")) {
             var texture = element.getAsJsonArray();
@@ -150,7 +156,8 @@ final class RtmVehicleAdapter {
                     .stream().anyMatch(flag -> flag.strip().equals("AlphaBlend"));
             textures.put(material, new ModelTexture(image, alphaBlend));
         }
-        return new ModelSource(asset, textures, readMaterialRenderModes(json, model), smoothing, cullFaces);
+        return new ModelSource(asset, textures, readMaterialRenderModes(json, model), smoothing, cullFaces,
+                ModelSource.Format.MQO, ModelSource.MQO_SCALE, renderer);
     }
 
     private static Map<String, MaterialRenderMode> readMaterialRenderModes(JsonObject json, String model) throws IOException {

@@ -6,6 +6,8 @@ package com.unrealtrainmod.client.renderer;
 
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.unrealtrainmod.client.model.LoadedModel;
+import com.unrealtrainmod.compat.rtm.script.VehicleScriptManager;
+import com.unrealtrainmod.entity.TrainEntity;
 import com.unrealtrainmod.vehicle.VehiclePose;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.neoforged.neoforge.client.event.RenderFrameEvent;
@@ -17,22 +19,40 @@ public final class TrainModelRenderer {
 
     private TrainModelRenderer() {}
 
-    /** The source remains in the signature for callers; geometry is submitted to the world scene queue. */
-    public static void render(LoadedModel model, PoseStack pose,
-                              MultiBufferSource buffers, int light) {
-        WORLD.submit(model, pose, light);
+    /** Running vehicle: each source owns its part transform, then a script or the static geometry. */
+    public static void render(LoadedModel model, VehiclePose vehiclePose, TrainEntity entity, float partialTick,
+                              PoseStack pose, int light) {
+        submit(WORLD, model, vehiclePose, entity, partialTick, pose, light);
     }
 
-    /** The caller has applied body rotation; each source is submitted once under its own local frame. */
-    public static void render(LoadedModel model, VehiclePose vehiclePose, PoseStack pose, int light) {
+    /** Placed/static vehicle with no rail pose; scripts run with an entity-less preview context. */
+    public static void renderPlaced(LoadedModel model, PoseStack pose, int light) {
+        submit(WORLD, model, null, null, 0.0f, pose, light);
+    }
+
+    /** GUI preview and thumbnail scene; uses its own queue so it never pollutes the world. */
+    public static void submitPreview(ModelRenderQueue queue, LoadedModel model, PoseStack pose, int light) {
+        submit(queue, model, null, null, 0.0f, pose, light);
+    }
+
+    private static void submit(ModelRenderQueue queue, LoadedModel model, VehiclePose vehiclePose,
+                               TrainEntity entity, float partialTick, PoseStack pose, int light) {
         for (var instance : model.instances()) {
             pose.pushPose();
             try {
-                var transform = vehiclePose.partTransform(instance.definition());
-                var p = transform.position();
-                pose.translate(p.x(), p.y(), p.z());
-                pose.mulPose(transform.rotation());
-                WORLD.submitGeometry(instance.model(), instance.visibleParts(), pose, light);
+                if (vehiclePose != null) {
+                    var transform = vehiclePose.partTransform(instance.definition());
+                    var p = transform.position();
+                    pose.translate(p.x(), p.y(), p.z());
+                    pose.mulPose(transform.rotation());
+                } else {
+                    var offset = instance.offset();
+                    pose.translate(offset.x(), offset.y(), offset.z());
+                }
+                if (!VehicleScriptManager.render(queue, entity, vehiclePose, instance, pose, light, partialTick)) {
+                    // The caller already applied the instance offset, so submit source-local geometry directly.
+                    queue.submitGeometry(instance.model(), instance.visibleParts(), pose, light);
+                }
             } finally {
                 pose.popPose();
             }

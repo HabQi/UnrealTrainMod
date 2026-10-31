@@ -95,6 +95,8 @@ public final class TrainEntity extends Entity {
         invalidTrainId = null;
     }
     public VehiclePose getRailPose() { return railPose; }
+    /** Monotonic pose reset marker used by render-time animations to ignore position jumps. */
+    public long poseRevision() { return poseRevision; }
     public boolean hasInvalidAnchor() { return invalidAnchor; }
     public boolean isCouplingEnabled(TrainCarEnd end) {
         return end == TrainCarEnd.FRONT ? frontCouplingEnabled : rearCouplingEnabled;
@@ -227,6 +229,7 @@ public final class TrainEntity extends Entity {
         playback = null;
         railPose = null;
         lerpSteps = 0;
+        poseRevision++;
         setOldPosAndRot();
     }
 
