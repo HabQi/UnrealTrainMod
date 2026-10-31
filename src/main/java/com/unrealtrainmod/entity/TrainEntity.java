@@ -237,21 +237,25 @@ public final class TrainEntity extends Entity {
         if (RAIL_POSE.equals(key) && level().isClientSide) {
             var snapshot = entityData.get(RAIL_POSE);
             if (snapshot.isEmpty()) {
+                TrainPoseClient.discard(this);
                 railPose = null;
                 playback = null;
                 lerpSteps = 0;
                 setBoundingBox(makeBoundingBox());
             } else {
-                var incoming = VehiclePoseSnapshot.load(snapshot);
-                if (playback == null) playback = new VehiclePosePlayback();
-                if (!playback.accepts(incoming)) return;
-                double time = TrainPoseClient.receiveTime(level(), incoming);
-                boolean reset = playback.accept(incoming, time);
-                applyPose(playback.sample(time));
-                if (reset) setOldPosAndRot();
-                lerpSteps = 0;
+                TrainPoseClient.enqueue(this, VehiclePoseSnapshot.load(snapshot));
             }
         }
+    }
+
+    /** Applied once this frame's simulation ticks have finished, before camera and entity rendering. */
+    public void acceptRailPoseSnapshot(VehiclePoseSnapshot incoming, double time) {
+        if (playback == null) playback = new VehiclePosePlayback();
+        if (!playback.accepts(incoming)) return;
+        boolean reset = playback.accept(incoming, time);
+        applyPose(playback.sample(time));
+        if (reset) setOldPosAndRot();
+        lerpSteps = 0;
     }
 
     @Override

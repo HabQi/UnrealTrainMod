@@ -90,6 +90,7 @@ public class UnrealTrainModClient {
         NeoForge.EVENT_BUS.addListener(TrainDrivingClient::logout);
         NeoForge.EVENT_BUS.addListener(TrainDrivingClient::clonePlayer);
         NeoForge.EVENT_BUS.addListener(TrainPoseClient::tick);
+        NeoForge.EVENT_BUS.addListener(TrainPoseClient::onFramePre);
         NeoForge.EVENT_BUS.addListener(TrainPoseClient::unload);
         NeoForge.EVENT_BUS.addListener(TrainPoseClient::logout);
         NeoForge.EVENT_BUS.addListener(TrainMapClient::onSync);
