@@ -11,13 +11,19 @@ import com.unrealtrainmod.vehicle.VehiclePose;
 import com.unrealtrainmod.train.TrackOccupancyManager.Interval;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
+import java.util.function.LongConsumer;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.phys.AABB;
 import org.joml.Vector3f;
 
@@ -29,17 +35,88 @@ public final class TrackReservationManager {
     private final Predicate<UUID> confirmed;
     private final Function<UUID, List<Interval>> occupancy;
     private final Supplier<List<UUID>> representatives;
+    private final Supplier<Set<UUID>> loadedVehicles;
+    private final Set<UUID> indexed = new HashSet<>();
+    private final Map<Long, Set<UUID>> chunks = new HashMap<>();
+    private final Map<UUID, Set<UUID>> owned = new HashMap<>();
     private final Map<UUID, List<AABB>> corridors = new HashMap<>();
 
     public TrackReservationManager(ServerLevel level, TrackGraph graph, Function<UUID, List<UUID>> members,
                                    Predicate<UUID> confirmed, Function<UUID, List<Interval>> occupancy,
-                                   Supplier<List<UUID>> representatives) {
+                                   Supplier<List<UUID>> representatives, Supplier<Set<UUID>> loadedVehicles) {
         this.level = level;
         this.graph = graph;
         this.members = members;
         this.confirmed = confirmed;
         this.occupancy = occupancy;
         this.representatives = representatives;
+        this.loadedVehicles = loadedVehicles;
+        for (var assembly : graph.assemblies()) indexAssembly(assembly);
+    }
+
+    /** Geometry is immutable; control-state notifications need no spatial reindexing. */
+    public void indexAssembly(TrackAssemblyInstance assembly) {
+        if (!indexed.add(assembly.id())) return;
+        forEachChunk(assembly.bounds(), key -> chunks.computeIfAbsent(key, ignored -> new LinkedHashSet<>()).add(assembly.id()));
+        if (assembly.occupant() != null) {
+            owned.computeIfAbsent(assembly.occupant(), ignored -> new LinkedHashSet<>()).add(assembly.id());
+        }
+    }
+
+    public void removeAssembly(TrackAssemblyInstance assembly) {
+        indexed.remove(assembly.id());
+        forEachChunk(assembly.bounds(), key -> {
+            var ids = chunks.get(key);
+            ids.remove(assembly.id());
+            if (ids.isEmpty()) chunks.remove(key);
+        });
+        corridors.remove(assembly.id());
+        if (assembly.occupant() != null) removeOwner(assembly.occupant(), assembly.id());
+    }
+
+    private static void forEachChunk(AABB bounds, LongConsumer action) {
+        int minX = (int)Math.floor(bounds.minX / 16), maxX = (int)Math.floor(bounds.maxX / 16);
+        int minZ = (int)Math.floor(bounds.minZ / 16), maxZ = (int)Math.floor(bounds.maxZ / 16);
+        // Include both boundary chunks conservatively, also for negative coordinates.
+        for (long x = minX; x <= maxX; x++) {
+            for (long z = minZ; z <= maxZ; z++) action.accept(ChunkPos.asLong((int)x, (int)z));
+        }
+    }
+
+    private Set<UUID> candidates(List<AABB> areas, List<Interval> intervals) {
+        var ids = new LinkedHashSet<UUID>();
+        for (var area : areas) {
+            forEachChunk(area, key -> {
+                var nearby = chunks.get(key);
+                if (nearby != null) ids.addAll(nearby);
+            });
+        }
+        // Saved physical intervals must protect an assembly even without a loaded vehicle box.
+        for (var interval : intervals) {
+            var assembly = graph.assemblyForSegment(interval.segmentId());
+            if (assembly != null) ids.add(assembly.id());
+        }
+        return ids;
+    }
+
+    private List<UUID> heldBy(List<UUID> owners) {
+        var ids = new LinkedHashSet<UUID>();
+        for (UUID owner : owners) ids.addAll(owned.getOrDefault(owner, Set.of()));
+        return List.copyOf(ids);
+    }
+
+    private void removeOwner(UUID owner, UUID assemblyId) {
+        var ids = owned.get(owner);
+        ids.remove(assemblyId);
+        if (ids.isEmpty()) owned.remove(owner);
+    }
+
+    private void setOccupant(TrackAssemblyInstance assembly, UUID owner) {
+        if (Objects.equals(assembly.occupant(), owner)) return;
+        if (assembly.occupant() != null) removeOwner(assembly.occupant(), assembly.id());
+        if (owner != null) owned.computeIfAbsent(owner, ignored -> new LinkedHashSet<>()).add(assembly.id());
+        // Releasing a trailing passage notifies route observers; publish ownership first.
+        graph.setAssemblyOccupant(assembly.id(), owner);
     }
 
     public static AABB area(TrainEntity entity) {
@@ -59,11 +136,10 @@ public final class TrackReservationManager {
     }
 
     public void refreshLoaded() {
-        var assemblies = graph.assemblies();
-        corridors.keySet().removeIf(id -> assemblies.stream().noneMatch(assembly -> assembly.id().equals(id)));
-        if (assemblies.isEmpty()) return;
-        for (var assembly : assemblies) {
-            if (assembly.occupant() == null) continue;
+        if (indexed.isEmpty()) return;
+        var lockedAssemblies = owned.values().stream().flatMap(Set::stream).toList();
+        for (UUID assemblyId : lockedAssemblies) {
+            var assembly = graph.assembly(assemblyId);
             boolean complete = true, occupied = false;
             for (UUID id : members.apply(assembly.occupant())) {
                 if (!(level.getEntity(id) instanceof TrainEntity entity) || entity.isRemoved()
@@ -73,12 +149,12 @@ public final class TrackReservationManager {
                 }
                 occupied |= touches(assembly, List.of(area(entity)), occupancy.apply(id));
             }
-            if (complete && !occupied) graph.setAssemblyOccupant(assembly.id(), null);
+            if (complete && !occupied) setOccupant(assembly, null);
         }
         // Persisted footprints protect a turnout even before its member entities are loaded.
         for (UUID owner : representatives.get()) acquire(members.apply(owner), List.of(), occupancy.apply(owner));
-        for (var entity : level.getAllEntities()) {
-            if (entity instanceof TrainEntity train && !train.isRemoved()
+        for (UUID id : loadedVehicles.get()) {
+            if (level.getEntity(id) instanceof TrainEntity train && !train.isRemoved()
                     && (train.getRailAnchor() != null || train.hasInvalidAnchor())) {
                 acquire(members.apply(train.getUUID()), List.of(area(train)), occupancy.apply(train.getUUID()));
             }
@@ -86,7 +162,8 @@ public final class TrackReservationManager {
     }
 
     public boolean available(List<UUID> owners, List<AABB> areas, List<Interval> intervals) {
-        for (var assembly : graph.assemblies()) {
+        for (UUID id : candidates(areas, intervals)) {
+            var assembly = graph.assembly(id);
             if (touches(assembly, areas, intervals) && assembly.occupant() != null && !owners.contains(assembly.occupant())) return false;
         }
         return true;
@@ -94,38 +171,43 @@ public final class TrackReservationManager {
 
     /** Checks every target before acquiring any lock. Call before accepting a movement sample. */
     public boolean acquire(List<UUID> owners, List<AABB> areas, List<Interval> intervals) {
-        if (!available(owners, areas, intervals)) return false;
-        for (var assembly : graph.assemblies()) {
-            if (touches(assembly, areas, intervals) && assembly.occupant() == null) {
-                graph.setAssemblyOccupant(assembly.id(), owners.getFirst());
-            }
+        var touched = new ArrayList<UUID>();
+        for (UUID id : candidates(areas, intervals)) {
+            var assembly = graph.assembly(id);
+            if (!touches(assembly, areas, intervals)) continue;
+            if (assembly.occupant() != null && !owners.contains(assembly.occupant())) return false;
+            touched.add(id);
+        }
+        for (UUID id : touched) {
+            var assembly = graph.assembly(id);
+            if (assembly.occupant() == null) setOccupant(assembly, owners.getFirst());
         }
         return true;
     }
 
     /** Call only with a complete, validated member group. Missing members retain their locks. */
     public void releaseOutside(List<UUID> owners, List<AABB> actual, List<Interval> intervals) {
-        for (var assembly : graph.assemblies()) {
-            if (assembly.occupant() != null && owners.contains(assembly.occupant()) && !touches(assembly, actual, intervals)) {
-                graph.setAssemblyOccupant(assembly.id(), null);
+        for (UUID id : heldBy(owners)) {
+            var assembly = graph.assembly(id);
+            if (!touches(assembly, actual, intervals)) {
+                setOccupant(assembly, null);
             }
         }
     }
 
     public void release(UUID vehicle) {
-        for (var assembly : graph.assemblies()) {
-            if (vehicle.equals(assembly.occupant())) graph.setAssemblyOccupant(assembly.id(), null);
-        }
+        for (UUID id : heldBy(List.of(vehicle))) setOccupant(graph.assembly(id), null);
     }
 
     public void transfer(UUID from, UUID to) {
-        for (var assembly : graph.assemblies()) {
-            if (from.equals(assembly.occupant())) graph.setAssemblyOccupant(assembly.id(), to);
-        }
+        for (UUID id : heldBy(List.of(from))) setOccupant(graph.assembly(id), to);
     }
 
     public boolean touchesTurnout(List<AABB> areas, List<Interval> intervals) {
-        return graph.assemblies().stream().anyMatch(assembly -> touches(assembly, areas, intervals));
+        for (UUID id : candidates(areas, intervals)) {
+            if (touches(graph.assembly(id), areas, intervals)) return true;
+        }
+        return false;
     }
 
     private boolean touches(TrackAssemblyInstance assembly, List<AABB> areas, List<Interval> intervals) {

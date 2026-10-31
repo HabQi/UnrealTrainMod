@@ -23,6 +23,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -56,6 +57,8 @@ public final class TrainManager {
     // Recovery belongs to the consist, independently of individual entity tick ages.
     private final Set<UUID> restored = new HashSet<>();
     private final Set<UUID> pending = new HashSet<>();
+    // Includes vehicles whose deferred registration has not run or has failed.
+    private final Set<UUID> loadedVehicles = new LinkedHashSet<>();
     private TrainSavedData savedData;
     private StateException storageFailure;
     private TrackGraph graph;
@@ -64,7 +67,10 @@ public final class TrainManager {
     private final Consumer<TrackSegmentChange> listener = this::trackChanged;
     private final Map<UUID, Long> assemblyRevisions = new HashMap<>();
     private final Consumer<TrackAssemblyInstance> assemblyListener = this::assemblyChanged;
-    private final Consumer<TrackAssemblyInstance> assemblyRemoveListener = assembly -> assemblyRevisions.remove(assembly.id());
+    private final Consumer<TrackAssemblyInstance> assemblyRemoveListener = assembly -> {
+        reservations.removeAssembly(assembly);
+        assemblyRevisions.remove(assembly.id());
+    };
 
     private record CarCandidate(TrainCarState member, TrainEntity entity, double progress,
                                 VehiclePose pose, TrainAnchor anchor, AABB bounds) {}
@@ -94,7 +100,9 @@ public final class TrainManager {
     private static void entityJoined(EntityJoinLevelEvent event) {
         if (event.getLevel() instanceof ServerLevel level && event.getEntity() instanceof TrainEntity entity) {
             // Joining can precede FULL chunk promotion. Do not access the world or data storage here.
-            get(level).pending.add(entity.getUUID());
+            var manager = get(level);
+            manager.loadedVehicles.add(entity.getUUID());
+            manager.pending.add(entity.getUUID());
         }
     }
 
@@ -139,6 +147,7 @@ public final class TrainManager {
             graph.removeAssemblyRemoveListener(assemblyRemoveListener);
         }
         pending.clear();
+        loadedVehicles.clear();
         attached.clear();
         restored.clear();
         entityTrains.clear();
@@ -154,7 +163,8 @@ public final class TrainManager {
             graph = TrackBlockManager.get(level).graph();
             reservations = new TrackReservationManager(level, graph, this::reservationMembers, this::reservationMemberConfirmed,
                     id -> occupancy.intervals(entityTrains.get(id)),
-                    () -> trains.values().stream().map(train -> train.cars().getFirst().entityId()).toList());
+                    () -> trains.values().stream().map(train -> train.cars().getFirst().entityId()).toList(),
+                    () -> loadedVehicles);
             graph.addSegmentListener(listener);
             for (var assembly : graph.assemblies()) assemblyRevisions.put(assembly.id(), assembly.revision());
             graph.addAssemblyListener(assemblyListener);
@@ -463,6 +473,7 @@ public final class TrainManager {
 
     private void detach(TrainEntity entity) {
         UUID entityId = entity.getUUID();
+        loadedVehicles.remove(entityId);
         pending.remove(entityId);
         attached.remove(entityId);
         data();
@@ -602,18 +613,18 @@ public final class TrainManager {
         if (!reservations.available(memberIds(train), areas, intervals)) throw new StateException(StopReason.TURNOUT_OCCUPIED);
     }
 
-    private void saveCandidate(TrainConsist train, Candidate candidate) {
+    private void saveCandidate(TrainConsist train, Candidate candidate, List<TrackOccupancyManager.Interval> intervals) {
         var members = candidate.cars().stream().map(car -> car.member().withAnchor(car.anchor())).toList();
         if (!members.equals(train.cars())) {
             train.setCars(members);
             savedData.setDirty();
         }
         train.setProgress(candidate.progress());
-        occupancy.update(train.id(), TrackOccupancyManager.footprint(train, candidate.progress()));
+        occupancy.update(train.id(), intervals);
     }
 
-    private void commit(TrainConsist train, Candidate candidate, boolean publish) {
-        saveCandidate(train, candidate);
+    private void commit(TrainConsist train, Candidate candidate, List<TrackOccupancyManager.Interval> intervals, boolean publish) {
+        saveCandidate(train, candidate, intervals);
         for (var car : candidate.cars()) {
             car.entity().setRailAnchor(car.anchor());
             car.entity().advanceRailPose(car.pose());
@@ -658,7 +669,7 @@ public final class TrainManager {
             var intervals = TrackOccupancyManager.footprint(train, candidate.progress());
             check(train, areas, intervals);
             reservations.acquire(memberIds(train), areas, intervals);
-            saveCandidate(train, candidate);
+            saveCandidate(train, candidate, intervals);
             for (int i = 0; i < candidate.cars().size(); i++) {
                 var car = candidate.cars().get(i);
                 car.entity().setRailAnchor(car.anchor());
@@ -706,9 +717,10 @@ public final class TrainManager {
             prepare(train, List.of(entity));
             var candidate = calculate(train, List.of(entity), train.progress());
             var car = candidate.cars().getFirst();
+            var areas = candidate.areas();
             reservations.refreshLoaded();
             var intervals = TrackOccupancyManager.footprint(train, candidate.progress());
-            check(train, candidate.areas(), intervals);
+            check(train, areas, intervals);
             var p = car.pose().body().position();
             if (!allowed.test(BlockPos.containing(p.x(), p.y(), p.z()))) return StopReason.INVALID_POSITION;
             entity.setTrainId(train.id());
@@ -717,15 +729,16 @@ public final class TrainManager {
             entity.setOldPosAndRot();
             if (spawn && !level.addFreshEntity(entity)) {
                 pending.remove(entity.getUUID());
+                loadedVehicles.remove(entity.getUUID());
                 return StopReason.INVALID_POSITION;
             }
             put(train);
-            saveCandidate(train, candidate);
+            saveCandidate(train, candidate, intervals);
             attached.add(entity.getUUID());
             restored.add(train.id());
             pending.remove(entity.getUUID());
-            reservations.acquire(memberIds(train), candidate.areas(), intervals);
-            reservations.releaseOutside(memberIds(train), candidate.areas(), intervals);
+            reservations.acquire(memberIds(train), areas, intervals);
+            reservations.releaseOutside(memberIds(train), areas, intervals);
             return null;
         } catch (StateException exception) {
             return exception.reason();
@@ -752,13 +765,14 @@ public final class TrainManager {
             maintainWindow(train, entities);
             var candidate = calculate(train, entities, train.progress());
             checkCheckpoint(train, candidate);
-            var areas = swept(currentAreas(entities), candidate.areas());
+            var actual = candidate.areas();
+            var areas = swept(currentAreas(entities), actual);
             reservations.refreshLoaded();
             var intervals = TrackOccupancyManager.footprint(train, candidate.progress());
             check(train, areas, intervals, candidate.progress(), true);
             reservations.acquire(memberIds(train), areas, intervals);
-            commit(train, candidate, true);
-            reservations.releaseOutside(memberIds(train), candidate.areas(), intervals);
+            commit(train, candidate, intervals, true);
+            reservations.releaseOutside(memberIds(train), actual, intervals);
             return null;
         } catch (StateException exception) {
             stop(train, exception.reason());
@@ -865,7 +879,7 @@ public final class TrainManager {
             }
             remove(second);
             put(combined);
-            saveCandidate(combined, candidate);
+            saveCandidate(combined, candidate, intervals);
             front.setRailAnchor(candidate.cars().getFirst().anchor());
             rear.setTrainId(combined.id());
             rear.setRailAnchor(candidate.cars().get(1).anchor());
@@ -928,6 +942,7 @@ public final class TrainManager {
     }
 
     private void assemblyChanged(TrackAssemblyInstance assembly) {
+        reservations.indexAssembly(assembly);
         Long previous = assemblyRevisions.put(assembly.id(), assembly.revision());
         if (previous == null || previous == assembly.revision()) return;
         for (var train : trains.values()) {
@@ -996,7 +1011,8 @@ public final class TrainManager {
                 var turnoutMovement = new TrainTurnoutMovement(graph, train);
                 next = turnoutMovement.nextBoundary(progress, next);
                 var candidate = calculate(train, entities, next);
-                var areas = swept(previous, candidate.areas());
+                var actual = candidate.areas();
+                var areas = swept(previous, actual);
                 var intervals = TrackOccupancyManager.footprint(train, next);
                 check(train, areas, intervals, next, true);
                 List<TrainTurnoutMovement.Action> actions;
@@ -1010,11 +1026,11 @@ public final class TrainManager {
                 for (var action : actions) if (action.begin()) graph.beginTrailingPass(action.assemblyId(), owners, action.pathId());
                 for (var action : actions) if (action.throwSwitch()) graph.throwTrailingPass(action.assemblyId(), owners);
                 // Commit each accepted substep before release can restore a turnout and notify route observers.
-                commit(train, candidate, false);
+                commit(train, candidate, intervals, false);
                 moved = true;
-                previous = candidate.areas();
+                previous = actual;
                 remaining = next == requested ? 0 : remaining - (next - progress);
-                reservations.releaseOutside(owners, previous, occupancy.intervals(train.id()));
+                reservations.releaseOutside(owners, previous, intervals);
             }
             if (train.simulationActive()) train.dynamics().update(nextSpeed, acceleration, grade);
             if (moved && level.getGameTime() % 2 == 0) sync(train);
