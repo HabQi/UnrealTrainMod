@@ -8,6 +8,7 @@ import com.unrealtrainmod.entity.TrainEntity;
 import com.unrealtrainmod.network.payload.TrainDebugPayload;
 import com.unrealtrainmod.track.block.TrackBlockManager;
 import com.unrealtrainmod.vehicle.VehicleCatalog;
+import com.unrealtrainmod.vehicle.VehiclePoseSolver;
 import java.util.ArrayList;
 import java.util.IdentityHashMap;
 import java.util.List;
@@ -96,14 +97,17 @@ public final class TrainDiagnostics {
                     number(train.route() == null ? 0 : train.route().getLength()), train.routeDirty(),
                     train.window() != null && train.window().refreshRequested()));
             var member = train.member(entity.getUUID());
+            lines.add(Component.translatable(PREFIX + "orientation", member.reversed()));
             var anchor = member.anchor();
             if (anchor != null) lines.add(Component.translatable(PREFIX + "anchor", anchor.segmentId().toString(),
                     number(anchor.distance()), anchor.fromStart()));
             var model = VehicleCatalog.find(member.modelId());
             if (model != null && train.route() != null && !train.routeDirty()) {
-                double reference = train.progress() + member.offset();
-                lines.add(Component.translatable(PREFIX + "bogies", number(reference + model.motionSpec().frontBogieOffset()),
-                        number(reference + model.motionSpec().rearBogieOffset())));
+                var range = VehiclePoseSolver.range(train.route().getLength(), model.motionSpec(), member.direction());
+                double reference = TrainMotion.carProgress(train.progress(), member.offset(), range);
+                lines.add(Component.translatable(PREFIX + "bogies",
+                        number(VehiclePoseSolver.sampleDistance(reference, member.direction() * model.motionSpec().frontBogieOffset(), train.route().getLength())),
+                        number(VehiclePoseSolver.sampleDistance(reference, member.direction() * model.motionSpec().rearBogieOffset(), train.route().getLength()))));
             }
             var intervals = occupancy.intervals(train.id());
             lines.addAll(occupancyLines(train, occupancy, 6, 2));

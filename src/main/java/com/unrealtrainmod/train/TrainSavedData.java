@@ -23,7 +23,7 @@ import net.minecraft.world.level.storage.LevelResource;
 /** One file per dimension. Routes, poses and running flags are rebuilt rather than serialized. */
 public final class TrainSavedData extends SavedData {
     private static final String NAME = "unrealtrainmod_trains";
-    private static final int FORMAT_VERSION = 2;
+    private static final int FORMAT_VERSION = 3;
     private static final Factory<TrainSavedData> FACTORY =
             new Factory<>(TrainSavedData::new, (tag, registries) -> load(tag));
     private final Map<UUID, TrainConsist> trains = new HashMap<>();
@@ -80,9 +80,14 @@ public final class TrainSavedData extends SavedData {
                 var modelId = ResourceLocation.parse(car.getString("ModelId"));
                 double offset = number(car, "Offset");
                 if (j == 0 && offset != 0) throw new IllegalArgumentException("Reference member offset must be zero");
+                if (version >= 3 && !car.contains("Reversed", Tag.TAG_BYTE)) {
+                    throw new IllegalArgumentException("Missing member orientation");
+                }
+                boolean reversed = version >= 3 && car.getBoolean("Reversed");
+                if (j == 0 && reversed) throw new IllegalArgumentException("Reference member must face the route direction");
                 var anchor = anchor(version == 1 ? entry : car);
                 if (cars.size() == 2 && anchor == null) throw new IllegalArgumentException("Missing coupled member anchor");
-                restored.add(new TrainCarState(entityId, modelId, offset, anchor));
+                restored.add(new TrainCarState(entityId, modelId, offset, reversed, anchor));
             }
             double speed = number(entry, "ConfiguredSpeed");
             if (speed == 0 || Math.abs(speed) > TrainConsist.MAX_SPEED) {
@@ -109,6 +114,7 @@ public final class TrainSavedData extends SavedData {
                 car.putUUID("EntityId", member.entityId());
                 car.putString("ModelId", member.modelId().toString());
                 car.putDouble("Offset", member.offset());
+                car.putBoolean("Reversed", member.reversed());
                 if (member.anchor() != null) car.put("Anchor", member.anchor().save());
                 cars.add(car);
             }

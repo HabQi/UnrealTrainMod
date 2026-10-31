@@ -54,6 +54,7 @@ public final class TrainEntity extends Entity {
     private UUID trainId;
     private Tag invalidTrainId;
     private boolean invalidAnchor;
+    private boolean couplingEnabled;
     private int lerpSteps;
     private double targetX, targetY, targetZ;
     private float targetYaw, targetPitch;
@@ -90,6 +91,8 @@ public final class TrainEntity extends Entity {
     }
     public VehiclePose getRailPose() { return railPose; }
     public boolean hasInvalidAnchor() { return invalidAnchor; }
+    public boolean isCouplingEnabled() { return couplingEnabled; }
+    public void setCouplingEnabled(boolean enabled) { couplingEnabled = enabled; }
 
     public void setRailAnchor(TrainAnchor anchor) {
         railAnchor = anchor;
@@ -237,6 +240,7 @@ public final class TrainEntity extends Entity {
         invalidAnchor = false;
         trainId = null;
         invalidTrainId = null;
+        couplingEnabled = tag.getBoolean("CouplingEnabled");
         if (tag.contains("TrainId")) {
             if (tag.hasUUID("TrainId")) trainId = tag.getUUID("TrainId");
             else {
@@ -273,6 +277,7 @@ public final class TrainEntity extends Entity {
     @Override
     protected void addAdditionalSaveData(CompoundTag tag) {
         tag.putString("ModelId", entityData.get(MODEL_ID));
+        tag.putBoolean("CouplingEnabled", couplingEnabled);
         if (trainId != null) tag.putUUID("TrainId", trainId);
         else if (invalidTrainId != null) tag.put("TrainId", invalidTrainId.copy());
         if (railAnchor != null) tag.put("RailAnchor", railAnchor.save());
@@ -335,6 +340,11 @@ public final class TrainEntity extends Entity {
 
     @Override
     public InteractionResult interact(Player player, InteractionHand hand) {
+        if (hand == InteractionHand.MAIN_HAND) {
+            var stack = player.getItemInHand(hand);
+            if (stack.is(UnrealTrainMod.CROWBAR.get())) return UnrealTrainMod.CROWBAR.get().useOnTrain(player, this);
+            if (stack.is(UnrealTrainMod.VEHICLE_MOVER.get())) return UnrealTrainMod.VEHICLE_MOVER.get().useOnTrain(player, this);
+        }
         if (player.isShiftKeyDown() && player.getItemInHand(hand).is(UnrealTrainMod.VEHICLE.get()) && player.mayBuild()) {
             return dismantle(player) ? InteractionResult.sidedSuccess(level().isClientSide) : InteractionResult.FAIL;
         }
@@ -356,12 +366,24 @@ public final class TrainEntity extends Entity {
 
     @Override
     public Vec3 getPassengerRidingPosition(Entity passenger) {
+        return passengerRidingPosition(currentBody());
+    }
+
+    /** Body-only view of the interpolation shared with the train renderer. */
+    public VehiclePose.Body renderBody(float partialTick) {
+        if (railPose == null) return null;
+        return previousRailPose == null ? railPose.body()
+                : previousRailPose.body().interpolate(railPose.body(), partialTick);
+    }
+
+    public Vec3 passengerRidingPosition(VehiclePose.Body body) {
         var model = VehicleCatalog.find(getModelId());
         var bounds = model == null ? ModelBounds.MISSING : model.bounds();
         var local = new Vector3f(bounds.centerX(), bounds.minY() + bounds.height() * 0.25f,
                 bounds.maxZ() - Math.min(2, bounds.length() * 0.2f));
-        VehiclePose.Body.rotation(getYRot(), getXRot()).transform(local);
-        return position().add(local.x, local.y, local.z);
+        body.rotation().transform(local);
+        var position = body.position();
+        return new Vec3(position.x() + local.x, position.y() + local.y, position.z() + local.z);
     }
 
     @Override

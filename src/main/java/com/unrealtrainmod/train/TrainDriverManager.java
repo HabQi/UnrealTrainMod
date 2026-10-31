@@ -41,7 +41,8 @@ public final class TrainDriverManager {
             var train = manager.prepareDriving(entity);
             if (!player.startRiding(entity)) return false;
             boolean emergency = train.control().emergencyBrake();
-            int handle = train.running() || emergency ? 0 : -TrainControlProfile.BRAKE_NOTCHES;
+            int handle = train.commandControlled() ? (train.running() || emergency ? 0 : -TrainControlProfile.BRAKE_NOTCHES)
+                    : TrainControlProfile.handle(train.control());
             var session = new TrainDriverSession(player, train, entity.getUUID(), handle);
             train.startManual(TrainControlProfile.control(handle, train.control().reverser(), emergency));
             sessions.put(train.id(), session);
@@ -76,18 +77,19 @@ public final class TrainDriverManager {
         session.silentTicks = 0;
         var train = session.train;
         var old = train.control();
+        var reverser = payload.reverser().inFrame(train.member(session.vehicle).direction());
         Feedback feedback = Feedback.NONE;
         if (payload.emergency() && !old.emergencyBrake()) {
             // A pending/rejected reverser intention must never prevent the emergency key from working.
             session.handle = 0;
             train.setControl(TrainControlProfile.control(0, old.reverser(), true));
-        } else if (payload.reverser() != old.reverser() && (train.running() || session.handle != 0 || payload.handle() != 0)) {
+        } else if (reverser != old.reverser() && (train.running() || session.handle != 0 || payload.handle() != 0)) {
             feedback = Feedback.REVERSER_LOCKED;
         } else if (old.emergencyBrake() && (payload.handle() != 0 || !payload.emergency() && train.running())) {
             feedback = Feedback.EMERGENCY_LOCKED;
         } else {
             session.handle = payload.emergency() ? 0 : payload.handle();
-            train.setControl(TrainControlProfile.control(session.handle, payload.reverser(), payload.emergency()));
+            train.setControl(TrainControlProfile.control(session.handle, reverser, payload.emergency()));
         }
         send(session, true, feedback);
     }
@@ -112,9 +114,38 @@ public final class TrainDriverManager {
         var session = sessions.values().stream().filter(value -> value.player == player && value.vehicle.equals(entity.getUUID()))
                 .findFirst().orElse(null);
         if (session != null) {
-            session.train.safetyBrake();
+            // Player.rideTick clears the sneak flag only after stopRiding has removed the passenger.
+            // Ordinary dismount releases ownership while the consist keeps its current controls.
+            boolean manualExit = player.isShiftKeyDown() && player.isAlive() && !player.isSpectator()
+                    && !player.hasDisconnected() && !player.isRemoved() && !player.isChangingDimension()
+                    && player.serverLevel() == level && !entity.isRemoved();
+            if (!manualExit) session.train.safetyBrake();
             close(session.train);
         }
+    }
+
+    void stoppedAtEnd(TrainConsist train) {
+        var session = sessions.get(train.id());
+        session.handle = -TrainControlProfile.BRAKE_NOTCHES;
+        send(session, true, Feedback.NONE);
+        session.player.displayClientMessage(Component.translatable("commands.unrealtrainmod.train.state.end_of_route"), true);
+    }
+
+    /** Automatic coupling parks the merged consist and transfers its sole driver without dismounting. */
+    void coupled(TrainConsist first, TrainConsist second, TrainConsist combined) {
+        var session = sessions.remove(first.id());
+        var rearSession = sessions.remove(second.id());
+        if (session == null) session = rearSession;
+        if (session == null) return;
+        var control = session.train.control();
+        var driverReverser = control.reverser().inFrame(session.train.member(session.vehicle).direction());
+        session.train = combined;
+        session.handle = control.emergencyBrake() ? 0 : -TrainControlProfile.BRAKE_NOTCHES;
+        var reverser = driverReverser.inFrame(combined.member(session.vehicle).direction());
+        combined.startManual(TrainControlProfile.control(session.handle, reverser, control.emergencyBrake()));
+        sessions.put(combined.id(), session);
+        send(session, true, Feedback.NONE);
+        session.player.displayClientMessage(Component.translatable("item.unrealtrainmod.crowbar.coupled"), true);
     }
 
     void close(TrainConsist train) {
@@ -136,10 +167,11 @@ public final class TrainDriverManager {
 
     private void send(TrainDriverSession session, boolean open, Feedback feedback) {
         var train = session.train;
+        int direction = train.member(session.vehicle).direction();
         PacketDistributor.sendToPlayer(session.player, new TrainControlSyncPayload(session.id, level.dimension().location(),
-                train.id(), session.vehicle, open, session.sequence, session.handle, train.control().reverser(),
-                train.control().emergencyBrake(), train.actualSpeed(), train.dynamics().acceleration(), train.dynamics().grade(),
-                train.dynamics().tractionForce(), train.dynamics().brakeForce(), train.dynamics().tractionPower(),
+                train.id(), session.vehicle, open, session.sequence, session.handle, train.control().reverser().inFrame(direction),
+                train.control().emergencyBrake(), direction * train.actualSpeed(), direction * train.dynamics().acceleration(), direction * train.dynamics().grade(),
+                direction * train.dynamics().tractionForce(), train.dynamics().brakeForce(), train.dynamics().tractionPower(),
                 train.stopReason(), feedback));
     }
 }

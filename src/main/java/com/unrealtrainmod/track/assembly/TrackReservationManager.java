@@ -161,28 +161,45 @@ public final class TrackReservationManager {
         }
     }
 
-    public boolean available(List<UUID> owners, List<AABB> areas, List<Interval> intervals) {
-        for (UUID id : candidates(areas, intervals)) {
-            var assembly = graph.assembly(id);
-            if (touches(assembly, areas, intervals) && assembly.occupant() != null && !owners.contains(assembly.occupant())) return false;
-        }
-        return true;
-    }
-
     /** Checks every target before acquiring any lock. Call before accepting a movement sample. */
     public boolean acquire(List<UUID> owners, List<AABB> areas, List<Interval> intervals) {
+        return query(areas, intervals).acquire(owners);
+    }
+
+    /** Geometry is evaluated once; ownership is read again when this movement acquires its locks. */
+    public Query query(List<AABB> areas, List<Interval> intervals) {
         var touched = new ArrayList<UUID>();
         for (UUID id : candidates(areas, intervals)) {
             var assembly = graph.assembly(id);
-            if (!touches(assembly, areas, intervals)) continue;
-            if (assembly.occupant() != null && !owners.contains(assembly.occupant())) return false;
-            touched.add(id);
+            if (touches(assembly, areas, intervals)) touched.add(id);
         }
-        for (UUID id : touched) {
-            var assembly = graph.assembly(id);
-            if (assembly.occupant() == null) setOccupant(assembly, owners.getFirst());
+        return new Query(List.copyOf(touched));
+    }
+
+    /** A single movement's contacts, valid until topology or its areas/intervals change. */
+    public final class Query {
+        private final List<UUID> assemblies;
+
+        private Query(List<UUID> assemblies) { this.assemblies = assemblies; }
+
+        public boolean isEmpty() { return assemblies.isEmpty(); }
+
+        public boolean available(List<UUID> owners) {
+            for (UUID id : assemblies) {
+                UUID owner = graph.assembly(id).occupant();
+                if (owner != null && !owners.contains(owner)) return false;
+            }
+            return true;
         }
-        return true;
+
+        public boolean acquire(List<UUID> owners) {
+            if (!available(owners)) return false;
+            for (UUID id : assemblies) {
+                var assembly = graph.assembly(id);
+                if (assembly.occupant() == null) setOccupant(assembly, owners.getFirst());
+            }
+            return true;
+        }
     }
 
     /** Call only with a complete, validated member group. Missing members retain their locks. */

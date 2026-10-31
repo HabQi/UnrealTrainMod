@@ -54,8 +54,17 @@ public final class TrackPathSampler {
 
     /** Samples the track centerline using the route's direction and exact-joint convention. */
     public TrackPose sample(double s) {
+        return sample(s, 1);
+    }
+
+    /** Choose a member's outgoing side at exact joints; the returned frame still follows the route. */
+    public TrackPose sample(double s, int memberDirection) {
         var cursor = locate(s);
-        return route.geometry(cursor.segmentIndex()).sample(cursor.distance());
+        int index = cursor.segmentIndex();
+        if (memberDirection < 0 && cursor.distance() == 0 && index > 0) {
+            return route.geometry(index - 1).sample(route.segmentLength(index - 1));
+        }
+        return route.geometry(index).sample(cursor.distance());
     }
 
     /** Canonicalizes local endpoints so sampling a cursor and its global distance agree. */

@@ -274,12 +274,14 @@ public final class TrackConstructionManager {
         if (curve != null) grade = curve.gradeAlong(tangent);
         else if (session.end != null) {
             try {
-                double h = TrackPlacementGeometry.horizontal(session.start.position(), session.end.position(),
+                var horizontal = TrackPlacementGeometry.horizontal(session.start.position(), session.end.position(),
                         session.gauge, session.startCurve, session.endCurve,
-                        session.startHorizontalDirected, session.endHorizontalDirected).getLength();
-                grade = (session.end.position().y() - session.start.position().y()) / h * 1000;
+                        session.startHorizontalDirected, session.endHorizontalDirected);
+                grade = (session.end.position().y() - session.start.position().y()) / horizontal.getLength() * 1000;
+                return TrackPlacementGeometry.verticalDefaults(horizontal, session.start.position().y(), session.end.position().y(),
+                        session.startVertical, session.endVertical, start);
             } catch (IllegalArgumentException exception) {
-                // Invalid horizontal drafts still allow editing either page.
+                // Invalid drafts still allow editing either page.
             }
         }
         return new TrackVerticalCurveParameters(grade, curve == null ? defaultVerticalLength(session) : curve.length(),

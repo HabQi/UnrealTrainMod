@@ -17,5 +17,12 @@ public final class TrainControlProfile {
                 Math.max(0, -handle) / (double) BRAKE_NOTCHES, emergency);
     }
 
+    /** Recover the combined handle from a manual consist's normalized controls. */
+    public static int handle(TrainControlState control) {
+        if (control.emergencyBrake()) return 0;
+        return control.trainBrake() > 0 ? -(int) Math.round(control.trainBrake() * BRAKE_NOTCHES)
+                : (int) Math.round(control.throttle() * POWER_NOTCHES);
+    }
+
     public static String notch(int handle) { return handle == 0 ? "N" : handle > 0 ? "P" + handle : "B" + -handle; }
 }

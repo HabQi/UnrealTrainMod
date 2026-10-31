@@ -17,6 +17,12 @@ public record VehiclePose(Body body, Bogie frontBogie, Bogie rearBogie) {
     public record Body(TrackVector position, float yaw, float pitch) {
         public Quaternionf rotation() { return rotation(yaw, pitch); }
 
+        public Body interpolate(Body target, double fraction) {
+            return new Body(lerp(position, target.position, fraction),
+                    (float) Mth.rotLerp(fraction, (double) yaw, target.yaw),
+                    (float) Mth.lerp(fraction, (double) pitch, target.pitch));
+        }
+
         public static Quaternionf rotation(float yaw, float pitch) {
             return new Quaternionf().rotationY((float)Math.toRadians(-yaw)).rotateX((float)Math.toRadians(pitch));
         }
@@ -69,10 +75,7 @@ public record VehiclePose(Body body, Bogie frontBogie, Bogie rearBogie) {
     }
 
     public VehiclePose interpolate(VehiclePose target, double fraction) {
-        var nextBody = new Body(lerp(body.position, target.body.position, fraction),
-                (float)Mth.rotLerp(fraction, (double)body.yaw, target.body.yaw),
-                (float)Mth.lerp(fraction, (double)body.pitch, target.body.pitch));
-        return new VehiclePose(nextBody, frontBogie.interpolate(target.frontBogie, fraction),
+        return new VehiclePose(body.interpolate(target.body, fraction), frontBogie.interpolate(target.frontBogie, fraction),
                 rearBogie.interpolate(target.rearBogie, fraction));
     }
 

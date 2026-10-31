@@ -11,7 +11,7 @@ import net.minecraft.server.level.ServerPlayer;
 public final class TrainDriverSession {
     final UUID id = UUID.randomUUID();
     final ServerPlayer player;
-    final TrainConsist train;
+    TrainConsist train;
     final UUID vehicle;
     long sequence;
     int silentTicks;

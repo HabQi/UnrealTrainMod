@@ -7,16 +7,19 @@ package com.unrealtrainmod.train;
 import com.unrealtrainmod.track.TrackGraph;
 import com.unrealtrainmod.track.assembly.TrackAssemblyInstance;
 import com.unrealtrainmod.track.assembly.TrackTransitionResolver;
-import com.unrealtrainmod.vehicle.VehicleCatalog;
+import com.unrealtrainmod.track.assembly.TrackTraversalContext;
+import com.unrealtrainmod.track.path.TrackRoute;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /** Pure movement proposals, using route occurrences rather than segment IDs as positions. */
 final class TrainTurnoutMovement {
     record Action(UUID assemblyId, String pathId, boolean begin, boolean throwSwitch) {}
-    private record Part(TrackAssemblyInstance assembly, String pathId, double start, double length,
+    private record Part(UUID assemblyId, String pathId, double start, double length,
                         double pathStart, double pathLength, boolean aligned) {
         double distanceFromA(double position) {
             double local = Math.clamp(position - start, 0, length);
@@ -24,54 +27,54 @@ final class TrainTurnoutMovement {
         }
         boolean towardA(boolean forward) { return aligned != forward; }
     }
-    private final TrainConsist train;
+    private record PathPart(String pathId, double start, double length, boolean fromStart) {}
+    private final TrackGraph graph;
     private final List<Part> parts;
 
-    TrainTurnoutMovement(TrackGraph graph, TrainConsist train) {
-        this.train = train;
-        this.parts = parts(graph, train);
+    TrainTurnoutMovement(TrackGraph graph, TrackRoute route) {
+        this.graph = graph;
+        this.parts = parts(graph, route);
     }
 
-    private static List<Part> parts(TrackGraph graph, TrainConsist train) {
+    private static List<Part> parts(TrackGraph graph, TrackRoute route) {
         var result = new ArrayList<Part>();
+        var paths = new HashMap<UUID, Map<UUID, List<PathPart>>>();
         double start = 0;
-        for (int i = 0; i < train.route().connections().size(); i++) {
-            var connection = train.route().connections().get(i);
-            double length = train.route().segmentLength(i);
+        for (int i = 0; i < route.connections().size(); i++) {
+            var connection = route.connections().get(i);
+            double length = route.segmentLength(i);
             var assembly = graph.assemblyForSegment(connection.segmentId());
             if (assembly != null) {
-                for (var entry : assembly.paths().entrySet()) {
-                    double total = assembly.geometry().paths().get(entry.getKey()).stream().mapToDouble(g -> g.getLength()).sum();
-                    double prefix = 0;
-                    for (var step : entry.getValue().steps()) {
-                        double partLength = graph.segment(step.segmentId()).geometry().getLength();
-                        if (step.segmentId().equals(connection.segmentId())) {
-                            result.add(new Part(assembly, entry.getKey(), start, length, prefix, total, step.equals(connection)));
-                        }
-                        prefix += partLength;
-                    }
+                var bySegment = paths.computeIfAbsent(assembly.id(), ignored -> pathParts(graph, assembly));
+                for (var part : bySegment.get(connection.segmentId())) {
+                    result.add(new Part(assembly.id(), part.pathId(), start, length, part.start(), part.length(),
+                            part.fromStart() == connection.fromStart()));
                 }
             }
             start += length;
         }
+        return List.copyOf(result);
+    }
+
+    private static Map<UUID, List<PathPart>> pathParts(TrackGraph graph, TrackAssemblyInstance assembly) {
+        var result = new HashMap<UUID, List<PathPart>>();
+        for (var entry : assembly.paths().entrySet()) {
+            double total = assembly.geometry().paths().get(entry.getKey()).stream().mapToDouble(g -> g.getLength()).sum();
+            double prefix = 0;
+            for (var step : entry.getValue().steps()) {
+                result.computeIfAbsent(step.segmentId(), ignored -> new ArrayList<>())
+                        .add(new PathPart(entry.getKey(), prefix, total, step.fromStart()));
+                prefix += graph.segment(step.segmentId()).geometry().getLength();
+            }
+        }
         return result;
     }
 
-    private static double leadingBogie(TrainConsist train, boolean forward) {
-        double offset = forward ? Double.NEGATIVE_INFINITY : Double.POSITIVE_INFINITY;
-        for (var car : train.cars()) {
-            var spec = VehicleCatalog.find(car.modelId()).motionSpec();
-            double a = car.offset() + spec.frontBogieOffset(), b = car.offset() + spec.rearBogieOffset();
-            offset = forward ? Math.max(offset, Math.max(a, b)) : Math.min(offset, Math.min(a, b));
-        }
-        return offset;
-    }
-
-    double nextBoundary(double from, double next) {
+    double nextBoundary(TrainMotion.Prepared motion, double from, double next) {
         boolean forward = next > from;
-        double leading = leadingBogie(train, forward);
+        double leading = motion.leadingBogie(forward);
         for (var part : parts) {
-            if (!part.towardA(forward) || TrackTransitionResolver.isPathEnabled(part.assembly(), part.pathId())) continue;
+            if (!part.towardA(forward) || TrackTransitionResolver.isPathEnabled(graph.assembly(part.assemblyId()), part.pathId())) continue;
             double trigger = part.pathLength() * 0.1 - part.pathStart();
             if (trigger < 0 || trigger > part.length()) continue;
             double boundary = part.start() + (part.aligned() ? trigger : part.length() - trigger) - leading;
@@ -81,36 +84,36 @@ final class TrainTurnoutMovement {
         return next;
     }
 
-    List<Action> propose(double from, double to) {
+    List<Action> propose(TrainMotion.Prepared motion, TrackTraversalContext context, double from, double to) {
+        if (parts.isEmpty()) return List.of();
         boolean forward = to > from;
         double min = to, max = to;
-        for (var car : train.cars()) {
-            var model = VehicleCatalog.find(car.modelId());
-            min = Math.min(min, to + car.offset() + TrackOccupancyManager.rear(model));
-            max = Math.max(max, to + car.offset() + TrackOccupancyManager.front(model));
+        for (var car : motion.cars()) {
+            min = Math.min(min, to + car.offset() + car.rear());
+            max = Math.max(max, to + car.offset() + car.front());
         }
-        double bogie = to + leadingBogie(train, forward);
+        double bogie = to + motion.leadingBogie(forward);
         var actions = new LinkedHashMap<UUID, Action>();
-        var context = TrainRouteWindow.context(train, true);
         for (var part : parts) {
-            if (min >= part.start() + part.length() || max <= part.start()
-                    || TrackTransitionResolver.isPathEnabled(part.assembly(), part.pathId())) continue;
-            var passage = part.assembly().trailingPass();
-            if (!context.allows(part.assembly(), part.pathId(), !part.aligned())) {
+            if (min >= part.start() + part.length() || max <= part.start()) continue;
+            var assembly = graph.assembly(part.assemblyId());
+            if (TrackTransitionResolver.isPathEnabled(assembly, part.pathId())) continue;
+            var passage = assembly.trailingPass();
+            if (!context.allows(assembly, part.pathId(), !part.aligned())) {
                 throw new IllegalArgumentException("Closed turnout path cannot be entered in this direction");
             }
             boolean trigger = part.towardA(forward) && bogie >= part.start() - 1e-9 && bogie <= part.start() + part.length() + 1e-9
                     && part.distanceFromA(bogie) <= part.pathLength() * 0.1 + 1e-9;
-            var previous = actions.get(part.assembly().id());
+            var previous = actions.get(part.assemblyId());
             if (previous != null && !previous.pathId().equals(part.pathId())) {
                 throw new IllegalArgumentException("One consist cannot squeeze two different paths of the same turnout");
             }
-            actions.put(part.assembly().id(), new Action(part.assembly().id(), part.pathId(), passage == null,
+            actions.put(part.assemblyId(), new Action(part.assemblyId(), part.pathId(), passage == null,
                     trigger || previous != null && previous.throwSwitch()));
         }
         // A new lock must also preserve any already occupied, currently open path of this turnout.
         for (var part : parts) {
-            var action = actions.get(part.assembly().id());
+            var action = actions.get(part.assemblyId());
             if (action != null && min <= part.start() + part.length() && max >= part.start()
                     && !action.pathId().equals(part.pathId())) {
                 throw new IllegalArgumentException("Trailing passage would close another occupied path");

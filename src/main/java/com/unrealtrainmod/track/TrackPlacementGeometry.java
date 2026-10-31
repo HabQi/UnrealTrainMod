@@ -50,13 +50,43 @@ public final class TrackPlacementGeometry {
     public static List<TrackPoint> verticalControls(TrackGeometry horizontal, double startHeight, double endHeight,
                                                     TrackVerticalCurveParameters startVertical,
                                                     TrackVerticalCurveParameters endVertical) {
-        double h = horizontal.getLength(), average = (endHeight - startHeight) / h;
-        double h0 = startVertical == null ? h / 3 : startVertical.length();
-        double h1 = endVertical == null ? h / 3 : endVertical.length();
-        double g0 = startVertical == null ? average : startVertical.gradeAlong(horizontal.sample(0).tangent()) / 1000;
-        double g1 = endVertical == null ? average : endVertical.gradeAlong(horizontal.sample(h).tangent()) / 1000;
-        return List.of(new TrackPoint(h0, startHeight + g0 * h0),
-                new TrackPoint(h - h1, endHeight - g1 * h1));
+        double h = horizontal.getLength();
+        if (startVertical == null && endVertical == null) {
+            double rise = endHeight - startHeight;
+            return List.of(new TrackPoint(h / 3, startHeight + rise / 3),
+                    new TrackPoint(h - h / 3, endHeight - rise / 3));
+        }
+        TrackPoint startControl = startVertical == null ? null : new TrackPoint(startVertical.length(),
+                startHeight + startVertical.gradeAlong(horizontal.sample(0).tangent()) / 1000 * startVertical.length());
+        TrackPoint endControl = endVertical == null ? null : new TrackPoint(h - endVertical.length(),
+                endHeight - endVertical.gradeAlong(horizontal.sample(h).tangent()) / 1000 * endVertical.length());
+        // Collinear edges make the profile curvature zero at the automatic endpoint.
+        if (startControl == null) {
+            startControl = new TrackPoint(endControl.x() / 3,
+                    startHeight + (endControl.z() - startHeight) / 3);
+        }
+        if (endControl == null) {
+            endControl = new TrackPoint(h + (startControl.x() - h) / 3,
+                    endHeight + (startControl.z() - endHeight) / 3);
+        }
+        return List.of(startControl, endControl);
+    }
+
+    /** Editor values follow the actual profile control, including a single automatic endpoint. */
+    public static TrackVerticalCurveParameters verticalDefaults(TrackGeometry horizontal, double startHeight, double endHeight,
+                                                                 TrackVerticalCurveParameters startVertical,
+                                                                 TrackVerticalCurveParameters endVertical, boolean atStart) {
+        double h = horizontal.getLength();
+        var tangent = horizontal.sample(atStart ? 0 : h).tangent();
+        double yaw = TrackVerticalCurveParameters.yaw(tangent);
+        var curve = atStart ? startVertical : endVertical;
+        if (curve != null) return new TrackVerticalCurveParameters(curve.gradeAlong(tangent), curve.length(), yaw);
+        var control = verticalControls(horizontal, startHeight, endHeight, startVertical, endVertical).get(atStart ? 0 : 1);
+        double length = atStart ? control.x() : h - control.x();
+        if (length <= 0) throw new VerticalTrackGeometry.InvalidHandlesException();
+        double rise = atStart ? control.z() - startHeight : endHeight - control.z();
+        return new TrackVerticalCurveParameters(rise / length * 1000,
+                Math.clamp(length, TrackCurveParameters.MIN_LENGTH, TrackCurveParameters.MAX_LENGTH), yaw);
     }
 
     public static TrackGeometry horizontal(TrackVector start, TrackVector end, double gauge,

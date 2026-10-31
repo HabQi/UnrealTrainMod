@@ -12,7 +12,8 @@ import org.joml.Quaternionf;
 /** Two samples on one directed route; movement speed never affects model orientation. */
 public final class VehiclePoseSolver {
     public enum Failure { INSUFFICIENT_ROUTE, DEGENERATE_GEOMETRY }
-    public record Result(VehiclePose pose, Failure failure) {}
+    /** Successful results retain the exact rail samples for movement protection bounds. */
+    public record Result(VehiclePose pose, Failure failure, TrackVector frontTrackPosition, TrackVector rearTrackPosition) {}
     public record Range(double min, double max) {
         public boolean contains(double s) { return min <= s && s <= max; }
     }
@@ -20,24 +21,38 @@ public final class VehiclePoseSolver {
     private VehiclePoseSolver() {}
 
     public static Range range(double routeLength, VehicleMotionSpec spec) {
-        return new Range(Math.max(0, -spec.rearBogieOffset()),
-                Math.min(routeLength, routeLength - spec.frontBogieOffset()));
+        return range(routeLength, spec, 1);
+    }
+
+    public static Range range(double routeLength, VehicleMotionSpec spec, int direction) {
+        double front = direction * spec.frontBogieOffset(), rear = direction * spec.rearBogieOffset();
+        return new Range(Math.max(0, -Math.min(front, rear)),
+                Math.min(routeLength, routeLength - Math.max(front, rear)));
+    }
+
+    /** Keep exact physical endpoints when adding a signed bogie offset back to a reference. */
+    public static double sampleDistance(double reference, double offset, double routeLength) {
+        if (offset >= 0 && reference == routeLength - offset) return routeLength;
+        if (offset <= 0 && reference == -offset) return 0;
+        return reference + offset;
     }
 
     public static Result solve(TrackPathSampler sampler, double s, VehicleMotionSpec spec) {
-        var range = range(sampler.getLength(), spec);
-        if (!range.contains(s)) return new Result(null, Failure.INSUFFICIENT_ROUTE);
-        // Form exact endpoint coordinates without rounding (L - offset) + offset past L.
-        double frontS = s == range.max && spec.frontBogieOffset() >= 0
-                ? sampler.getLength() : s + spec.frontBogieOffset();
-        double rearS = s == range.min && spec.rearBogieOffset() <= 0 ? 0 : s + spec.rearBogieOffset();
-        var front = sampler.sample(frontS);
-        var rear = sampler.sample(rearS);
+        return solve(sampler, s, spec, 1);
+    }
+
+    public static Result solve(TrackPathSampler sampler, double s, VehicleMotionSpec spec, int direction) {
+        var range = range(sampler.getLength(), spec, direction);
+        if (!range.contains(s)) return new Result(null, Failure.INSUFFICIENT_ROUTE, null, null);
+        double frontS = sampleDistance(s, direction * spec.frontBogieOffset(), sampler.getLength());
+        double rearS = sampleDistance(s, direction * spec.rearBogieOffset(), sampler.getLength());
+        var front = sampler.sample(frontS, direction);
+        var rear = sampler.sample(rearS, direction);
         var delta = VehiclePose.subtract(front.position(), rear.position());
         double horizontal = Math.hypot(delta.x(), delta.z());
         double length = Math.hypot(horizontal, delta.y());
         if (!Double.isFinite(length) || length < 1e-6 || horizontal < 1e-6) {
-            return new Result(null, Failure.DEGENERATE_GEOMETRY);
+            return new Result(null, Failure.DEGENERATE_GEOMETRY, null, null);
         }
         float yaw = yaw(delta), pitch = pitch(delta);
         var rotation = VehiclePose.Body.rotation(yaw, pitch);
@@ -47,28 +62,30 @@ public final class VehiclePoseSolver {
                 (front.position().y() + rear.position().y()) * 0.5 - midpoint * delta.y() / length + up.y(),
                 (front.position().z() + rear.position().z()) * 0.5 - midpoint * delta.z() / length + up.z());
         if (!finite(p)) {
-            return new Result(null, Failure.DEGENERATE_GEOMETRY);
+            return new Result(null, Failure.DEGENERATE_GEOMETRY, null, null);
         }
         var body = new VehiclePose.Body(p, yaw, pitch);
         var inverse = rotation.conjugate();
-        var frontBogie = relative(front, body, inverse, spec.trackDatum());
-        var rearBogie = relative(rear, body, inverse, spec.trackDatum());
+        var frontBogie = relative(front, body, inverse, spec.trackDatum(), direction);
+        var rearBogie = relative(rear, body, inverse, spec.trackDatum(), direction);
         if (!finite(frontBogie.position()) || !finite(rearBogie.position())) {
-            return new Result(null, Failure.DEGENERATE_GEOMETRY);
+            return new Result(null, Failure.DEGENERATE_GEOMETRY, null, null);
         }
-        return new Result(new VehiclePose(body, frontBogie, rearBogie), null);
+        return new Result(new VehiclePose(body, frontBogie, rearBogie), null, front.position(), rear.position());
     }
 
     private static boolean finite(TrackVector p) {
         return Double.isFinite(p.x()) && Double.isFinite(p.y()) && Double.isFinite(p.z());
     }
 
-    private static VehiclePose.Bogie relative(TrackPose track, VehiclePose.Body body, Quaternionf inverse, double datum) {
+    private static VehiclePose.Bogie relative(TrackPose track, VehiclePose.Body body, Quaternionf inverse, double datum, int direction) {
         var p = track.position();
         var n = track.normal();
         var world = new TrackVector(p.x() + n.x() * datum, p.y() + n.y() * datum, p.z() + n.z() * datum);
         var position = VehiclePose.rotate(inverse, VehiclePose.subtract(world, body.position()));
-        var rotation = VehiclePose.Body.rotation(yaw(track.tangent()), pitch(track.tangent()));
+        var tangent = track.tangent();
+        var facing = new TrackVector(direction * tangent.x(), direction * tangent.y(), direction * tangent.z());
+        var rotation = VehiclePose.Body.rotation(yaw(facing), pitch(facing));
         return VehiclePose.Bogie.of(position, new Quaternionf(inverse).mul(rotation).normalize());
     }
 

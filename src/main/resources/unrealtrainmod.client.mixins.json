@@ -1,0 +1,12 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "com.unrealtrainmod.client.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "client": [
+    "TrainCameraMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

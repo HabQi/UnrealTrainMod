@@ -16,6 +16,8 @@ import com.unrealtrainmod.entity.PlacedModelEntity;
 import com.unrealtrainmod.entity.TrainEntity;
 import com.unrealtrainmod.item.ModelPlacerItem;
 import com.unrealtrainmod.item.HacksawItem;
+import com.unrealtrainmod.item.CrowbarItem;
+import com.unrealtrainmod.item.VehicleMoverItem;
 import com.unrealtrainmod.item.VehicleItem;
 import com.unrealtrainmod.item.TrackBuilderItem;
 import com.unrealtrainmod.item.TurnoutBuilderItem;
@@ -83,6 +85,10 @@ public class UnrealTrainMod {
             "turnout_builder", TurnoutBuilderItem::new, new Item.Properties().stacksTo(1));
     public static final DeferredItem<HacksawItem> HACKSAW = ITEMS.registerItem(
             "hacksaw", HacksawItem::new, new Item.Properties().stacksTo(1));
+    public static final DeferredItem<CrowbarItem> CROWBAR = ITEMS.registerItem(
+            "crowbar", CrowbarItem::new, new Item.Properties().stacksTo(1));
+    public static final DeferredItem<VehicleMoverItem> VEHICLE_MOVER = ITEMS.registerItem(
+            "vehicle_mover", VehicleMoverItem::new, new Item.Properties().stacksTo(1));
 
     public static final DeferredHolder<CreativeModeTab, CreativeModeTab> MOD_TAB = CREATIVE_MODE_TABS.register("example_tab", () -> CreativeModeTab.builder()
             .title(Component.translatable("itemGroup.unrealtrainmod"))
@@ -95,6 +101,8 @@ public class UnrealTrainMod {
                 output.accept(TRACK_WRENCH.get());
                 output.accept(TURNOUT_BUILDER.get());
                 output.accept(HACKSAW.get());
+                output.accept(CROWBAR.get());
+                output.accept(VEHICLE_MOVER.get());
                 output.accept(VEHICLE.get());
             }).build());
 

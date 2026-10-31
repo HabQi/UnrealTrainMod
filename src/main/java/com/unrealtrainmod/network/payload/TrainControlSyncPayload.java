@@ -13,7 +13,7 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
-/** Only the current driver receives this authoritative snapshot, including input acknowledgement. */
+/** Driver-facing directions and signed motion/force values; includes authoritative input acknowledgement. */
 public record TrainControlSyncPayload(UUID session, ResourceLocation dimension, UUID train, UUID vehicle,
                                       boolean open, long sequence, int handle, Reverser reverser,
                                       boolean emergency, double speed, double acceleration, double grade,

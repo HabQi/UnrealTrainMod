@@ -33,19 +33,27 @@ public final class TrackOccupancyManager {
         return Math.max(0, Math.max(model.bounds().maxZ(), Math.max(spec.frontCouplerOffset(), spec.frontBogieOffset())));
     }
 
+    static double rear(VehicleDefinition model, int direction) {
+        return direction > 0 ? rear(model) : -front(model);
+    }
+
+    static double front(VehicleDefinition model, int direction) {
+        return direction > 0 ? front(model) : -rear(model);
+    }
+
     /** The connected consist covers its members and the short gaps between them. */
     static List<Interval> footprint(TrainConsist train, double progress) {
         double min = progress, max = progress;
         for (var car : train.cars()) {
             var model = VehicleCatalog.find(car.modelId());
             double reference = progress + car.offset();
-            min = Math.min(min, reference + rear(model));
-            max = Math.max(max, reference + front(model));
+            min = Math.min(min, reference + rear(model, car.direction()));
+            max = Math.max(max, reference + front(model, car.direction()));
         }
         return project(train.route(), min, max);
     }
 
-    private static List<Interval> project(TrackRoute route, double min, double max) {
+    static List<Interval> project(TrackRoute route, double min, double max) {
         min = Math.clamp(min, 0, route.getLength());
         max = Math.clamp(max, 0, route.getLength());
         var intervals = new ArrayList<Interval>();

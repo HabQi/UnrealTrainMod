@@ -9,7 +9,7 @@ import com.unrealtrainmod.track.path.TrackRoute;
 import java.util.List;
 import java.util.UUID;
 
-/** Persistent ordered membership and server-owned runtime state for one or two same-facing cars. */
+/** Persistent membership, member orientations and server-owned runtime state for one or two cars. */
 public final class TrainConsist {
     public enum StopReason {
         STOPPED, END_OF_ROUTE, UNLOADED_AREA, INVALID_POSITION, TRACK_CHANGED,
@@ -94,7 +94,10 @@ public final class TrainConsist {
         stopReason = StopReason.STOPPED;
     }
 
-    void setControl(TrainControlState control) { this.control = control; }
+    void setControl(TrainControlState control) {
+        if (!this.control.equals(control)) stopReason = StopReason.STOPPED;
+        this.control = control;
+    }
 
     void startManual(TrainControlState control) {
         commandControlled = false;
@@ -108,7 +111,11 @@ public final class TrainConsist {
     }
 
     void stop(StopReason reason) {
-        simulationActive = false;
+        stop(reason, false);
+    }
+
+    void stop(StopReason reason, boolean keepSimulationActive) {
+        simulationActive = keepSimulationActive;
         commandControlled = false;
         dynamics.stop();
         control = new TrainControlState(control.reverser(), 0, 1, false);

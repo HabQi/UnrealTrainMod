@@ -12,6 +12,7 @@ import com.unrealtrainmod.track.path.TrackCursor;
 import com.unrealtrainmod.track.path.TrackPathSampler;
 import com.unrealtrainmod.track.path.TrackRoute;
 import com.unrealtrainmod.vehicle.VehicleCatalog;
+import com.unrealtrainmod.vehicle.VehicleMotionSpec;
 import com.unrealtrainmod.vehicle.VehiclePoseSolver;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -26,6 +27,7 @@ final class TrainRouteWindow {
     private static final double REAR_MARGIN = 32;
     private final TrackRoute route;
     private final TrackPathSampler sampler;
+    private TrainTurnoutMovement turnoutMovement;
     private final Set<UUID> nodes;
     private final Map<UUID, List<Integer>> segments;
     private final boolean startBoundary;
@@ -70,8 +72,8 @@ final class TrainRouteWindow {
         }
         for (var car : train.cars()) {
             var model = VehicleCatalog.find(car.modelId());
-            min = Math.min(min, car.offset() + TrackOccupancyManager.rear(model));
-            max = Math.max(max, car.offset() + TrackOccupancyManager.front(model));
+            min = Math.min(min, car.offset() + TrackOccupancyManager.rear(model, car.direction()));
+            max = Math.max(max, car.offset() + TrackOccupancyManager.front(model, car.direction()));
         }
         double speed = train.planningSpeed();
         double ahead = Math.max(64, 2 * Math.abs(speed));
@@ -97,6 +99,10 @@ final class TrainRouteWindow {
 
     TrackRoute route() { return route; }
     TrackPathSampler sampler() { return sampler; }
+    TrainTurnoutMovement turnoutMovement(TrackGraph graph) {
+        if (turnoutMovement == null) turnoutMovement = new TrainTurnoutMovement(graph, route);
+        return turnoutMovement;
+    }
     double progress() { return progress; }
     boolean startBoundary() { return startBoundary; }
     boolean endBoundary() { return endBoundary; }
@@ -130,6 +136,22 @@ final class TrainRouteWindow {
 
     TrainRouteWindow copyAt(TrackGraph graph, double reference) {
         var copy = new TrainRouteWindow(graph, route, reference, startBoundary, endBoundary, preparedSpeed);
+        copy.requestRefresh();
+        return copy;
+    }
+
+    /** Rebase a detached reversed member into its own forward-facing route without moving it. */
+    TrainRouteWindow reversedAt(TrackGraph graph, double reference, VehicleMotionSpec spec) {
+        var reversedRoute = route.reversed();
+        var cursor = sampler.locate(reference);
+        int index = reversedRoute.connections().size() - 1 - cursor.segmentIndex();
+        double local = route.segmentLength(cursor.segmentIndex()) - cursor.distance();
+        var copy = new TrainRouteWindow(graph, reversedRoute, 0, endBoundary, startBoundary, -preparedSpeed);
+        copy.setProgress(copy.sampler().distance(new TrackCursor(index, local)));
+        var oldRange = VehiclePoseSolver.range(route.getLength(), spec, -1);
+        var newRange = VehiclePoseSolver.range(reversedRoute.getLength(), spec);
+        if (reference == oldRange.max()) copy.setProgress(newRange.min());
+        else if (reference == oldRange.min()) copy.setProgress(newRange.max());
         copy.requestRefresh();
         return copy;
     }
@@ -185,19 +207,18 @@ final class TrainRouteWindow {
         double min = at, max = at;
         for (var car : train.cars()) {
             var spec = VehicleCatalog.find(car.modelId()).motionSpec();
-            var range = VehiclePoseSolver.range(route.getLength(), spec);
+            int direction = car.direction();
+            var range = VehiclePoseSolver.range(route.getLength(), spec, direction);
             double reference = TrainMotion.carProgress(at, car.offset(), range);
             // Match solve()'s arithmetic order and exact endpoints; combined offsets can round
             // to the other side of a joint and accidentally omit a bogie's outgoing segment.
-            double front = reference == range.max() && spec.frontBogieOffset() >= 0
-                    ? route.getLength() : reference + spec.frontBogieOffset();
-            double rear = reference == range.min() && spec.rearBogieOffset() <= 0
-                    ? 0 : reference + spec.rearBogieOffset();
+            double front = VehiclePoseSolver.sampleDistance(reference, direction * spec.frontBogieOffset(), route.getLength());
+            double rear = VehiclePoseSolver.sampleDistance(reference, direction * spec.rearBogieOffset(), route.getLength());
             min = Math.min(min, Math.min(reference, Math.min(front, rear)));
             max = Math.max(max, Math.max(reference, Math.max(front, rear)));
             var model = VehicleCatalog.find(car.modelId());
-            min = Math.min(min, reference + TrackOccupancyManager.rear(model));
-            max = Math.max(max, reference + TrackOccupancyManager.front(model));
+            min = Math.min(min, reference + TrackOccupancyManager.rear(model, direction));
+            max = Math.max(max, reference + TrackOccupancyManager.front(model, direction));
         }
         // Whole-consist range checks own validity; absorb endpoint arithmetic rounding here.
         return new Span(Math.clamp(min, 0, route.getLength()), Math.clamp(max, 0, route.getLength()));

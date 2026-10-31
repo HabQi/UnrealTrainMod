@@ -1,0 +1,29 @@
+{
+  "parent": "minecraft:block/block",
+  "textures": { "particle": "minecraft:block/iron_block", "metal": "minecraft:block/iron_block", "handle": "minecraft:block/yellow_concrete", "wheel": "minecraft:block/black_concrete" },
+  "elements": [
+    { "from": [3, 2, 5], "to": [13, 4, 11], "faces": {
+      "north": {"texture": "#handle"}, "south": {"texture": "#handle"}, "east": {"texture": "#handle"},
+      "west": {"texture": "#handle"}, "up": {"texture": "#handle"}, "down": {"texture": "#handle"} } },
+    { "from": [3, 0, 4], "to": [6, 3, 7], "faces": {
+      "north": {"texture": "#wheel"}, "south": {"texture": "#wheel"}, "east": {"texture": "#wheel"},
+      "west": {"texture": "#wheel"}, "up": {"texture": "#wheel"}, "down": {"texture": "#wheel"} } },
+    { "from": [10, 0, 9], "to": [13, 3, 12], "faces": {
+      "north": {"texture": "#wheel"}, "south": {"texture": "#wheel"}, "east": {"texture": "#wheel"},
+      "west": {"texture": "#wheel"}, "up": {"texture": "#wheel"}, "down": {"texture": "#wheel"} } },
+    { "from": [7, 4, 7], "to": [9, 13, 9], "faces": {
+      "north": {"texture": "#metal"}, "south": {"texture": "#metal"}, "east": {"texture": "#metal"},
+      "west": {"texture": "#metal"}, "up": {"texture": "#metal"}, "down": {"texture": "#metal"} } },
+    { "from": [4, 13, 7], "to": [12, 15, 9], "faces": {
+      "north": {"texture": "#handle"}, "south": {"texture": "#handle"}, "east": {"texture": "#handle"},
+      "west": {"texture": "#handle"}, "up": {"texture": "#handle"}, "down": {"texture": "#handle"} } }
+  ],
+  "gui_light": "front",
+  "display": {
+    "gui": { "rotation": [20, 30, -15], "scale": [0.9, 0.9, 0.9] },
+    "thirdperson_righthand": { "rotation": [0, -90, 35], "translation": [0, 2, 0.5], "scale": [0.7, 0.7, 0.7] },
+    "thirdperson_lefthand": { "rotation": [0, 90, -35], "translation": [0, 2, 0.5], "scale": [0.7, 0.7, 0.7] },
+    "firstperson_righthand": { "rotation": [0, -90, 20], "translation": [1.13, 3.2, 1.13], "scale": [0.7, 0.7, 0.7] },
+    "firstperson_lefthand": { "rotation": [0, 90, -20], "translation": [1.13, 3.2, 1.13], "scale": [0.7, 0.7, 0.7] }
+  }
+}

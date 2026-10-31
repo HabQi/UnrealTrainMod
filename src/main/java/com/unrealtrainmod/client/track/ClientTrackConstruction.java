@@ -128,8 +128,10 @@ public final class ClientTrackConstruction {
                         draft.startHorizontalDirected(), draft.endHorizontalDirected());
                 grade = (draft.end().position().y() - draft.start().position().y()) / flat.getLength() * 1000;
                 length = Math.clamp(flat.getLength() / 3, TrackCurveParameters.MIN_LENGTH, TrackCurveParameters.MAX_LENGTH);
+                return TrackPlacementGeometry.verticalDefaults(flat, draft.start().position().y(), draft.end().position().y(),
+                        startVertical, endVertical, start);
             } catch (IllegalArgumentException exception) {
-                // Keep both pages editable while the horizontal draft is invalid.
+                // Keep both pages editable while the draft is invalid.
             }
         }
         return new TrackVerticalCurveParameters(grade, length, TrackVerticalCurveParameters.yaw(tangent));

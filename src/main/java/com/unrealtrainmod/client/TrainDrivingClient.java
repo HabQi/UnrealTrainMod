@@ -10,6 +10,7 @@ import com.unrealtrainmod.network.payload.TrainControlInputPayload;
 import com.unrealtrainmod.network.payload.TrainControlSyncPayload;
 import com.unrealtrainmod.train.TrainControlProfile;
 import com.unrealtrainmod.train.TrainControlState.Reverser;
+import com.unrealtrainmod.train.TrainConsist.StopReason;
 import java.util.Locale;
 import java.util.ArrayList;
 import java.util.List;
@@ -174,7 +175,8 @@ public final class TrainDrivingClient {
         var direction = Component.translatable(PREFIX + "direction." + state.reverser().name().toLowerCase(Locale.ROOT));
         boolean releasing = state.handle() > 0 && state.brakeForce() > 0 && state.reverser() != Reverser.NEUTRAL;
         var condition = Component.translatable(PREFIX + (state.emergency() ? "state.emergency"
-                : releasing ? "state.brake_releasing" : state.speed() == 0 ? "state.stopped" : "state.running"));
+                : releasing ? "state.brake_releasing" : state.speed() != 0 ? "state.running"
+                : state.stopReason() == StopReason.END_OF_ROUTE ? "state.end_of_route" : "state.stopped"));
         Component brakeDemand = state.emergency() ? Component.translatable(PREFIX + "brake_emergency")
                 : Component.literal(number(Math.max(0, -state.handle()) * 100.0 / TrainControlProfile.BRAKE_NOTCHES) + "%");
         Component[] lines = {

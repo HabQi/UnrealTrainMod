@@ -5,6 +5,7 @@
 package com.unrealtrainmod.train;
 
 import com.unrealtrainmod.vehicle.VehicleCatalog;
+import com.unrealtrainmod.vehicle.VehiclePoseSolver;
 
 /** Power-limited traction and independent brake response; movement acceptance remains in TrainManager. */
 public final class TrainDynamics {
@@ -17,9 +18,23 @@ public final class TrainDynamics {
         double magnitude = Math.abs(oldSpeed);
         double mass = 0, availableTraction = 0, serviceBrake = 0, rolling = 0, drag = 0;
         double slopeForce = 0, weightedGrade = 0, maxSpeed = TrainConsist.MAX_SPEED;
+        var sampler = train.sampler();
+        double routeLength = sampler.getLength();
         for (var car : train.cars()) {
-            var spec = VehicleCatalog.find(car.modelId()).performanceSpec();
-            var tangent = train.sampler().sample(train.progress() + car.offset()).tangent();
+            var model = VehicleCatalog.find(car.modelId());
+            var spec = model.performanceSpec();
+            var motion = model.motionSpec();
+            int direction = car.direction();
+            var range = VehiclePoseSolver.range(routeLength, motion, direction);
+            double reference = TrainMotion.carProgress(train.progress(), car.offset(), range);
+            double frontS = VehiclePoseSolver.sampleDistance(reference, direction * motion.frontBogieOffset(), routeLength);
+            double rearS = VehiclePoseSolver.sampleDistance(reference, direction * motion.rearBogieOffset(), routeLength);
+            var front = sampler.sample(frontS, direction).position();
+            var rear = sampler.sample(rearS, direction).position();
+            double horizontal = Math.hypot(front.x() - rear.x(), front.z() - rear.z());
+            // Match the body's bogie chord, then express its rise in the consist route frame.
+            double rise = direction * (front.y() - rear.y());
+            double length = Math.hypot(horizontal, rise);
             mass += spec.mass();
             if (spec.ratedPower() > 0) {
                 availableTraction += magnitude == 0 ? spec.maxTractiveEffort()
@@ -28,8 +43,8 @@ public final class TrainDynamics {
             serviceBrake += spec.maxServiceBrakeForce();
             rolling += spec.mass() * spec.rollingResistance();
             drag += spec.dragCoefficient() * oldSpeed * oldSpeed;
-            slopeForce -= spec.mass() * 9.80665 * tangent.y();
-            weightedGrade += spec.mass() * tangent.y() / Math.hypot(tangent.x(), tangent.z());
+            slopeForce -= spec.mass() * 9.80665 * rise / length;
+            weightedGrade += spec.mass() * rise / horizontal;
             maxSpeed = Math.min(maxSpeed, spec.maxSpeed());
         }
         if (train.commandControlled()) {

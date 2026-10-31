@@ -11,15 +11,18 @@ import com.unrealtrainmod.track.TrackSegmentChange;
 import com.unrealtrainmod.track.assembly.TrackAssemblyInstance;
 import com.unrealtrainmod.track.assembly.TrackReservationManager;
 import com.unrealtrainmod.track.assembly.TrackTransitionResolver;
+import com.unrealtrainmod.track.assembly.TrackTraversalContext;
 import com.unrealtrainmod.track.block.TrackBlockManager;
 import com.unrealtrainmod.track.geometry.TrackVector;
 import com.unrealtrainmod.train.TrainConsist.StopReason;
 import com.unrealtrainmod.train.map.TrainMapData;
 import com.unrealtrainmod.vehicle.VehicleCatalog;
+import com.unrealtrainmod.vehicle.VehicleDefinition;
 import com.unrealtrainmod.vehicle.VehicleMotionSpec;
 import com.unrealtrainmod.vehicle.VehiclePose;
 import com.unrealtrainmod.vehicle.VehiclePoseSolver;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
@@ -76,6 +79,11 @@ public final class TrainManager {
                                 VehiclePose pose, TrainAnchor anchor, AABB bounds) {}
     private record Candidate(double progress, List<CarCandidate> cars) {
         List<AABB> areas() { return cars.stream().map(CarCandidate::bounds).toList(); }
+    }
+    private record MovementStep(Candidate candidate, List<AABB> actual,
+                                List<TrackOccupancyManager.Interval> intervals, TrackReservationManager.Query reservations) {}
+    private record CouplerPair(boolean referenceFront, boolean otherFront, double distanceSquared) {
+        int direction() { return referenceFront == otherFront ? -1 : 1; }
     }
 
     private TrainManager(ServerLevel level) {
@@ -242,7 +250,7 @@ public final class TrainManager {
         var snapshot = new TrainConsist(train.id(), train.cars(), train.configuredSpeed());
         snapshot.setWindow(TrainRouteWindow.initial(tracks, train.anchor(), train));
         for (var car : train.cars()) {
-            if (!TrainMotion.matchesAt(snapshot.window(), car.anchor(), snapshot.progress() + car.offset())) {
+            if (!TrainMotion.matchesAt(snapshot.window(), car, snapshot.progress() + car.offset())) {
                 throw new IllegalArgumentException("Saved member anchors disagree");
             }
         }
@@ -282,7 +290,7 @@ public final class TrainManager {
                         var pose = segment.geometry().sample(anchor.distance());
                         position = pose.position();
                         source = TrainMapData.PositionSource.SAVED;
-                        double direction = (anchor.fromStart() ? 1 : -1) * Math.signum(train.actualSpeed());
+                        double direction = (anchor.fromStart() ? 1 : -1) * car.direction() * Math.signum(train.actualSpeed());
                         dx = pose.tangent().x() * direction;
                         dz = pose.tangent().z() * direction;
                     }
@@ -387,7 +395,7 @@ public final class TrainManager {
     private TrainConsist single(TrainEntity entity, UUID id, TrainAnchor anchor, double speed) {
         var modelId = entity.getModelId();
         if (modelId == null) throw new StateException(StopReason.MISSING_MODEL);
-        return new TrainConsist(id, List.of(new TrainCarState(entity.getUUID(), modelId, 0, anchor)), speed);
+        return new TrainConsist(id, List.of(new TrainCarState(entity.getUUID(), modelId, 0, false, anchor)), speed);
     }
 
     private static boolean matches(TrainEntity entity, TrainConsist train, TrainCarState car) {
@@ -459,6 +467,10 @@ public final class TrainManager {
         if (train.running() || train.commandControlled() && train.commandTarget() != 0) {
             throw new StateException(StopReason.CONSIST_NOT_STOPPED);
         }
+        return readyMembers(train);
+    }
+
+    private List<TrainEntity> readyMembers(TrainConsist train) {
         var entities = loadedMembers(train);
         if (!isRestored(train) || train.routeDirty()) throw new StateException(StopReason.CONSIST_NOT_READY);
         for (int i = 0; i < entities.size(); i++) {
@@ -495,9 +507,9 @@ public final class TrainManager {
             }
             return;
         }
-        var survivor = train.cars().stream().filter(car -> !car.entityId().equals(entityId)).findFirst().orElseThrow().asSingle();
+        var survivor = train.cars().stream().filter(car -> !car.entityId().equals(entityId)).findFirst().orElseThrow();
         remove(train);
-        var remaining = new TrainConsist(train.id(), List.of(survivor), train.configuredSpeed());
+        var remaining = new TrainConsist(train.id(), List.of(survivor.asSingle()), train.configuredSpeed() * survivor.direction());
         put(remaining);
         try {
             graph();
@@ -567,22 +579,31 @@ public final class TrainManager {
     }
 
     private CarCandidate solveCar(TrainConsist train, TrainCarState car, TrainEntity entity, double progress) {
-        var spec = VehicleCatalog.find(car.modelId()).motionSpec();
-        var solved = VehiclePoseSolver.solve(train.sampler(), progress, spec);
+        return solveCar(train, car, entity, progress, VehicleCatalog.find(car.modelId()));
+    }
+
+    private CarCandidate solveCar(TrainConsist train, TrainCarState car, TrainEntity entity, double progress,
+                                  VehicleDefinition model) {
+        var spec = model.motionSpec();
+        var solved = VehiclePoseSolver.solve(train.sampler(), progress, spec, car.direction());
         if (solved.failure() != null) throw new StateException(poseFailure(solved.failure()));
         var pose = solved.pose();
-        return new CarCandidate(car, entity, progress, pose, TrainMotion.anchor(train.route(), train.sampler(), progress),
-                protectedArea(entity, train, progress, spec, pose));
+        return new CarCandidate(car, entity, progress, pose, TrainMotion.anchor(train.route(), train.sampler(), progress, car.direction()),
+                protectedArea(model, solved));
     }
 
     private Candidate calculate(TrainConsist train, List<TrainEntity> entities, double progress) {
-        if (!TrainMotion.range(train).contains(progress)) throw new StateException(StopReason.INSUFFICIENT_ROUTE);
+        return calculate(train, entities, progress, TrainMotion.prepare(train));
+    }
+
+    private Candidate calculate(TrainConsist train, List<TrainEntity> entities, double progress, TrainMotion.Prepared motion) {
+        if (!motion.range().contains(progress)) throw new StateException(StopReason.INSUFFICIENT_ROUTE);
         var cars = new ArrayList<CarCandidate>(train.cars().size());
         for (int i = 0; i < train.cars().size(); i++) {
             var car = train.cars().get(i);
-            var range = VehiclePoseSolver.range(train.route().getLength(), VehicleCatalog.find(car.modelId()).motionSpec());
-            double local = TrainMotion.carProgress(progress, car.offset(), range);
-            cars.add(solveCar(train, car, entities.get(i), local));
+            var prepared = motion.cars().get(i);
+            double local = TrainMotion.carProgress(progress, car.offset(), prepared.range());
+            cars.add(solveCar(train, car, entities.get(i), local, prepared.model()));
         }
         return new Candidate(progress, List.copyOf(cars));
     }
@@ -597,20 +618,52 @@ public final class TrainManager {
         return areas;
     }
 
-    private void check(TrainConsist train, List<AABB> areas, List<TrackOccupancyManager.Interval> intervals) {
-        check(train, areas, intervals, train.progress(), false);
+    private MovementStep calculateStep(TrainConsist train, List<TrainEntity> entities, List<AABB> previous, double next,
+                                       TrainMotion.Prepared motion, TrackTraversalContext context) {
+        var candidate = calculate(train, entities, next, motion);
+        var actual = candidate.areas();
+        var areas = swept(previous, actual);
+        var intervals = motion.footprint(next);
+        var query = check(train, areas, intervals, next, context);
+        return new MovementStep(candidate, actual, intervals, query);
     }
 
-    private void check(TrainConsist train, List<AABB> areas, List<TrackOccupancyManager.Interval> intervals,
-                       double at, boolean candidates) {
+    /** Speculation stays read-only; a rejected whole-tick move falls back to the original substeps. */
+    private MovementStep tryStraightStep(TrainConsist train, List<TrainEntity> entities, List<AABB> previous, double target,
+                                         TrainMotion.Prepared motion, TrackTraversalContext context) {
+        if (!TrainMotion.isSingleStraight(graph, motion, train.progress(), target)) return null;
+        try {
+            var start = calculate(train, entities, train.progress(), motion).areas();
+            var step = calculateStep(train, entities, swept(previous, start), target, motion, context);
+            if (!step.reservations().isEmpty()) return null;
+            return step;
+        } catch (StateException exception) {
+            // Let the fine path accept its valid prefix and report the original stop reason.
+            return null;
+        }
+    }
+
+    private TrackReservationManager.Query check(TrainConsist train, List<AABB> areas, List<TrackOccupancyManager.Interval> intervals) {
+        return check(train, areas, intervals, train.progress(), false);
+    }
+
+    private TrackReservationManager.Query check(TrainConsist train, List<AABB> areas, List<TrackOccupancyManager.Interval> intervals,
+                                                double at, boolean candidates) {
+        return check(train, areas, intervals, at, TrainRouteWindow.context(train, candidates));
+    }
+
+    private TrackReservationManager.Query check(TrainConsist train, List<AABB> areas, List<TrackOccupancyManager.Interval> intervals,
+                                                double at, TrackTraversalContext context) {
         for (var area : areas) {
             var failure = areaFailure(area);
             if (failure != null) throw new StateException(failure);
         }
-        if (!train.window().pathsEnabledAt(graph, train, at, TrainRouteWindow.context(train, candidates))) {
+        if (!train.window().pathsEnabledAt(graph, train, at, context)) {
             throw new StateException(StopReason.TURNOUT_ROUTE_UNAVAILABLE);
         }
-        if (!reservations.available(memberIds(train), areas, intervals)) throw new StateException(StopReason.TURNOUT_OCCUPIED);
+        var query = reservations.query(areas, intervals);
+        if (!query.available(context.members())) throw new StateException(StopReason.TURNOUT_OCCUPIED);
+        return query;
     }
 
     private void saveCandidate(TrainConsist train, Candidate candidate, List<TrackOccupancyManager.Interval> intervals) {
@@ -642,8 +695,10 @@ public final class TrainManager {
         if (reason == StopReason.INCOMPLETE_CONSIST || reason == StopReason.MEMBER_MISMATCH || reason == StopReason.MISSING_MODEL) {
             restored.remove(train.id());
         }
-        train.stop(reason);
-        drivers.close(train);
+        boolean keepDriver = reason == StopReason.END_OF_ROUTE && drivers.hasDriver(train);
+        train.stop(reason, keepDriver);
+        if (keepDriver) drivers.stoppedAtEnd(train);
+        else drivers.close(train);
         sync(train);
     }
 
@@ -661,7 +716,7 @@ public final class TrainManager {
             var relocate = new ArrayList<Boolean>(entities.size());
             for (var car : candidate.cars()) {
                 boolean move = car.entity().hasInvalidAnchor()
-                        || !TrainMotion.matchesAt(train.window(), car.entity().getRailAnchor(), car.progress());
+                        || !TrainMotion.matchesAt(train.window(), car.member().withAnchor(car.entity().getRailAnchor()), car.progress());
                 relocate.add(move);
                 areas.add(move ? car.bounds() : TrackReservationManager.area(car.entity()));
             }
@@ -692,7 +747,7 @@ public final class TrainManager {
 
     private static void checkCheckpoint(TrainConsist train, Candidate candidate) {
         for (var car : candidate.cars()) {
-            if (!TrainMotion.matchesAt(train.window(), car.member().anchor(), car.progress())) {
+            if (!TrainMotion.matchesAt(train.window(), car.member(), car.progress())) {
                 throw new StateException(StopReason.INVALID_ANCHOR);
             }
         }
@@ -825,72 +880,135 @@ public final class TrainManager {
         return train != null && train.cars().size() > 1 ? StopReason.UNCOUPLE_REQUIRED : null;
     }
 
-    public StopReason couple(TrainEntity front, TrainEntity rear) {
-        if (front == rear || front.level() != level || rear.level() != level) return StopReason.COUPLING_REJECTED;
+    /** A manual push validates its complete sweep before committing any position or reservation. */
+    public StopReason nudge(TrainEntity entity, boolean forward) {
         try {
-            var first = registered(front);
-            var second = registered(rear);
-            if (drivers.hasDriver(first) || drivers.hasDriver(second)) return StopReason.DRIVER_PRESENT;
-            if (first == second || first.cars().size() != 1 || second.cars().size() != 1) return StopReason.UNCOUPLE_REQUIRED;
-            requireReady(first);
-            requireReady(second);
-            var firstSpec = VehicleCatalog.find(front.getModelId()).motionSpec();
-            var rearSpec = VehicleCatalog.find(rear.getModelId()).motionSpec();
-            double gap = Math.max(firstSpec.defaultCouplerGap(), rearSpec.defaultCouplerGap());
-            double offset = firstSpec.rearCouplerOffset() - rearSpec.frontCouplerOffset() - gap;
-            if (!Double.isFinite(offset)) return StopReason.COUPLING_REJECTED;
-            var members = List.of(first.cars().getFirst(),
-                    new TrainCarState(rear.getUUID(), rear.getModelId(), offset, second.anchor()));
-            var combined = new TrainConsist(first.id(), members, first.configuredSpeed());
-            prepare(combined, List.of(front, rear));
-            double target = TrainMotion.carProgress(combined.progress(), offset,
-                    VehiclePoseSolver.range(combined.route().getLength(), rearSpec));
-            double from;
-            try {
-                from = TrainMotion.nearestDistance(combined.window(), second.anchor(), target);
-            } catch (IllegalArgumentException exception) {
-                return StopReason.COUPLING_REJECTED;
-            }
-            var candidate = calculate(combined, List.of(front, rear), combined.progress());
-            if (Math.abs(target - from) > 0.5) return StopReason.COUPLING_REJECTED;
-            var a = coupler(front, firstSpec.rearCouplerOffset());
-            var b = coupler(rear, rearSpec.frontCouplerOffset());
-            double couplerDistance = Math.hypot(Math.hypot(a.x() - b.x(), a.z() - b.z()), a.y() - b.y());
-            if (!Double.isFinite(couplerDistance) || couplerDistance > gap + 1) {
-                return StopReason.COUPLING_REJECTED;
-            }
-            var actual = currentAreas(List.of(front, rear));
-            // Include old saved poses even when the along-route adjustment is zero.
-            var alignment = swept(actual, candidate.areas());
-            var intervals = TrackOccupancyManager.footprint(combined, candidate.progress());
-            if (reservations.touchesTurnout(alignment, intervals)) return StopReason.TURNOUT_OPERATION_BLOCKED;
-            check(combined, alignment, intervals);
-            var previous = actual.get(1);
-            double accepted = from;
-            var sampleOffsets = TrainMotion.sampleOffsets(rearSpec);
-            while (accepted != target) {
-                double next = TrainMotion.nextStep(combined.route(), combined.sampler(), sampleOffsets, accepted, target);
-                var car = solveCar(combined, members.get(1), rear, next);
-                var sweep = previous.minmax(car.bounds());
-                if (reservations.touchesTurnout(List.of(sweep), intervals)) return StopReason.TURNOUT_OPERATION_BLOCKED;
-                check(combined, List.of(sweep), intervals);
-                previous = car.bounds();
-                accepted = next;
-            }
-            remove(second);
-            put(combined);
-            saveCandidate(combined, candidate, intervals);
-            front.setRailAnchor(candidate.cars().getFirst().anchor());
-            rear.setTrainId(combined.id());
-            rear.setRailAnchor(candidate.cars().get(1).anchor());
-            rear.advanceRailPose(candidate.cars().get(1).pose());
-            rear.setOldPosAndRot();
-            restored.add(combined.id());
-            sync(combined);
+            var train = registered(entity);
+            var entities = requireReady(train);
+            var motion = TrainMotion.prepare(train);
+            double target = train.progress() + (forward ? 0.5 : -0.5) * train.member(entity.getUUID()).direction();
+            if (!motion.range().contains(target)) return StopReason.END_OF_ROUTE;
+            var previous = currentAreas(entities);
+            var areas = new ArrayList<>(previous);
+            double progress = train.progress();
+            var context = TrainRouteWindow.context(train, false);
+            MovementStep step;
+            do {
+                double next = TrainMotion.nextStep(train.route(), train.sampler(), motion.sampleOffsets(), progress, target);
+                step = calculateStep(train, entities, previous, next, motion, context);
+                for (int i = 0; i < areas.size(); i++) areas.set(i, areas.get(i).minmax(step.actual().get(i)));
+                previous = step.actual();
+                progress = next;
+            } while (progress != target);
+            var candidate = step.candidate();
+            var intervals = motion.footprint(target);
+            var query = check(train, areas, intervals, target, false);
+            if (!query.acquire(memberIds(train))) return StopReason.TURNOUT_OCCUPIED;
+            commit(train, candidate, intervals, true);
+            reservations.releaseOutside(memberIds(train), candidate.areas(), intervals);
+            tryAutoCouple(entity, autoCouplingVehicles());
             return null;
         } catch (StateException exception) {
             return exception.reason();
         }
+    }
+
+    public StopReason couple(TrainEntity reference, TrainEntity other) {
+        return couple(reference, other, false);
+    }
+
+    private StopReason couple(TrainEntity reference, TrainEntity other, boolean automatic) {
+        if (reference == other || reference.level() != level || other.level() != level) return StopReason.COUPLING_REJECTED;
+        try {
+            var first = registered(reference);
+            var second = registered(other);
+            if (first == second || first.cars().size() != 1 || second.cars().size() != 1) return StopReason.UNCOUPLE_REQUIRED;
+            if (automatic) {
+                if (drivers.hasDriver(first) && drivers.hasDriver(second)) return StopReason.DRIVER_PRESENT;
+                readyMembers(first);
+                readyMembers(second);
+            } else {
+                requireReady(first);
+                requireReady(second);
+            }
+            var firstSpec = VehicleCatalog.find(reference.getModelId()).motionSpec();
+            var secondSpec = VehicleCatalog.find(other.getModelId()).motionSpec();
+            double gap = Math.max(firstSpec.defaultCouplerGap(), secondSpec.defaultCouplerGap());
+            var pairs = couplingPairs(reference, other, firstSpec, secondSpec);
+            // Stable sorting retains rear/rear, rear/front, front/rear, front/front order for ties.
+            pairs.sort(Comparator.comparingDouble(CouplerPair::distanceSquared));
+            StopReason failure = StopReason.COUPLING_REJECTED;
+            for (var pair : pairs) {
+                if (!(pair.distanceSquared() <= (gap + 1) * (gap + 1))) continue;
+                StopReason reason;
+                try {
+                    reason = couplePair(reference, other, first, second, firstSpec, secondSpec, pair, gap, automatic);
+                } catch (StateException exception) {
+                    reason = exception.reason();
+                }
+                if (reason == null) return null;
+                if (failure == StopReason.COUPLING_REJECTED) failure = reason;
+            }
+            return failure;
+        } catch (StateException exception) {
+            return exception.reason();
+        }
+    }
+
+    private StopReason couplePair(TrainEntity reference, TrainEntity other, TrainConsist first, TrainConsist second,
+                                  VehicleMotionSpec firstSpec, VehicleMotionSpec secondSpec,
+                                  CouplerPair pair, double gap, boolean automatic) {
+        int direction = pair.direction();
+        double offset = couplerOffset(firstSpec, pair.referenceFront())
+                - direction * couplerOffset(secondSpec, pair.otherFront()) + (pair.referenceFront() ? gap : -gap);
+        if (!Double.isFinite(offset)) return StopReason.COUPLING_REJECTED;
+        var members = List.of(first.cars().getFirst(),
+                new TrainCarState(other.getUUID(), other.getModelId(), offset, direction < 0, second.anchor()));
+        var combined = new TrainConsist(first.id(), members, first.configuredSpeed());
+        var entities = List.of(reference, other);
+        prepare(combined, entities);
+        double target = TrainMotion.carProgress(combined.progress(), offset,
+                VehiclePoseSolver.range(combined.route().getLength(), secondSpec, direction));
+        double from;
+        try {
+            from = TrainMotion.nearestDistance(combined.window(), second.anchor(), target, direction);
+        } catch (IllegalArgumentException exception) {
+            return StopReason.COUPLING_REJECTED;
+        }
+        if (Math.abs(target - from) > 0.5) return StopReason.COUPLING_REJECTED;
+        var candidate = calculate(combined, entities, combined.progress());
+        var actual = currentAreas(entities);
+        // Include old saved poses even when the along-route adjustment is zero.
+        var alignment = swept(actual, candidate.areas());
+        var intervals = TrackOccupancyManager.footprint(combined, candidate.progress());
+        if (reservations.touchesTurnout(alignment, intervals)) return StopReason.TURNOUT_OPERATION_BLOCKED;
+        check(combined, alignment, intervals);
+        var previous = actual.get(1);
+        double accepted = from;
+        var sampleOffsets = TrainMotion.sampleOffsets(secondSpec, direction);
+        while (accepted != target) {
+            double next = TrainMotion.nextStep(combined.route(), combined.sampler(), sampleOffsets, accepted, target);
+            var car = solveCar(combined, members.get(1), other, next);
+            var sweep = previous.minmax(car.bounds());
+            if (reservations.touchesTurnout(List.of(sweep), intervals)) return StopReason.TURNOUT_OPERATION_BLOCKED;
+            check(combined, List.of(sweep), intervals);
+            previous = car.bounds();
+            accepted = next;
+        }
+        remove(second);
+        put(combined);
+        saveCandidate(combined, candidate, intervals);
+        reference.setRailAnchor(candidate.cars().getFirst().anchor());
+        other.setTrainId(combined.id());
+        other.setRailAnchor(candidate.cars().get(1).anchor());
+        other.advanceRailPose(candidate.cars().get(1).pose());
+        other.setOldPosAndRot();
+        restored.add(combined.id());
+        reference.setCouplingEnabled(false);
+        other.setCouplingEnabled(false);
+        if (automatic) drivers.coupled(first, second, combined);
+        sync(combined);
+        return null;
     }
 
     public StopReason uncouple(TrainEntity member) {
@@ -901,11 +1019,14 @@ public final class TrainManager {
             var entities = requireReady(train);
             if (reservations.touchesTurnout(currentAreas(entities), occupancy.intervals(train.id()))) return StopReason.TURNOUT_OPERATION_BLOCKED;
             var first = new TrainConsist(train.id(), List.of(train.cars().getFirst().asSingle()), train.configuredSpeed());
-            var second = new TrainConsist(UUID.randomUUID(), List.of(train.cars().get(1).asSingle()), train.configuredSpeed());
+            var detached = train.cars().get(1);
+            var second = new TrainConsist(UUID.randomUUID(), List.of(detached.asSingle()), train.configuredSpeed() * detached.direction());
             first.setWindow(train.window().copyAt(graph(), train.progress()));
-            double rearProgress = TrainMotion.carProgress(train.progress(), train.cars().get(1).offset(),
-                    VehiclePoseSolver.range(train.route().getLength(), VehicleCatalog.find(train.cars().get(1).modelId()).motionSpec()));
-            second.setWindow(train.window().copyAt(graph(), rearProgress));
+            var detachedSpec = VehicleCatalog.find(detached.modelId()).motionSpec();
+            double otherProgress = TrainMotion.carProgress(train.progress(), detached.offset(),
+                    VehiclePoseSolver.range(train.route().getLength(), detachedSpec, detached.direction()));
+            second.setWindow(detached.reversed() ? train.window().reversedAt(graph(), otherProgress, detachedSpec)
+                    : train.window().copyAt(graph(), otherProgress));
             remove(train);
             put(first);
             put(second);
@@ -926,6 +1047,57 @@ public final class TrainManager {
     private static TrackVector coupler(TrainEntity entity, double offset) {
         var local = VehiclePose.Body.rotation(entity.getYRot(), entity.getXRot()).transform(new Vector3f(0, 0, (float) offset));
         return new TrackVector(entity.getX() + local.x, entity.getY() + local.y, entity.getZ() + local.z);
+    }
+
+    private static double couplerOffset(VehicleMotionSpec spec, boolean front) {
+        return front ? spec.frontCouplerOffset() : spec.rearCouplerOffset();
+    }
+
+    private static ArrayList<CouplerPair> couplingPairs(TrainEntity reference, TrainEntity other,
+                                                      VehicleMotionSpec firstSpec, VehicleMotionSpec secondSpec) {
+        var first = new TrackVector[]{coupler(reference, firstSpec.rearCouplerOffset()), coupler(reference, firstSpec.frontCouplerOffset())};
+        var second = new TrackVector[]{coupler(other, secondSpec.rearCouplerOffset()), coupler(other, secondSpec.frontCouplerOffset())};
+        var pairs = new ArrayList<CouplerPair>(4);
+        for (int a = 0; a < 2; a++) {
+            for (int b = 0; b < 2; b++) {
+                double x = first[a].x() - second[b].x(), y = first[a].y() - second[b].y(), z = first[a].z() - second[b].z();
+                pairs.add(new CouplerPair(a == 1, b == 1, x * x + y * y + z * z));
+            }
+        }
+        return pairs;
+    }
+
+    private List<TrainEntity> autoCouplingVehicles() {
+        var vehicles = new ArrayList<TrainEntity>();
+        boolean enabled = false;
+        for (var id : loadedVehicles) {
+            var train = trains.get(entityTrains.get(id));
+            if (train == null || train.cars().size() != 1 || !isRestored(train) || train.routeDirty()) continue;
+            if (level.getEntity(id) instanceof TrainEntity entity && !entity.isRemoved()) {
+                vehicles.add(entity);
+                enabled |= entity.isCouplingEnabled();
+            }
+        }
+        return enabled && vehicles.size() > 1 ? vehicles : List.of();
+    }
+
+    private static boolean couplersNear(TrainEntity front, TrainEntity rear, double extra) {
+        var firstSpec = VehicleCatalog.find(front.getModelId()).motionSpec();
+        var secondSpec = VehicleCatalog.find(rear.getModelId()).motionSpec();
+        double radius = Math.max(firstSpec.defaultCouplerGap(), secondSpec.defaultCouplerGap()) + 1 + extra;
+        return couplingPairs(front, rear, firstSpec, secondSpec).stream().anyMatch(pair -> pair.distanceSquared() <= radius * radius);
+    }
+
+    private boolean tryAutoCouple(TrainEntity entity, List<TrainEntity> vehicles) {
+        var train = trains.get(entityTrains.get(entity.getUUID()));
+        if (train == null || train.cars().size() != 1) return false;
+        for (var other : vehicles) {
+            if (entity == other || !entity.isCouplingEnabled() && !other.isCouplingEnabled()) continue;
+            var peer = trains.get(entityTrains.get(other.getUUID()));
+            if (peer == null || peer.cars().size() != 1) continue;
+            if (couplersNear(entity, other, 0) && couple(entity, other, true) == null) return true;
+        }
+        return false;
     }
 
     private void trackChanged(TrackSegmentChange change) {
@@ -978,19 +1150,26 @@ public final class TrainManager {
         }
         if (!level.tickRateManager().runsNormally()) return;
         drivers.tick();
+        var couplingVehicles = autoCouplingVehicles();
+        for (var entity : couplingVehicles) tryAutoCouple(entity, couplingVehicles);
         for (var train : List.copyOf(trains.values())) {
-            if (train.simulationActive()) advance(train);
+            if (trains.get(train.id()) == train && train.simulationActive()) advance(train, couplingVehicles);
         }
         drivers.publish();
     }
 
-    private void advance(TrainConsist train) {
+    private void advance(TrainConsist train, List<TrainEntity> couplingVehicles) {
         boolean moved = false;
         var owners = memberIds(train);
         try {
             var entities = loadedMembers(train);
+            var vehicle = entities.getFirst();
+            var couplingPeers = train.cars().size() == 1 ? couplingVehicles.stream()
+                    .filter(other -> other != vehicle && (vehicle.isCouplingEnabled() || other.isCouplingEnabled()))
+                    .filter(other -> couplersNear(vehicle, other, TrainConsist.MAX_SPEED / 20)).toList() : List.<TrainEntity>of();
             var previous = currentAreas(entities);
             maintainWindow(train, entities);
+            var motion = TrainMotion.prepare(train);
             double oldSpeed = train.actualSpeed();
             double remaining = TrainDynamics.advance(train);
             double nextSpeed = train.actualSpeed();
@@ -998,43 +1177,50 @@ public final class TrainManager {
             // The last braking tick still travels in the old direction before reaching zero.
             if (nextSpeed == 0 && oldSpeed != 0) train.dynamics().update(oldSpeed, acceleration, grade);
             double movementDirection = Math.signum(remaining);
-            var sampleOffsets = TrainMotion.sampleOffsets(train);
+            var context = new TrackTraversalContext(owners, true, train.planningDirection() > 0);
+            boolean tryStraight = couplingPeers.isEmpty();
             while (remaining != 0 && train.simulationActive()) {
                 maintainWindow(train, entities);
+                if (motion.window() != train.window()) motion = TrainMotion.prepare(train);
                 double progress = train.progress();
-                check(train, previous, occupancy.intervals(train.id()), progress, true);
-                var range = TrainMotion.range(train);
+                check(train, previous, occupancy.intervals(train.id()), progress, context);
+                var range = motion.range();
                 double requested = progress + remaining;
                 double target = Math.clamp(requested, range.min(), range.max());
                 if (target == progress) break;
-                double next = TrainMotion.nextStep(train.route(), train.sampler(), sampleOffsets, progress, target);
-                var turnoutMovement = new TrainTurnoutMovement(graph, train);
-                next = turnoutMovement.nextBoundary(progress, next);
-                var candidate = calculate(train, entities, next);
-                var actual = candidate.areas();
-                var areas = swept(previous, actual);
-                var intervals = TrackOccupancyManager.footprint(train, next);
-                check(train, areas, intervals, next, true);
-                List<TrainTurnoutMovement.Action> actions;
-                try {
-                    actions = turnoutMovement.propose(progress, next);
-                    for (var action : actions) graph.validateTrailingPass(action.assemblyId(), owners, action.pathId());
-                } catch (IllegalArgumentException exception) {
-                    throw new StateException(StopReason.TURNOUT_ROUTE_UNAVAILABLE, exception);
+                MovementStep step = null;
+                if (tryStraight) {
+                    tryStraight = false;
+                    step = tryStraightStep(train, entities, previous, target, motion, context);
                 }
-                if (!reservations.acquire(owners, areas, intervals)) throw new StateException(StopReason.TURNOUT_OCCUPIED);
+                List<TrainTurnoutMovement.Action> actions = List.of();
+                if (step == null) {
+                    double next = TrainMotion.nextStep(train.route(), train.sampler(), motion.sampleOffsets(), progress, target);
+                    var turnoutMovement = train.window().turnoutMovement(graph);
+                    next = turnoutMovement.nextBoundary(motion, progress, next);
+                    step = calculateStep(train, entities, previous, next, motion, context);
+                    try {
+                        actions = turnoutMovement.propose(motion, context, progress, next);
+                        for (var action : actions) graph.validateTrailingPass(action.assemblyId(), owners, action.pathId());
+                    } catch (IllegalArgumentException exception) {
+                        throw new StateException(StopReason.TURNOUT_ROUTE_UNAVAILABLE, exception);
+                    }
+                }
+                double next = step.candidate().progress();
+                if (!step.reservations().acquire(owners)) throw new StateException(StopReason.TURNOUT_OCCUPIED);
                 for (var action : actions) if (action.begin()) graph.beginTrailingPass(action.assemblyId(), owners, action.pathId());
                 for (var action : actions) if (action.throwSwitch()) graph.throwTrailingPass(action.assemblyId(), owners);
                 // Commit each accepted substep before release can restore a turnout and notify route observers.
-                commit(train, candidate, intervals, false);
+                commit(train, step.candidate(), step.intervals(), false);
                 moved = true;
-                previous = actual;
+                previous = step.actual();
                 remaining = next == requested ? 0 : remaining - (next - progress);
-                reservations.releaseOutside(owners, previous, intervals);
+                reservations.releaseOutside(owners, previous, step.intervals());
+                if (tryAutoCouple(vehicle, couplingPeers)) return;
             }
             if (train.simulationActive()) train.dynamics().update(nextSpeed, acceleration, grade);
             if (moved && level.getGameTime() % 2 == 0) sync(train);
-            var range = TrainMotion.range(train);
+            var range = motion.range();
             if ((movementDirection < 0 && train.progress() == range.min() && train.window().startBoundary())
                     || (movementDirection > 0 && train.progress() == range.max() && train.window().endBoundary())) {
                 stop(train, StopReason.END_OF_ROUTE);
@@ -1044,13 +1230,9 @@ public final class TrainManager {
         }
     }
 
-    private static AABB protectedArea(TrainEntity entity, TrainConsist train, double progress, VehicleMotionSpec spec, VehiclePose pose) {
-        AABB bounds = entity.boundsAt(pose);
-        var range = VehiclePoseSolver.range(train.route().getLength(), spec);
-        double front = progress == range.max() && spec.frontBogieOffset() >= 0 ? train.route().getLength() : progress + spec.frontBogieOffset();
-        double rear = progress == range.min() && spec.rearBogieOffset() <= 0 ? 0 : progress + spec.rearBogieOffset();
-        for (double s : new double[] {front, rear}) {
-            var p = train.sampler().sample(s).position();
+    private static AABB protectedArea(VehicleDefinition model, VehiclePoseSolver.Result solved) {
+        AABB bounds = solved.pose().bounds(model);
+        for (var p : List.of(solved.frontTrackPosition(), solved.rearTrackPosition())) {
             bounds = bounds.minmax(new AABB(p.x(), p.y(), p.z(), p.x(), p.y(), p.z()));
         }
         return bounds.inflate(0.01);
