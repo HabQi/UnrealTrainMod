@@ -16,7 +16,8 @@ import java.util.Set;
 
 /** Built-in horizontal structures; ordinary turnout dimensions scale with gauge. */
 public enum TrackAssemblyDefinition {
-    LEFT(TurnoutDirection.LEFT), RIGHT(TurnoutDirection.RIGHT), CUSTOM(null), DIAMOND_CROSSING(null);
+    LEFT(TurnoutDirection.LEFT), RIGHT(TurnoutDirection.RIGHT), CUSTOM(null), DIAMOND_CROSSING(null),
+    SINGLE_CROSSOVER(null);
 
     public static final double ANGLE = Math.atan(1.0 / 8);
     private static final Map<String, TrackRouteDefinition> ROUTES = Map.of(
@@ -26,18 +27,35 @@ public enum TrackAssemblyDefinition {
     private static final Map<String, TrackRouteDefinition> CROSSING_ROUTES = Map.of(
             "line_one", new TrackRouteDefinition("A", "B", Map.of()),
             "line_two", new TrackRouteDefinition("C", "D", Map.of()));
+    private static final Map<String, TrackRouteDefinition> CROSSOVER_ROUTES = Map.of(
+            "first_straight", new TrackRouteDefinition("A", "B", Map.of("switch_one", SwitchPosition.NORMAL)),
+            "second_straight", new TrackRouteDefinition("C", "D", Map.of("switch_two", SwitchPosition.NORMAL)),
+            "crossover", new TrackRouteDefinition("A", "D", Map.of(
+                    "switch_one", SwitchPosition.REVERSE, "switch_two", SwitchPosition.REVERSE)));
+    private static final JunctionState CROSSOVER_STATE = new JunctionState(Map.of(
+            "switch_one", SwitchPosition.NORMAL, "switch_two", SwitchPosition.NORMAL));
     private static final JunctionState NO_CONTROLS = new JunctionState(Map.of());
     private final TurnoutDirection direction;
 
     TrackAssemblyDefinition(TurnoutDirection direction) { this.direction = direction; }
 
     public TrackAssemblyType type() {
-        return this == DIAMOND_CROSSING ? TrackAssemblyType.DIAMOND_CROSSING : TrackAssemblyType.SIMPLE_TURNOUT;
+        return switch (this) {
+            case DIAMOND_CROSSING -> TrackAssemblyType.DIAMOND_CROSSING;
+            case SINGLE_CROSSOVER -> TrackAssemblyType.SINGLE_CROSSOVER;
+            default -> TrackAssemblyType.SIMPLE_TURNOUT;
+        };
     }
     public TurnoutDirection direction() { return direction; }
-    public Set<String> portNames() { return this == DIAMOND_CROSSING ? Set.of("A", "B", "C", "D") : Set.of("A", "B", "C"); }
-    public Map<String, TrackRouteDefinition> routes() { return this == DIAMOND_CROSSING ? CROSSING_ROUTES : ROUTES; }
-    public JunctionState initialState() { return this == DIAMOND_CROSSING ? NO_CONTROLS : INITIAL_STATE; }
+    public Set<String> portNames() {
+        return this == DIAMOND_CROSSING || this == SINGLE_CROSSOVER ? Set.of("A", "B", "C", "D") : Set.of("A", "B", "C");
+    }
+    public Map<String, TrackRouteDefinition> routes() {
+        return this == DIAMOND_CROSSING ? CROSSING_ROUTES : this == SINGLE_CROSSOVER ? CROSSOVER_ROUTES : ROUTES;
+    }
+    public JunctionState initialState() {
+        return this == DIAMOND_CROSSING ? NO_CONTROLS : this == SINGLE_CROSSOVER ? CROSSOVER_STATE : INITIAL_STATE;
+    }
     public boolean supportsTrailingPass() { return type() == TrackAssemblyType.SIMPLE_TURNOUT; }
 
     public void validateState(JunctionState state) {

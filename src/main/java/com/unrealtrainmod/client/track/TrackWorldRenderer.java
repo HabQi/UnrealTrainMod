@@ -10,13 +10,16 @@ import org.slf4j.LoggerFactory;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.VertexBuffer;
 import com.unrealtrainmod.track.mesh.TrackMeshBuilder;
-import com.unrealtrainmod.track.assembly.TrackAssemblyDefinition;
 import com.unrealtrainmod.track.geometry.TrackGeometry;
 import com.unrealtrainmod.track.mesh.TrackMeshData;
 import com.unrealtrainmod.track.mesh.RailTrackMeshBuilder;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.world.level.ChunkPos;
+import net.minecraft.world.phys.Vec3;
 import net.neoforged.neoforge.client.event.RenderLevelStageEvent;
 import org.joml.Matrix4f;
 
@@ -66,37 +69,45 @@ public final class TrackWorldRenderer {
             }
             for (var entry : cache.assemblies.values()) {
                 if (!event.getFrustum().isVisible(entry.broadBounds())) continue;
+                boolean simplified = entry.data.definition().direction() != null;
                 for (long chunk : entry.chunks) {
                     int x = ChunkPos.getX(chunk), z = ChunkPos.getZ(chunk);
                     if (!level.hasChunk(x, z)) continue;
-                    for (int pass = 0; pass < 2; pass++) {
-                        boolean tongue = pass == 1;
-                        var meshes = tongue ? entry.tongues : entry.meshes;
-                        var mesh = meshes.get(chunk);
-                        if (mesh == null) {
-                            if (builds == 0) continue;
-                            try {
-                                if (entry.data.definition() == TrackAssemblyDefinition.CUSTOM
-                                        || entry.data.definition() == TrackAssemblyDefinition.DIAMOND_CROSSING) {
-                                    boolean crossing = entry.data.definition() == TrackAssemblyDefinition.DIAMOND_CROSSING;
-                                    String path = crossing ? (tongue ? "line_two" : "line_one") : (tongue ? "diverging" : "straight");
-                                    var geometry = entry.data.geometry().paths().get(path).getFirst();
-                                    mesh = build(geometry, entry.data.gauge(), entry.data.modelId(), entry.data.id(), x, z, !entry.missingReported);
-                                    entry.missingReported = true;
-                                } else mesh = new TrackGpuMesh(TrackMeshBuilder.buildTurnout(entry.data, x, z, tongue));
-                            } catch (IllegalArgumentException exception) {
-                                LOGGER.warn("Cannot build turnout {} in chunk {}, {}: {}", entry.data.id(), x, z, exception.getMessage());
-                                mesh = new TrackGpuMesh(TrackMeshData.EMPTY);
+                    if (simplified) {
+                        // Built-in turnouts keep their moving tongue meshes on a dedicated two-pass path.
+                        for (int pass = 0; pass < 2; pass++) {
+                            boolean tongue = pass == 1;
+                            var meshes = tongue ? entry.tongues : entry.meshes;
+                            var group = meshes.get(chunk);
+                            if (group == null) {
+                                if (builds == 0) continue;
+                                TrackRenderMesh mesh;
+                                try {
+                                    mesh = new TrackGpuMesh(TrackMeshBuilder.buildTurnout(entry.data, x, z, tongue));
+                                } catch (IllegalArgumentException exception) {
+                                    LOGGER.warn("Cannot build turnout {} in chunk {}, {}: {}", entry.data.id(), x, z, exception.getMessage());
+                                    mesh = new TrackGpuMesh(TrackMeshData.EMPTY);
+                                }
+                                group = List.of(mesh); meshes.put(chunk, group); builds--;
                             }
-                            meshes.put(chunk, mesh); builds--;
+                            uploads = draw(group, event, level, camera, modelView, uploads);
                         }
-                        if (mesh.isEmpty() || !event.getFrustum().isVisible(mesh.bounds())) continue;
-                        uploads -= mesh.upload(level, uploads);
-                        if (!mesh.isUploaded()) continue;
-                        var origin = mesh.origin();
-                        modelView.set(event.getModelViewMatrix()).translate((float)(origin.x() - camera.x),
-                                (float)(origin.y() - camera.y), (float)(origin.z() - camera.z));
-                        mesh.draw(modelView, event.getProjectionMatrix());
+                    } else {
+                        var group = entry.meshes.get(chunk);
+                        if (group == null) {
+                            if (builds == 0) continue;
+                            group = new ArrayList<TrackRenderMesh>();
+                            entry.meshes.put(chunk, group);
+                        }
+                        // The cached prefix survives budget exhaustion and is drawn while later segments wait.
+                        while (builds > 0 && group.size() < entry.geometries.size()) {
+                            var geometry = entry.geometries.get(group.size());
+                            group.add(build(geometry, entry.data.gauge(), entry.data.modelId(), entry.data.id(),
+                                    x, z, !entry.missingReported));
+                            entry.missingReported = true;
+                            builds--;
+                        }
+                        uploads = draw(group, event, level, camera, modelView, uploads);
                     }
                 }
             }
@@ -105,6 +116,20 @@ public final class TrackWorldRenderer {
             RenderSystem.setShader(() -> previousShader);
             RenderSystem.setShaderColor(previousColor[0], previousColor[1], previousColor[2], previousColor[3]);
         }
+    }
+
+    private static int draw(List<TrackRenderMesh> group, RenderLevelStageEvent event, ClientLevel level,
+                            Vec3 camera, Matrix4f modelView, int uploads) {
+        for (var mesh : group) {
+            if (mesh.isEmpty() || !event.getFrustum().isVisible(mesh.bounds())) continue;
+            uploads -= mesh.upload(level, uploads);
+            if (!mesh.isUploaded()) continue;
+            var origin = mesh.origin();
+            modelView.set(event.getModelViewMatrix()).translate((float)(origin.x() - camera.x),
+                    (float)(origin.y() - camera.y), (float)(origin.z() - camera.z));
+            mesh.draw(modelView, event.getProjectionMatrix());
+        }
+        return uploads;
     }
 
     private static TrackRenderMesh build(ClientTrackCache.Entry entry, UUID id, int x, int z) {

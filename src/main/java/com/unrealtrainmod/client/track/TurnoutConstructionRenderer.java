@@ -32,7 +32,8 @@ public final class TurnoutConstructionRenderer {
         if (!state.isActive()) return;
         int color = state.previewFeedback() == Feedback.READY ? 0xFF50E070
                 : (state.previewFeedback() == Feedback.START || state.previewFeedback() == Feedback.TURNOUT_A
-                        || state.previewFeedback() == Feedback.TURNOUT_B || state.previewFeedback() == Feedback.CROSSING_POINT) ? 0xFFFFCC55 : 0xFFFF5555;
+                        || state.previewFeedback() == Feedback.TURNOUT_B || state.previewFeedback() == Feedback.CROSSING_POINT
+                        || state.previewFeedback() == Feedback.CROSSOVER_POINT) ? 0xFFFFCC55 : 0xFFFF5555;
         var previousShader = RenderSystem.getShader();
         float[] previousColor = RenderSystem.getShaderColor().clone();
         var view = RenderSystem.getModelViewStack();
@@ -83,8 +84,11 @@ public final class TurnoutConstructionRenderer {
                 var port = geometry == null ? null : geometry.ports().get(name);
                 double direction = port == null ? 0 : ((port.outwardYaw() % 360) + 540) % 360 - 180;
                 String label = port == null ? name : String.format(Locale.ROOT, "%s  %.1f°", name, direction);
-                if (draft.kind() == TrackConstructionType.DIAMOND_CROSSING) {
-                    label += " " + net.minecraft.network.chat.Component.translatable("item.unrealtrainmod.diamond_crossing_builder."
+                if (draft.kind() == TrackConstructionType.DIAMOND_CROSSING
+                        || draft.kind() == TrackConstructionType.SINGLE_CROSSOVER) {
+                    String prefix = draft.kind() == TrackConstructionType.DIAMOND_CROSSING
+                            ? "diamond_crossing_builder" : "single_crossover_builder";
+                    label += " " + net.minecraft.network.chat.Component.translatable("item.unrealtrainmod." + prefix + "."
                             + (i < 2 ? "line_one" : "line_two")).getString();
                 } else {
                     if (i == 1) label += " " + net.minecraft.network.chat.Component.translatable("commands.unrealtrainmod.turnout.line_one").getString();

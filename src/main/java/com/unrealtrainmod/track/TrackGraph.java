@@ -447,6 +447,50 @@ public final class TrackGraph {
         return commitAssembly(prepareDiamondCrossing(endpoints, gauge, modelId));
     }
 
+    public PreparedAssembly prepareSingleCrossover(List<TrackPlacementEndpoint> endpoints, double gauge, String modelId) {
+        if (endpoints.size() != 4) throw new IllegalArgumentException("A single crossover needs four endpoints");
+        var geometry = SingleCrossoverGeometry.create(endpoints.stream().map(TrackPlacementEndpoint::position).toList(), gauge);
+        var preparedNodes = new ArrayList<TrackNode>();
+        var ports = new LinkedHashMap<String, TrackPort>();
+        var names = List.of("A", "B", "C", "D");
+        var nodeIds = new java.util.HashSet<UUID>();
+        for (int i = 0; i < endpoints.size(); i++) {
+            var endpoint = endpoints.get(i);
+            var node = placementNode(endpoint, gauge);
+            if (endpoint.nodeId() != null && (assemblyAtPort(node.id()) != null || connections(node.id()).size() > 1)) {
+                throw new IllegalArgumentException("Crossover ports must be free endpoints");
+            }
+            if (!nodeIds.add(node.id())) throw new IllegalArgumentException("Duplicate crossover endpoint");
+            preparedNodes.add(node);
+            ports.put(names.get(i), new TrackPort(node.id(), geometry.ports().get(names.get(i)).outwardYaw()));
+        }
+        var definition = TrackAssemblyDefinition.SINGLE_CROSSOVER;
+        var batch = new ArrayList<TrackSegment>();
+        var paths = new LinkedHashMap<String, TrackPath>();
+        var routeNames = List.of("first_straight", "second_straight", "crossover");
+        for (int i = 0; i < routeNames.size(); i++) {
+            String name = routeNames.get(i);
+            var route = definition.routes().get(name);
+            int entrance = names.indexOf(route.entrance()), exit = names.indexOf(route.exit());
+            var part = geometry.paths().get(name).getFirst();
+            var curve = part instanceof BezierTrackGeometry bezier ? bezier : null;
+            var segment = prepareSegment(UUID.randomUUID(), preparedNodes.get(entrance), preparedNodes.get(exit),
+                    curve == null ? null : curve.control1(), curve == null ? null : curve.control2(), modelId, part);
+            batch.add(segment);
+            paths.put(name, new TrackPath(List.of(new TrackConnection(segment.id(), true))));
+        }
+        var instance = new TrackAssemblyInstance(UUID.randomUUID(), definition, ports, paths, preparedNodes.getFirst().position(),
+                geometry.ports().get("B").outwardYaw(), gauge, definition.initialState(), 0, null, geometry, modelId);
+        var nodesById = preparedNodes.stream().collect(java.util.stream.Collectors.toMap(TrackNode::id, n -> n));
+        var byId = batch.stream().collect(java.util.stream.Collectors.toMap(TrackSegment::id, s -> s));
+        validateAssembly(instance, nodesById::get, byId::get);
+        return new PreparedAssembly(instance, List.copyOf(preparedNodes), List.copyOf(batch));
+    }
+
+    public TrackAssemblyInstance createSingleCrossover(List<TrackPlacementEndpoint> endpoints, double gauge, String modelId) {
+        return commitAssembly(prepareSingleCrossover(endpoints, gauge, modelId));
+    }
+
     public TrackAssemblyInstance createTurnout(TrackPlacementEndpoint origin, double gauge,
                                                TrackAssemblyDefinition definition, double yaw) {
         return commitAssembly(prepareTurnout(origin, gauge, definition, yaw));

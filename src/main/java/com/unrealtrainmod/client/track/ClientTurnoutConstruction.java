@@ -12,6 +12,7 @@ import com.unrealtrainmod.network.payload.TrackConstructionPayload.Feedback;
 import com.unrealtrainmod.track.TrackCurveParameters;
 import com.unrealtrainmod.track.TurnoutPlacementGeometry;
 import com.unrealtrainmod.track.DiamondCrossingGeometry;
+import com.unrealtrainmod.track.SingleCrossoverGeometry;
 import com.unrealtrainmod.track.construction.TrackConstructionType;
 import com.unrealtrainmod.track.assembly.TrackAssemblyDefinition;
 import com.unrealtrainmod.track.block.TrackBlockVolume;
@@ -52,10 +53,10 @@ public final class ClientTurnoutConstruction implements ResourceManagerReloadLis
         }
         if (payload.feedback() == Feedback.CLEARED) return;
         boolean success = switch (payload.feedback()) {
-            case TURNOUT_A, TURNOUT_B, CROSSING_POINT, READY, CREATED, CANCELLED -> true;
+            case TURNOUT_A, TURNOUT_B, CROSSING_POINT, CROSSOVER_POINT, READY, CREATED, CANCELLED -> true;
             default -> false;
         };
-        var message = payload.feedback() == Feedback.CROSSING_POINT
+        var message = payload.feedback() == Feedback.CROSSING_POINT || payload.feedback() == Feedback.CROSSOVER_POINT
                 ? Component.translatable(payload.feedback().translationKey(), payload.points().size(), payload.kind().pointCount())
                 : Component.translatable(payload.feedback().translationKey());
         mc.player.displayClientMessage(message
@@ -72,9 +73,12 @@ public final class ClientTurnoutConstruction implements ResourceManagerReloadLis
     public void editPreview(int endpoint, TrackCurveParameters curve, boolean edited) {
         if (draft == null) return;
         geometry = null; volume = Map.of(); feedback = draft.validation();
-        if (draft.kind() == TrackConstructionType.DIAMOND_CROSSING) {
+        if (draft.kind() == TrackConstructionType.DIAMOND_CROSSING
+                || draft.kind() == TrackConstructionType.SINGLE_CROSSOVER) {
             try {
-                geometry = DiamondCrossingGeometry.create(draft.points().stream().map(p -> p.position()).toList(), draft.gauge());
+                geometry = draft.kind() == TrackConstructionType.DIAMOND_CROSSING
+                        ? DiamondCrossingGeometry.create(draft.points().stream().map(p -> p.position()).toList(), draft.gauge())
+                        : SingleCrossoverGeometry.create(draft.points().stream().map(p -> p.position()).toList(), draft.gauge());
                 volume = footprint(geometry);
             } catch (IllegalArgumentException exception) { feedback = Feedback.INVALID_GEOMETRY; }
             return;

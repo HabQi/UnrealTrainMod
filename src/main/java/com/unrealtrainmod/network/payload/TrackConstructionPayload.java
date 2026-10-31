@@ -32,7 +32,7 @@ public record TrackConstructionPayload(ResourceLocation dimension, Phase phase,
         INVALID_GEOMETRY, TOO_LONG, SAME_NODE, GAUGE_MISMATCH, STALE_START, STALE_END,
         STORAGE, NO_PERMISSION, INVALID_ITEM, SELECT_MODEL, MISSING_MODEL, LINE_NOT_READY,
         VERTICAL_HANDLES, FLAT_PORT, NO_DRAFT, AIM_NODE, STALE_EDIT, INVALID_PARAMETERS, BLOCKED_VOLUME, UNLOADED_VOLUME, VOLUME_TOO_LARGE,
-        CROSSING_POINT;
+        CROSSING_POINT, CROSSOVER_POINT;
 
         public String translationKey() {
             return "item.unrealtrainmod.track_builder.feedback." + name().toLowerCase(Locale.ROOT);

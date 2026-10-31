@@ -6,6 +6,7 @@ package com.unrealtrainmod.track.assembly;
 
 import com.unrealtrainmod.track.TrackConnection;
 import com.unrealtrainmod.track.DiamondCrossingGeometry;
+import com.unrealtrainmod.track.SingleCrossoverGeometry;
 import com.unrealtrainmod.track.TrackGeometryDefinition;
 import com.unrealtrainmod.track.TrackPlacementGeometry;
 import com.unrealtrainmod.track.geometry.BezierTrackGeometry;
@@ -123,6 +124,27 @@ public final class TrackAssemblyInstance {
             for (String name : definition.portNames()) {
                 double delta = ((ports.get(name).outwardYaw() - expected.ports().get(name).outwardYaw()) % 360 + 540) % 360 - 180;
                 if (Math.abs(delta) > 1e-6) throw new IllegalArgumentException("Invalid crossing port direction");
+            }
+        }
+        if (definition == TrackAssemblyDefinition.SINGLE_CROSSOVER) {
+            var expected = SingleCrossoverGeometry.create(List.of("A", "B", "C", "D").stream()
+                    .map(name -> geometry.ports().get(name).position()).toList(), gauge);
+            for (String name : List.of("first_straight", "second_straight", "crossover")) {
+                var route = definition.routes().get(name);
+                var parts = geometry.paths().get(name);
+                boolean straight = name.endsWith("straight");
+                boolean expectedType = parts.size() == 1 && (straight
+                        ? parts.getFirst() instanceof StraightTrackGeometry
+                        : parts.getFirst() instanceof BezierTrackGeometry);
+                if (!expectedType
+                        || !parts.getFirst().sample(0).position().equals(geometry.ports().get(route.entrance()).position())
+                        || !parts.getFirst().sample(parts.getFirst().getLength()).position().equals(geometry.ports().get(route.exit()).position())) {
+                    throw new IllegalArgumentException("Crossover requires two straight lines and one S path");
+                }
+            }
+            for (String name : definition.portNames()) {
+                double delta = ((ports.get(name).outwardYaw() - expected.ports().get(name).outwardYaw()) % 360 + 540) % 360 - 180;
+                if (Math.abs(delta) > 1e-6) throw new IllegalArgumentException("Invalid crossover port direction");
             }
         }
         bounds = createBounds();

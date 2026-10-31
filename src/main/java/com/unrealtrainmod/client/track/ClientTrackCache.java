@@ -11,7 +11,6 @@ import com.unrealtrainmod.network.payload.TrackSegmentRemovePayload;
 import com.unrealtrainmod.track.TrackSegmentData;
 import com.unrealtrainmod.track.geometry.TrackGeometry;
 import com.unrealtrainmod.track.assembly.TrackAssemblyInstance;
-import com.unrealtrainmod.track.assembly.TrackAssemblyDefinition;
 import com.unrealtrainmod.network.payload.TrackAssemblyPayload;
 import com.unrealtrainmod.network.payload.TrackAssemblyStatePayload;
 import com.unrealtrainmod.network.payload.TrackAssemblyRemovePayload;
@@ -19,6 +18,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -32,7 +32,7 @@ import net.minecraft.world.phys.AABB;
 import net.neoforged.neoforge.client.event.ClientPlayerNetworkEvent;
 import net.neoforged.neoforge.event.level.LevelEvent;
 
-/** Client-thread cache. A UUID has one geometry and one mesh per owning chunk, regardless of packet duplicates. */
+/** Client-thread cache. Geometry is shared by UUID; each owning chunk keeps its own meshes. */
 public final class ClientTrackCache implements ResourceManagerReloadListener, AutoCloseable {
     public static final ClientTrackCache INSTANCE = new ClientTrackCache();
     final Map<UUID, Entry> entries = new LinkedHashMap<>();
@@ -101,8 +101,8 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
         while (iterator.hasNext()) {
             var entry = iterator.next();
             entry.chunks.remove(chunk);
-            var mesh = entry.meshes.remove(chunk); if (mesh != null) mesh.close();
-            var tongue = entry.tongues.remove(chunk); if (tongue != null) tongue.close();
+            closeMeshes(entry.meshes.remove(chunk));
+            closeMeshes(entry.tongues.remove(chunk));
             if (entry.chunks.isEmpty()) { entry.close(); iterator.remove(); }
         }
         Set<UUID> members = chunks.remove(chunk);
@@ -174,29 +174,47 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
         return value.withState(state.state(), state.revision());
     }
 
+    private static void closeMeshes(List<TrackRenderMesh> meshes) {
+        if (meshes == null) return;
+        for (var mesh : meshes) mesh.close();
+    }
+
     static final class AssemblyEntry implements AutoCloseable {
         TrackAssemblyInstance data;
+        final List<TrackGeometry> geometries;
         final Set<Long> chunks = new LinkedHashSet<>();
-        final Map<Long, TrackRenderMesh> meshes = new HashMap<>();
-        // Standard tongue mesh, or the second static path of a custom turnout/crossing.
-        final Map<Long, TrackRenderMesh> tongues = new HashMap<>();
+        final Map<Long, List<TrackRenderMesh>> meshes = new HashMap<>();
+        // Built-in turnouts keep the two-state tongue mesh separate from shared static rails.
+        final Map<Long, List<TrackRenderMesh>> tongues = new HashMap<>();
         boolean missingReported;
-        AssemblyEntry(TrackAssemblyInstance data) { this.data = data; }
+        AssemblyEntry(TrackAssemblyInstance data) {
+            this.data = data;
+            var segments = new LinkedHashMap<UUID, TrackGeometry>();
+            for (var entry : data.paths().entrySet()) {
+                var parts = data.geometry().paths().get(entry.getKey());
+                var steps = entry.getValue().steps();
+                for (int i = 0; i < steps.size(); i++) {
+                    var step = steps.get(i);
+                    var part = parts.get(i);
+                    segments.putIfAbsent(step.segmentId(), step.fromStart() ? part : part.reversed());
+                }
+            }
+            geometries = List.copyOf(segments.values());
+        }
         AABB broadBounds() {
             var model = ClientRailModelManager.INSTANCE.model(data.modelId());
             return model == null ? data.bounds() : data.bounds().inflate(model.padding() * model.scaleForGauge(data.gauge()));
         }
         void setState(TrackAssemblyInstance data) {
-            if (data.definition() != TrackAssemblyDefinition.CUSTOM
-                    && data.definition() != TrackAssemblyDefinition.DIAMOND_CROSSING) {
-                for (var mesh : tongues.values()) mesh.close();
+            if (data.definition().direction() != null) {
+                for (var meshes : tongues.values()) closeMeshes(meshes);
                 tongues.clear();
             }
             this.data = data;
         }
         @Override public void close() {
-            for (var mesh : meshes.values()) mesh.close();
-            for (var mesh : tongues.values()) mesh.close();
+            for (var meshes : meshes.values()) closeMeshes(meshes);
+            for (var meshes : tongues.values()) closeMeshes(meshes);
             meshes.clear(); tongues.clear(); missingReported = false;
         }
     }

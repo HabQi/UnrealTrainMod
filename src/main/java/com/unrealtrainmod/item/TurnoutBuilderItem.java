@@ -43,8 +43,12 @@ public final class TurnoutBuilderItem extends Item {
             lines.add(Component.translatable("item.unrealtrainmod.turnout_builder.cancel").withStyle(ChatFormatting.GRAY));
             return;
         }
+        String prefix = switch (type) {
+            case DIAMOND_CROSSING -> "diamond_crossing_builder";
+            case SINGLE_CROSSOVER -> "single_crossover_builder";
+            default -> "turnout_builder";
+        };
         for (String key : List.of("select", "preview", "cancel", "permission")) {
-            String prefix = type == TrackConstructionType.DIAMOND_CROSSING ? "diamond_crossing_builder" : "turnout_builder";
             lines.add(Component.translatable("item.unrealtrainmod." + prefix + "." + key).withStyle(ChatFormatting.GRAY));
         }
     }

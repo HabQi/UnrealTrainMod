@@ -4,6 +4,7 @@
  */
 package com.unrealtrainmod.command;
 
+import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.builder.RequiredArgumentBuilder;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
@@ -12,11 +13,13 @@ import com.unrealtrainmod.track.TrackGraph;
 import com.unrealtrainmod.track.assembly.TrackAssemblyDefinition;
 import com.unrealtrainmod.track.assembly.TrackAssemblyInstance;
 import com.unrealtrainmod.track.assembly.SwitchPosition;
+import com.unrealtrainmod.track.assembly.TrackTransitionResolver;
 import com.unrealtrainmod.track.block.TrackBlockManager;
 import com.unrealtrainmod.train.TrainManager;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
+import java.util.stream.Collectors;
 import net.minecraft.ChatFormatting;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.SharedSuggestionProvider;
@@ -27,6 +30,7 @@ import net.neoforged.neoforge.event.RegisterCommandsEvent;
 
 import static com.mojang.brigadier.arguments.DoubleArgumentType.doubleArg;
 import static com.mojang.brigadier.arguments.DoubleArgumentType.getDouble;
+import static com.mojang.brigadier.arguments.StringArgumentType.getString;
 import static net.minecraft.commands.Commands.argument;
 import static net.minecraft.commands.Commands.literal;
 
@@ -50,18 +54,31 @@ public final class TurnoutCommands {
         var set = assemblyArgument();
         for (String name : List.of("straight", "diverging")) {
             var position = name.equals("straight") ? SwitchPosition.NORMAL : SwitchPosition.REVERSE;
-            set.then(literal(name).executes(c -> execute(c, g -> {
-                TrainManager.get(c.getSource().getLevel()).refreshTurnoutOccupancy();
-                UUID id = UuidArgument.getUuid(c, "assemblyId");
-                if (g.assembly(id).state().controls().isEmpty()) {
-                    c.getSource().sendFailure(Component.translatable(PREFIX + "no_controls"));
-                    return 0;
-                }
-                g.setAssemblyState(id, g.assembly(id).state().withControl("main", position));
-                describe(c, g, g.assembly(id));
-                return 1;
-            })));
+            set.then(literal(name).executes(c -> execute(c, g -> setAll(c, g, position))));
         }
+        set.then(literal("control").then(argument("control", StringArgumentType.word()).suggests((c, b) -> {
+            var assembly = graph(c).assembly(UuidArgument.getUuid(c, "assemblyId"));
+            return SharedSuggestionProvider.suggest(assembly.state().controls().keySet(), b);
+        }).then(argument("position", StringArgumentType.word())
+                .suggests((c, b) -> SharedSuggestionProvider.suggest(List.of("normal", "reverse"), b))
+                .executes(c -> execute(c, g -> {
+                    TrainManager.get(c.getSource().getLevel()).refreshTurnoutOccupancy();
+                    UUID id = UuidArgument.getUuid(c, "assemblyId");
+                    var assembly = g.assembly(id);
+                    String control = getString(c, "control");
+                    if (!assembly.state().controls().containsKey(control)) {
+                        c.getSource().sendFailure(Component.translatable(PREFIX + "unknown_control", control));
+                        return 0;
+                    }
+                    var position = switch (getString(c, "position").toLowerCase(Locale.ROOT)) {
+                        case "normal" -> SwitchPosition.NORMAL;
+                        case "reverse" -> SwitchPosition.REVERSE;
+                        default -> throw new IllegalArgumentException("Unknown switch position");
+                    };
+                    g.setAssemblyState(id, assembly.state().withControl(control, position));
+                    describe(c, g, g.assembly(id));
+                    return 1;
+                })))));
         var turnout = literal("turnout").then(create).then(literal("set").then(set))
                 .then(literal("info").then(assemblyArgument().executes(c -> execute(c, g -> {
                     TrainManager.get(c.getSource().getLevel()).refreshTurnoutOccupancy();
@@ -76,6 +93,23 @@ public final class TurnoutCommands {
                 .then(literal("remove").then(assemblyArgument().executes(c -> remove(c, false))
                         .then(literal("force").executes(c -> remove(c, true)))));
         event.getDispatcher().register(literal("utm").requires(s -> s.hasPermission(2)).then(turnout));
+    }
+
+    /** Ordinary turnouts use main; multi-control structures switch every group together. */
+    private static int setAll(CommandContext<CommandSourceStack> context, TrackGraph graph, SwitchPosition position) {
+        TrainManager.get(context.getSource().getLevel()).refreshTurnoutOccupancy();
+        UUID id = UuidArgument.getUuid(context, "assemblyId");
+        var assembly = graph.assembly(id);
+        if (assembly.state().controls().isEmpty()) {
+            context.getSource().sendFailure(Component.translatable(PREFIX + "no_controls"));
+            return 0;
+        }
+        var state = assembly.state();
+        if (state.controls().containsKey("main")) state = state.withControl("main", position);
+        else for (String control : state.controls().keySet()) state = state.withControl(control, position);
+        graph.setAssemblyState(id, state);
+        describe(context, graph, graph.assembly(id));
+        return 1;
     }
 
     private static RequiredArgumentBuilder<CommandSourceStack, UUID> assemblyArgument() {
@@ -100,10 +134,7 @@ public final class TurnoutCommands {
         var source = c.getSource();
         Component occupancy = value.occupant() == null ? Component.translatable(PREFIX + "free")
                 : Component.translatable(PREFIX + (source.getLevel().getEntity(value.occupant()) == null ? "waiting" : "occupied"), id(value.occupant()));
-        Component controls = value.state().controls().isEmpty() ? Component.translatable(PREFIX + "no_controls")
-                : Component.translatable(PREFIX + (value.definition() == TrackAssemblyDefinition.CUSTOM
-                        ? value.state().controls().get("main") == SwitchPosition.NORMAL ? "line_one" : "line_two"
-                        : value.state().controls().get("main") == SwitchPosition.NORMAL ? "straight" : "diverging"));
+        Component controls = describeControls(value);
         source.sendSuccess(() -> Component.translatable(PREFIX + "info", id(value.id()),
                 Component.translatable(PREFIX + value.definition().name().toLowerCase(Locale.ROOT)),
                 controls, value.revision(), occupancy), false);
@@ -128,9 +159,24 @@ public final class TurnoutCommands {
                 if (!steps.getSiblings().isEmpty()) steps.append(" → ");
                 steps.append(step.fromStart() ? "+" : "−").append(id(step.segmentId()));
             }
+            boolean enabled = TrackTransitionResolver.isPathEnabled(value, entry.getKey());
             source.sendSuccess(() -> Component.translatable(PREFIX + "path", entry.getKey(), steps,
-                    number(value.gauge())), false);
+                    Component.translatable(PREFIX + (enabled ? "path_open" : "path_closed")), number(value.gauge())), false);
         }
+    }
+
+    private static Component describeControls(TrackAssemblyInstance value) {
+        if (value.state().controls().isEmpty()) return Component.translatable(PREFIX + "no_controls");
+        if (!value.state().controls().containsKey("main")) {
+            return Component.literal(value.state().controls().entrySet().stream()
+                    .sorted(java.util.Map.Entry.comparingByKey())
+                    .map(entry -> entry.getKey() + "=" + Component.translatable(PREFIX
+                            + "position." + entry.getValue().name().toLowerCase(Locale.ROOT)).getString())
+                    .collect(Collectors.joining(", ")));
+        }
+        return Component.translatable(PREFIX + (value.definition() == TrackAssemblyDefinition.CUSTOM
+                ? value.state().controls().get("main") == SwitchPosition.NORMAL ? "line_one" : "line_two"
+                : value.state().controls().get("main") == SwitchPosition.NORMAL ? "straight" : "diverging"));
     }
 
     private static String number(double value) { return String.format(Locale.ROOT, "%.4f", value); }

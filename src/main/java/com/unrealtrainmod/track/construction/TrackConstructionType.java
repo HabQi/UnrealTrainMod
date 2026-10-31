@@ -6,7 +6,7 @@ package com.unrealtrainmod.track.construction;
 
 /** The five independent construction tools; only implemented types create drafts. */
 public enum TrackConstructionType {
-    SIMPLE_TURNOUT(3), DIAMOND_CROSSING(4), SINGLE_CROSSOVER(0), SCISSORS_CROSSOVER(0), DOUBLE_SLIP(0);
+    SIMPLE_TURNOUT(3), DIAMOND_CROSSING(4), SINGLE_CROSSOVER(4), SCISSORS_CROSSOVER(0), DOUBLE_SLIP(0);
 
     private final int pointCount;
 

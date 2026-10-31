@@ -21,6 +21,7 @@ import com.unrealtrainmod.track.TrackPlacementGeometry;
 import com.unrealtrainmod.track.TrackVerticalCurveParameters;
 import com.unrealtrainmod.track.TurnoutPlacementGeometry;
 import com.unrealtrainmod.track.DiamondCrossingGeometry;
+import com.unrealtrainmod.track.SingleCrossoverGeometry;
 import com.unrealtrainmod.track.assembly.TrackAssemblyDefinition;
 import com.unrealtrainmod.track.assembly.TrackAssemblyInstance;
 import com.unrealtrainmod.track.assembly.SwitchPosition;
@@ -228,6 +229,15 @@ public final class TurnoutConstructionManager {
                 }
                 return s.validation = Feedback.CROSSING_POINT;
             }
+            if (s.kind == TrackConstructionType.SINGLE_CROSSOVER) {
+                SingleCrossoverGeometry.create(s.points.stream().map(TrackPlacementEndpoint::position).toList(), s.gauge);
+                if (s.points.size() == 4) {
+                    var prepared = graph.prepareSingleCrossover(s.points, s.gauge, null);
+                    blocks.validatePlacement(prepared.segments());
+                    return s.validation = Feedback.READY;
+                }
+                return s.validation = Feedback.CROSSOVER_POINT;
+            }
             updateDefaults(graph, s);
             if (s.points.size() > 1) {
                 var curves = effective(s);
@@ -251,8 +261,8 @@ public final class TurnoutConstructionManager {
         if (player.isShiftKeyDown()) { cancel(player); return; }
         if (s == null || !s.matches(player)) { clear(player, Feedback.NO_DRAFT); return; }
         if (!player.getMainHandItem().is(UnrealTrainMod.TRACK_WRENCH.get())) { publish(player, s, Feedback.INVALID_ITEM); return; }
-        if (s.kind == TrackConstructionType.DIAMOND_CROSSING) {
-            player.displayClientMessage(Component.translatable("item.unrealtrainmod.diamond_crossing_builder.straight_only")
+        if (s.kind == TrackConstructionType.DIAMOND_CROSSING || s.kind == TrackConstructionType.SINGLE_CROSSOVER) {
+            player.displayClientMessage(Component.translatable("item.unrealtrainmod." + builderKey(s.kind) + ".straight_only")
                     .withStyle(ChatFormatting.GRAY), true);
             return;
         }
@@ -323,12 +333,14 @@ public final class TurnoutConstructionManager {
         }
         try {
             var graph = TrackBlockManager.get(player.serverLevel()).graph();
-            var assembly = s.kind == TrackConstructionType.DIAMOND_CROSSING
-                    ? graph.createDiamondCrossing(s.points, s.gauge, model.toString())
-                    : graph.createTurnout(s.points, s.gauge, effective(s), s.edited, model.toString());
+            var assembly = switch (s.kind) {
+                case DIAMOND_CROSSING -> graph.createDiamondCrossing(s.points, s.gauge, model.toString());
+                case SINGLE_CROSSOVER -> graph.createSingleCrossover(s.points, s.gauge, model.toString());
+                default -> graph.createTurnout(s.points, s.gauge, effective(s), s.edited, model.toString());
+            };
             clear(player, Feedback.CREATED);
-            String prefix = s.kind == TrackConstructionType.DIAMOND_CROSSING ? "diamond_crossing_builder" : "turnout_builder";
-            player.sendSystemMessage(Component.translatable("item.unrealtrainmod." + prefix + ".created", assembly.id().toString()));
+            player.sendSystemMessage(Component.translatable("item.unrealtrainmod." + builderKey(s.kind) + ".created",
+                    assembly.id().toString()));
         } catch (TrackGraphException exception) { publish(player, s, failure(exception)); }
         catch (IllegalArgumentException exception) { publish(player, s, Feedback.INVALID_GEOMETRY); }
         catch (IllegalStateException exception) { LOGGER.error("Cannot place turnout", exception); publish(player, s, Feedback.STORAGE); }
@@ -378,9 +390,22 @@ public final class TurnoutConstructionManager {
                 player.displayClientMessage(Component.translatable("item.unrealtrainmod.turnout_builder.occupied",
                         assembly.occupant().toString()).withStyle(ChatFormatting.RED), true); return;
             }
-            var next = assembly.state().controls().get("main") == SwitchPosition.NORMAL
+            var current = assembly.state();
+            if (!current.controls().containsKey("main")) {
+                boolean straight = current.controls().values().stream().allMatch(position -> position == SwitchPosition.NORMAL);
+                var next = straight ? SwitchPosition.REVERSE : SwitchPosition.NORMAL;
+                var updated = current;
+                for (String control : current.controls().keySet()) updated = updated.withControl(control, next);
+                graph.setAssemblyState(assembly.id(), updated);
+                player.displayClientMessage(Component.translatable("item.unrealtrainmod.turnout_builder.switched",
+                        Component.translatable("commands.unrealtrainmod.turnout." + (next == SwitchPosition.NORMAL
+                                ? "crossover_straight" : "crossover_diverging")))
+                        .withStyle(ChatFormatting.GREEN), true);
+                return;
+            }
+            var next = current.controls().get("main") == SwitchPosition.NORMAL
                     ? SwitchPosition.REVERSE : SwitchPosition.NORMAL;
-            graph.setAssemblyState(assembly.id(), assembly.state().withControl("main", next));
+            graph.setAssemblyState(assembly.id(), current.withControl("main", next));
             player.displayClientMessage(Component.translatable("item.unrealtrainmod.turnout_builder.switched",
                     Component.translatable("commands.unrealtrainmod.turnout." + (assembly.definition() == TrackAssemblyDefinition.CUSTOM
                             ? next == SwitchPosition.NORMAL ? "line_one" : "line_two"
@@ -389,6 +414,14 @@ public final class TurnoutConstructionManager {
         } catch (IllegalStateException exception) { message(player, Feedback.STORAGE, ""); }
     }
 
+
+    private static String builderKey(TrackConstructionType kind) {
+        return switch (kind) {
+            case DIAMOND_CROSSING -> "diamond_crossing_builder";
+            case SINGLE_CROSSOVER -> "single_crossover_builder";
+            default -> "turnout_builder";
+        };
+    }
 
     private static double normalize(double yaw) { return ((yaw % 360) + 540) % 360 - 180; }
     private static void message(ServerPlayer player, Feedback feedback, String detail) {
