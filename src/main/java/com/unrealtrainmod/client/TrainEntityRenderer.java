@@ -28,8 +28,13 @@ public final class TrainEntityRenderer extends EntityRenderer<TrainEntity> {
         var vehiclePose = entity.renderPose(partialTick);
         pose.pushPose();
         try {
-            if (vehiclePose != null) pose.mulPose(vehiclePose.body().rotation());
-            else {
+            if (vehiclePose != null) {
+                var p = vehiclePose.body().position();
+                pose.translate(p.x() - Mth.lerp((double)partialTick, entity.xOld, entity.getX()),
+                        p.y() - Mth.lerp((double)partialTick, entity.yOld, entity.getY()),
+                        p.z() - Mth.lerp((double)partialTick, entity.zOld, entity.getZ()));
+                pose.mulPose(vehiclePose.body().rotation());
+            } else {
                 pose.mulPose(Axis.YP.rotationDegrees(-Mth.rotLerp(partialTick, entity.yRotO, entity.getYRot())));
                 pose.mulPose(Axis.XP.rotationDegrees(Mth.lerp(partialTick, entity.xRotO, entity.getXRot())));
             }

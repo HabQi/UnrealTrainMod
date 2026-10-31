@@ -766,7 +766,9 @@ public final class TrainManager {
 
     private void sync(TrainConsist train) {
         for (var car : train.cars()) {
-            if (level.getEntity(car.entityId()) instanceof TrainEntity entity && !entity.isRemoved()) entity.syncRailPose();
+            if (level.getEntity(car.entityId()) instanceof TrainEntity entity && !entity.isRemoved()) {
+                entity.syncRailPose(train.actualSpeed() != 0);
+            }
         }
     }
 
@@ -810,6 +812,7 @@ public final class TrainManager {
                 if (relocate.get(i)) {
                     LOGGER.info("Restoring vehicle {} of consist {} to {}", car.member().entityId(), train.id(), car.anchor());
                     car.entity().advanceRailPose(car.pose());
+                    car.entity().resetRailPoseHistory();
                     car.entity().setOldPosAndRot();
                 }
             }
@@ -1117,6 +1120,7 @@ public final class TrainManager {
             var car = candidate.cars().get(i);
             car.entity().setTrainId(combined.id());
             car.entity().setRailAnchor(car.anchor());
+            car.entity().resetRailPoseHistory();
             if (i >= first.cars().size()) {
                 car.entity().advanceRailPose(car.pose());
                 car.entity().setOldPosAndRot();
@@ -1310,6 +1314,7 @@ public final class TrainManager {
         var owners = memberIds(train);
         try {
             var entities = loadedMembers(train);
+            for (var entity : entities) entity.beginRailMotionTick();
             var endVehicles = entities.stream().filter(entity -> hasFreeEnd(train, entity)).toList();
             var couplingPeers = couplingVehicles.stream().filter(other -> endVehicles.stream()
                     .anyMatch(entity -> couplersNear(entity, other, TrainConsist.MAX_SPEED / 20))).toList();
@@ -1365,7 +1370,7 @@ public final class TrainManager {
                 if (tryAutoCouple(train, couplingPeers)) return;
             }
             if (train.simulationActive()) train.dynamics().update(nextSpeed, acceleration, grade);
-            if (moved && level.getGameTime() % 2 == 0) sync(train);
+            if (moved && (level.getGameTime() % 2 == 0 || oldSpeed != 0 && nextSpeed == 0)) sync(train);
             var range = motion.range();
             if ((movementDirection < 0 && train.progress() == range.min() && train.window().startBoundary())
                     || (movementDirection > 0 && train.progress() == range.max() && train.window().endBoundary())) {

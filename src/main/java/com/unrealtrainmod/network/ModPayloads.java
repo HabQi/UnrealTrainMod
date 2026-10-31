@@ -35,7 +35,7 @@ public final class ModPayloads {
     private ModPayloads() {}
 
     public static void register(RegisterPayloadHandlersEvent event) {
-        var registrar = event.registrar("17");
+        var registrar = event.registrar("18");
         registrar.playToServer(TrainControlInputPayload.TYPE, TrainControlInputPayload.STREAM_CODEC,
                 TrainDriverManager::handleInput);
         registrar.playToClient(TrainControlSyncPayload.TYPE, TrainControlSyncPayload.STREAM_CODEC,

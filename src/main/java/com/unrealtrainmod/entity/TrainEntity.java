@@ -5,6 +5,7 @@
 package com.unrealtrainmod.entity;
 
 import com.unrealtrainmod.UnrealTrainMod;
+import com.unrealtrainmod.client.TrainPoseClient;
 import com.unrealtrainmod.model.ModelBounds;
 import com.unrealtrainmod.registry.ModDataComponents;
 import com.unrealtrainmod.train.TrainAnchor;
@@ -12,6 +13,8 @@ import com.unrealtrainmod.train.TrainCarEnd;
 import com.unrealtrainmod.train.TrainManager;
 import com.unrealtrainmod.vehicle.VehicleCatalog;
 import com.unrealtrainmod.vehicle.VehiclePose;
+import com.unrealtrainmod.vehicle.VehiclePosePlayback;
+import com.unrealtrainmod.vehicle.VehiclePoseSnapshot;
 import com.unrealtrainmod.track.geometry.TrackVector;
 import java.util.UUID;
 import java.util.Locale;
@@ -46,7 +49,6 @@ import org.slf4j.LoggerFactory;
 /** Saved interaction/render proxy. Authoritative motion belongs to the level's TrainManager. */
 public final class TrainEntity extends Entity {
     private static final Logger LOGGER = LoggerFactory.getLogger(TrainEntity.class);
-    private static final int POSE_INTERVAL = 2;
     private static final EntityDataAccessor<String> MODEL_ID =
             SynchedEntityData.defineId(TrainEntity.class, EntityDataSerializers.STRING);
     private static final EntityDataAccessor<CompoundTag> RAIL_POSE =
@@ -59,7 +61,9 @@ public final class TrainEntity extends Entity {
     private int lerpSteps;
     private double targetX, targetY, targetZ;
     private float targetYaw, targetPitch;
-    private VehiclePose railPose, previousRailPose, targetRailPose;
+    private VehiclePose railPose, motionStartPose;
+    private long motionStartTick = Long.MIN_VALUE, poseRevision;
+    private VehiclePosePlayback playback;
 
     public TrainEntity(EntityType<? extends TrainEntity> type, Level level) {
         super(type, level);
@@ -115,7 +119,8 @@ public final class TrainEntity extends Entity {
     /** Publishes one complete authoritative sample, never independently timed body/bogie updates. */
     public void setRailPose(VehiclePose pose) {
         applyPose(pose);
-        syncRailPose();
+        resetRailPoseHistory();
+        syncRailPose(false);
     }
 
     /** Apply a committed pose; the consist manager publishes all members on the same server tick. */
@@ -123,8 +128,24 @@ public final class TrainEntity extends Entity {
         applyPose(pose);
     }
 
-    public void syncRailPose() {
-        if (railPose != null) entityData.set(RAIL_POSE, railPose.save());
+    /** Capture once before the manager accepts any substep of a complete simulation tick. */
+    public void beginRailMotionTick() {
+        motionStartPose = railPose;
+        motionStartTick = level().getGameTime();
+    }
+
+    public void resetRailPoseHistory() {
+        poseRevision++;
+        motionStartPose = null;
+        motionStartTick = Long.MIN_VALUE;
+    }
+
+    public void syncRailPose(boolean moving) {
+        if (railPose == null) return;
+        boolean predict = moving && motionStartPose != null && motionStartTick == level().getGameTime();
+        var motion = predict ? VehiclePoseSnapshot.Motion.between(motionStartPose.body(), railPose.body())
+                : VehiclePoseSnapshot.Motion.ZERO;
+        entityData.set(RAIL_POSE, new VehiclePoseSnapshot(level().getGameTime(), poseRevision, railPose, motion, predict).save());
     }
 
     private void applyPose(VehiclePose pose) {
@@ -140,13 +161,11 @@ public final class TrainEntity extends Entity {
     }
 
     public VehiclePose renderPose(float partialTick) {
-        return railPose == null ? null : previousRailPose == null ? railPose
-                : previousRailPose.interpolate(railPose, partialTick);
+        return playback == null ? railPose : playback.sample(TrainPoseClient.time(level(), partialTick));
     }
 
     @Override
     public void tick() {
-        previousRailPose = railPose;
         super.tick();
         if (level() instanceof ServerLevel server) {
             // Vanilla player NBT can restore a riding relationship, but never a driver session.
@@ -156,16 +175,15 @@ public final class TrainEntity extends Entity {
                 }
             }
         }
-        if (level().isClientSide && lerpSteps > 0) {
+        if (level().isClientSide && playback != null) {
+            // The shared clock advances in ClientTickEvent.Post, after this entity tick.
+            applyPose(playback.sample(TrainPoseClient.time(level(), 1)));
+        } else if (level().isClientSide && lerpSteps > 0) {
             double fraction = 1.0 / lerpSteps;
-            if (targetRailPose != null) {
-                applyPose(railPose.interpolate(targetRailPose, fraction));
-            } else {
-                setRailPose(Mth.lerp(fraction, getX(), targetX), Mth.lerp(fraction, getY(), targetY),
-                        Mth.lerp(fraction, getZ(), targetZ),
-                        (float)Mth.rotLerp(fraction, (double)getYRot(), targetYaw),
-                        (float)Mth.lerp(fraction, (double)getXRot(), targetPitch));
-            }
+            setRailPose(Mth.lerp(fraction, getX(), targetX), Mth.lerp(fraction, getY(), targetY),
+                    Mth.lerp(fraction, getZ(), targetZ),
+                    (float)Mth.rotLerp(fraction, (double)getYRot(), targetYaw),
+                    (float)Mth.lerp(fraction, (double)getXRot(), targetPitch));
             lerpSteps--;
         }
     }
@@ -188,24 +206,26 @@ public final class TrainEntity extends Entity {
     }
 
     @Override public double lerpTargetX() {
-        return lerpSteps <= 0 ? getX() : targetRailPose == null ? targetX : targetRailPose.body().position().x();
+        return lerpSteps <= 0 ? getX() : targetX;
     }
     @Override public double lerpTargetY() {
-        return lerpSteps <= 0 ? getY() : targetRailPose == null ? targetY : targetRailPose.body().position().y();
+        return lerpSteps <= 0 ? getY() : targetY;
     }
     @Override public double lerpTargetZ() {
-        return lerpSteps <= 0 ? getZ() : targetRailPose == null ? targetZ : targetRailPose.body().position().z();
+        return lerpSteps <= 0 ? getZ() : targetZ;
     }
     @Override public float lerpTargetYRot() {
-        return lerpSteps <= 0 ? getYRot() : targetRailPose == null ? targetYaw : targetRailPose.body().yaw();
+        return lerpSteps <= 0 ? getYRot() : targetYaw;
     }
     @Override public float lerpTargetXRot() {
-        return lerpSteps <= 0 ? getXRot() : targetRailPose == null ? targetPitch : targetRailPose.body().pitch();
+        return lerpSteps <= 0 ? getXRot() : targetPitch;
     }
 
     @Override
     public void recreateFromPacket(ClientboundAddEntityPacket packet) {
         super.recreateFromPacket(packet);
+        playback = null;
+        railPose = null;
         lerpSteps = 0;
         setOldPosAndRot();
     }
@@ -217,20 +237,19 @@ public final class TrainEntity extends Entity {
         if (RAIL_POSE.equals(key) && level().isClientSide) {
             var snapshot = entityData.get(RAIL_POSE);
             if (snapshot.isEmpty()) {
-                railPose = previousRailPose = targetRailPose = null;
+                railPose = null;
+                playback = null;
                 lerpSteps = 0;
                 setBoundingBox(makeBoundingBox());
             } else {
-                var incoming = VehiclePose.load(snapshot);
-                targetRailPose = incoming;
-                if (railPose == null) {
-                    applyPose(incoming);
-                    previousRailPose = incoming;
-                    setOldPosAndRot();
-                    lerpSteps = 0;
-                } else {
-                    lerpSteps = POSE_INTERVAL;
-                }
+                var incoming = VehiclePoseSnapshot.load(snapshot);
+                if (playback == null) playback = new VehiclePosePlayback();
+                if (!playback.accepts(incoming)) return;
+                double time = TrainPoseClient.receiveTime(level(), incoming);
+                boolean reset = playback.accept(incoming, time);
+                applyPose(playback.sample(time));
+                if (reset) setOldPosAndRot();
+                lerpSteps = 0;
             }
         }
     }
@@ -239,7 +258,10 @@ public final class TrainEntity extends Entity {
     protected void readAdditionalSaveData(CompoundTag tag) {
         var id = ResourceLocation.tryParse(tag.getString("ModelId"));
         entityData.set(MODEL_ID, id == null ? "" : id.toString());
-        railPose = previousRailPose = targetRailPose = null;
+        railPose = motionStartPose = null;
+        motionStartTick = Long.MIN_VALUE;
+        poseRevision++;
+        playback = null;
         lerpSteps = 0;
         entityData.set(RAIL_POSE, new CompoundTag());
         railAnchor = null;
@@ -274,7 +296,7 @@ public final class TrainEntity extends Entity {
                     throw new IllegalArgumentException("BogiePose must be a compound");
                 }
                 railPose = VehiclePose.loadBogies(tag.getCompound("BogiePose"), currentBody());
-                entityData.set(RAIL_POSE, railPose.save());
+                syncRailPose(false);
             } catch (IllegalArgumentException exception) {
                 LOGGER.warn("Invalid bogie pose for vehicle {}: {}", getUUID(), exception.getMessage());
             }
@@ -301,7 +323,9 @@ public final class TrainEntity extends Entity {
         if (source.level().dimension() != level().dimension()) {
             setTrainId(null);
             setRailAnchor(null);
-            railPose = previousRailPose = targetRailPose = null;
+            railPose = motionStartPose = null;
+            motionStartTick = Long.MIN_VALUE;
+            playback = null;
             lerpSteps = 0;
             entityData.set(RAIL_POSE, new CompoundTag());
             setBoundingBox(makeBoundingBox());
@@ -381,9 +405,8 @@ public final class TrainEntity extends Entity {
 
     /** Body-only view of the interpolation shared with the train renderer. */
     public VehiclePose.Body renderBody(float partialTick) {
-        if (railPose == null) return null;
-        return previousRailPose == null ? railPose.body()
-                : previousRailPose.body().interpolate(railPose.body(), partialTick);
+        var pose = renderPose(partialTick);
+        return pose == null ? null : pose.body();
     }
 
     public Vec3 passengerRidingPosition(VehiclePose.Body body) {
