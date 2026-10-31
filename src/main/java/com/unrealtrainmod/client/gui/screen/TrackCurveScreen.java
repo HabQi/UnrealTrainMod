@@ -152,7 +152,15 @@ public final class TrackCurveScreen extends Screen {
 
     private void preview() {
         if (open.turnout()) {
-            ClientTurnoutConstruction.INSTANCE.editPreview(open.endpoint(), automatic ? null : parsed, horizontalEdited);
+            var state = ClientTurnoutConstruction.INSTANCE;
+            state.editPreview(open.endpoint(), automatic ? null : parsed, horizontalEdited);
+            if (automatic && open.endpoint() > 0 && !open.horizontalLocked()) {
+                parsed = state.automaticEndParameters(open.endpoint());
+                updating = true;
+                angle.setNumber(parsed.angle());
+                length.setValue(Double.toString(parsed.length()));
+                updating = false;
+            }
             return;
         }
         var state = ClientTrackConstruction.INSTANCE;
@@ -283,6 +291,7 @@ public final class TrackCurveScreen extends Screen {
             return Component.translatable(feedback.translationKey());
         }
         if (open.horizontalLocked() && !verticalPage) return label("direction_locked");
+        if (open.turnout() && automatic && open.endpoint() > 0) return label("turnout_automatic_hint");
         if (verticalPage && verticalAutomatic && !open.verticalLocked()) return label("automatic_vertical_hint");
         if (!open.turnout() && !verticalPage && automatic) return label("automatic_horizontal_hint");
         if (!open.turnout() && !verticalPage && !automatic && ClientTrackConstruction.INSTANCE.horizontalDirected(open.start())) {

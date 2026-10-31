@@ -170,11 +170,12 @@ public final class TurnoutConstructionManager {
         var c = s.points.size() > 2 ? s.points.get(2).position() : null;
         for (int i = 0; i < s.points.size(); i++) {
             var point = s.points.get(i);
-            var automatic = i == 0 ? TurnoutPlacementGeometry.defaults(a, b, c, s.yaw)
-                    : TrackPlacementGeometry.defaults(point.position(), a, s.yaw);
-            var saved = point.nodeId() == null ? null : graph.node(point.nodeId()).curve();
             boolean locked = s.external.get(i) != null;
-            double angle = saved == null ? automatic.angle() : saved.angle();
+            var automatic = i == 0 ? TurnoutPlacementGeometry.defaults(a, b, c, s.yaw)
+                    : locked ? TrackPlacementGeometry.defaults(point.position(), a, s.yaw)
+                    : TurnoutPlacementGeometry.endDefaults(a, point.position(), effective(s, 0));
+            var saved = point.nodeId() == null ? null : graph.node(point.nodeId()).curve();
+            double angle = i == 0 && saved != null ? saved.angle() : automatic.angle();
             if (locked) {
                 var t = externalTangent(graph, point); double sign = i == 0 ? -1 : 1;
                 angle = Math.toDegrees(Math.atan2(-sign * t.x(), sign * t.z()));
@@ -189,11 +190,16 @@ public final class TurnoutConstructionManager {
     private static List<TrackCurveParameters> effective(Session s) {
         var curves = new ArrayList<TrackCurveParameters>();
         for (int i = 0; i < s.points.size(); i++) {
-            var raw = s.curves.get(i); var automatic = s.defaults.get(i);
-            double angle = raw == null || s.locked.get(i) || (i == 0 && !s.edited.get(i)) ? automatic.angle() : raw.angle();
-            curves.add(new TrackCurveParameters(angle, raw == null ? automatic.length() : raw.length()));
+            curves.add(effective(s, i));
         }
         return curves;
+    }
+
+    private static TrackCurveParameters effective(Session s, int i) {
+        var raw = s.curves.get(i); var automatic = s.defaults.get(i);
+        if (i > 0 && raw == null && !s.locked.get(i)) return null;
+        double angle = raw == null || s.locked.get(i) || (i == 0 && !s.edited.get(i)) ? automatic.angle() : raw.angle();
+        return new TrackCurveParameters(angle, raw == null ? automatic.length() : raw.length());
     }
 
     private static Feedback validate(ServerPlayer player, Session s) {
@@ -239,9 +245,10 @@ public final class TurnoutConstructionManager {
         if (!TrackConstructionManager.canEditPoint(player, s.points.get(selected))) { publish(player, s, Feedback.INVALID_POINT); return; }
         s.editorId = UUID.randomUUID(); s.editPoint = selected;
         publish(player, s, s.validation);
+        var initial = effective(s, selected);
         PacketDistributor.sendToPlayer(player, new OpenTrackCurvePayload(s.dimension(), s.revision, s.editorId,
                 ConstructionKind.TURNOUT, selected, s.locked.get(selected), s.curves.get(selected) == null,
-                effective(s).get(selected), true, true, new TrackVerticalCurveParameters(0, 1, 0)));
+                initial == null ? s.defaults.get(selected) : initial, true, true, new TrackVerticalCurveParameters(0, 1, 0)));
     }
 
     public static void setCurve(ServerPlayer player, SetTrackCurvePayload payload) {

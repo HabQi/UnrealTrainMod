@@ -13,9 +13,11 @@ import com.unrealtrainmod.train.map.TrainMapData.*;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import net.minecraft.resources.ResourceLocation;
 
@@ -79,15 +81,20 @@ public final class ClientTrainMap {
             topologyReady = true;
         } else {
             var nextTrains = new ArrayList<Train>();
+            var fragments = new LinkedHashMap<UUID, TrainParts>();
+            var memberIds = new HashSet<UUID>();
             var nextTurnouts = new ArrayList<Turnout>();
             var nextOccupancy = new ArrayList<Occupancy>();
             var nextPaths = new HashMap<UUID, Boolean>();
             for (var entry : batch.entries) {
-                if (entry instanceof Train value) nextTrains.add(value);
-                else if (entry instanceof Turnout value) nextTurnouts.add(value);
+                if (entry instanceof TrainFragment value) {
+                    var parts = fragments.computeIfAbsent(value.train().id(), ignored -> new TrainParts(value));
+                    parts.add(value, memberIds);
+                } else if (entry instanceof Turnout value) nextTurnouts.add(value);
                 else if (entry instanceof Occupancy value) nextOccupancy.add(value);
                 else if (entry instanceof Path value) nextPaths.put(value.segmentId(), value.enabled());
             }
+            for (var parts : fragments.values()) nextTrains.add(parts.finish());
             nextTrains.sort(Comparator.comparing(Train::id));
             trains = List.copyOf(nextTrains);
             turnouts = List.copyOf(nextTurnouts);
@@ -98,6 +105,34 @@ public final class ClientTrainMap {
         }
         batch.entries.clear();
         rebuildOverlays();
+    }
+
+    private static final class TrainParts {
+        private final TrainFragment first;
+        private final List<Car> cars = new ArrayList<>();
+
+        TrainParts(TrainFragment first) { this.first = first; }
+
+        void add(TrainFragment part, Set<UUID> memberIds) {
+            var a = first.train();
+            var b = part.train();
+            if (part.totalCars() != first.totalCars() || part.firstCar() != cars.size()
+                    || a.running() != b.running() || a.reason() != b.reason() || a.restored() != b.restored()
+                    || a.configuredSpeed() != b.configuredSpeed() || a.actualSpeed() != b.actualSpeed()) {
+                throw new IllegalArgumentException("Inconsistent or overlapping map train fragments");
+            }
+            for (var car : b.cars()) {
+                if (!memberIds.add(car.id())) throw new IllegalArgumentException("Duplicate map train member");
+                cars.add(car);
+            }
+        }
+
+        Train finish() {
+            if (cars.size() != first.totalCars()) throw new IllegalArgumentException("Incomplete map train fragments");
+            var train = first.train();
+            return new Train(train.id(), train.running(), train.reason(), train.restored(),
+                    train.configuredSpeed(), train.actualSpeed(), cars);
+        }
     }
 
     private void rebuildOverlays() {

@@ -148,6 +148,21 @@ public final class TrainDriverManager {
         session.player.displayClientMessage(Component.translatable("item.unrealtrainmod.crowbar.coupled"), true);
     }
 
+    /** A stopped split keeps the same seat/session and expresses its reverser in the new reference frame. */
+    void split(TrainConsist original, List<TrainConsist> parts) {
+        var session = sessions.remove(original.id());
+        if (session == null) return;
+        var component = parts.stream().filter(part -> part.member(session.vehicle) != null).findFirst().orElseThrow();
+        var control = original.control();
+        var reverser = control.reverser().inFrame(original.member(session.vehicle).direction())
+                .inFrame(component.member(session.vehicle).direction());
+        session.train = component;
+        session.handle = control.emergencyBrake() ? 0 : -TrainControlProfile.BRAKE_NOTCHES;
+        component.startManual(TrainControlProfile.control(session.handle, reverser, control.emergencyBrake()));
+        sessions.put(component.id(), session);
+        send(session, true, Feedback.NONE);
+    }
+
     void close(TrainConsist train) {
         var session = sessions.remove(train.id());
         if (session == null) return;

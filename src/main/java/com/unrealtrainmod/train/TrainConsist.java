@@ -6,10 +6,12 @@ package com.unrealtrainmod.train;
 
 import com.unrealtrainmod.track.path.TrackPathSampler;
 import com.unrealtrainmod.track.path.TrackRoute;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
-/** Persistent membership, member orientations and server-owned runtime state for one or two cars. */
+/** Persistent members, coupler chain and server-owned runtime state for a complete consist. */
 public final class TrainConsist {
     public enum StopReason {
         STOPPED, END_OF_ROUTE, UNLOADED_AREA, INVALID_POSITION, TRACK_CHANGED,
@@ -23,6 +25,9 @@ public final class TrainConsist {
     public static final double MAX_SPEED = 100;
     private final UUID id;
     private List<TrainCarState> cars;
+    // Null only for a legacy two-car record awaiting model-dependent end migration.
+    private List<TrainCoupling> couplings;
+    private Map<TrainCoupling.End, TrainCoupling.End> peers = Map.of();
     private TrainRouteWindow window;
     private double configuredSpeed;
     private boolean simulationActive;
@@ -34,8 +39,13 @@ public final class TrainConsist {
     private StopReason stopReason = StopReason.STOPPED;
 
     TrainConsist(UUID id, List<TrainCarState> cars, double configuredSpeed) {
+        this(id, cars, configuredSpeed, List.of());
+    }
+
+    TrainConsist(UUID id, List<TrainCarState> cars, double configuredSpeed, List<TrainCoupling> couplings) {
         this.id = id;
         this.cars = List.copyOf(cars);
+        setCouplings(couplings);
         this.configuredSpeed = configuredSpeed;
         this.control = new TrainControlState(configuredSpeed < 0 ? TrainControlState.Reverser.REVERSE
                 : TrainControlState.Reverser.FORWARD, 0, 1, false);
@@ -44,6 +54,20 @@ public final class TrainConsist {
 
     public UUID id() { return id; }
     public List<TrainCarState> cars() { return cars; }
+    public List<TrainCoupling> couplings() { return couplings; }
+    public boolean couplingsReady() { return couplings != null; }
+    public TrainCoupling.End peer(UUID vehicle, TrainCarEnd end) {
+        return peers.get(new TrainCoupling.End(vehicle, end));
+    }
+    void setCouplings(List<TrainCoupling> value) {
+        couplings = value == null ? null : List.copyOf(value);
+        var endpoints = new HashMap<TrainCoupling.End, TrainCoupling.End>();
+        if (couplings != null) for (var link : couplings) {
+            endpoints.put(link.first(), link.second());
+            endpoints.put(link.second(), link.first());
+        }
+        peers = Map.copyOf(endpoints);
+    }
     public TrainAnchor anchor() { return cars.getFirst().anchor(); }
     public TrainCarState member(UUID entityId) {
         return cars.stream().filter(car -> car.entityId().equals(entityId)).findFirst().orElse(null);

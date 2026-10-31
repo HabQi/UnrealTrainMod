@@ -149,7 +149,7 @@ public final class TrackReservationManager {
                 }
                 occupied |= touches(assembly, List.of(area(entity)), occupancy.apply(id));
             }
-            if (complete && !occupied) setOccupant(assembly, null);
+            if (complete && !occupied) releaseOrTransfer(assembly, members.apply(assembly.occupant()));
         }
         // Persisted footprints protect a turnout even before its member entities are loaded.
         for (UUID owner : representatives.get()) acquire(members.apply(owner), List.of(), occupancy.apply(owner));
@@ -207,17 +207,44 @@ public final class TrackReservationManager {
         for (UUID id : heldBy(owners)) {
             var assembly = graph.assembly(id);
             if (!touches(assembly, actual, intervals)) {
-                setOccupant(assembly, null);
+                releaseOrTransfer(assembly, owners);
             }
         }
     }
 
     public void release(UUID vehicle) {
-        for (UUID id : heldBy(List.of(vehicle))) setOccupant(graph.assembly(id), null);
+        for (UUID id : heldBy(List.of(vehicle))) releaseOrTransfer(graph.assembly(id), List.of(vehicle));
     }
 
-    public void transfer(UUID from, UUID to) {
-        for (UUID id : heldBy(List.of(from))) setOccupant(graph.assembly(id), to);
+    /** Destruction can leave two independent fragments on one turnout; never restore its switch between them. */
+    private void releaseOrTransfer(TrackAssemblyInstance assembly, List<UUID> previous) {
+        var excluded = new HashSet<>(previous);
+        for (UUID representative : representatives.get()) {
+            var group = members.apply(representative);
+            if (group.stream().anyMatch(excluded::contains)) continue;
+            boolean covered = touches(assembly, List.of(), occupancy.apply(representative));
+            for (UUID member : group) {
+                if (covered) break;
+                if (level.getEntity(member) instanceof TrainEntity entity && !entity.isRemoved()) {
+                    covered = touches(assembly, List.of(area(entity)), List.of());
+                }
+            }
+            if (covered) {
+                setOccupant(assembly, representative);
+                return;
+            }
+        }
+        // Deferred/unregistered vehicles can still have a physical rail footprint.
+        for (UUID id : loadedVehicles.get()) {
+            if (members.apply(id).stream().anyMatch(excluded::contains)) continue;
+            if (level.getEntity(id) instanceof TrainEntity entity && !entity.isRemoved()
+                    && (entity.getRailAnchor() != null || entity.hasInvalidAnchor())
+                    && touches(assembly, List.of(area(entity)), occupancy.apply(id))) {
+                setOccupant(assembly, id);
+                return;
+            }
+        }
+        setOccupant(assembly, null);
     }
 
     public boolean touchesTurnout(List<AABB> areas, List<Interval> intervals) {

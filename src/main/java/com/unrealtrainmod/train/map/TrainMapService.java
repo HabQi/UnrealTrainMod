@@ -201,7 +201,12 @@ public final class TrainMapService {
             int bytes = 0;
             var buffer = new RegistryFriendlyByteBuf(Unpooled.buffer(), level.registryAccess());
             try {
+                var wireEntries = new ArrayList<Entry>();
                 for (var entry : entries) {
+                    if (entry instanceof TrainMapData.Train train) fragment(train, buffer, wireEntries);
+                    else wireEntries.add(entry);
+                }
+                for (var entry : wireEntries) {
                     buffer.clear();
                     TrainMapUpdatePayload.writeEntry(buffer, entry);
                     int size = buffer.readableBytes();
@@ -214,6 +219,31 @@ public final class TrainMapService {
                 if (!batch.isEmpty() || result.isEmpty()) result.add(List.copyOf(batch));
             } finally { buffer.release(); }
             return result;
+        }
+
+        private void fragment(TrainMapData.Train train, RegistryFriendlyByteBuf buffer, List<Entry> result) {
+            int total = train.cars().size();
+            int first = 0;
+            while (first < total) {
+                buffer.clear();
+                // Reserve the largest possible member-count varint; each car is measured only once per slice.
+                TrainMapUpdatePayload.writeTrainHeader(buffer, train, total, first, Integer.MAX_VALUE);
+                int bytes = buffer.readableBytes();
+                int end = first;
+                while (end < total) {
+                    buffer.clear();
+                    TrainMapUpdatePayload.writeCar(buffer, train.cars().get(end));
+                    int size = buffer.readableBytes();
+                    if (bytes + size > TrainMapUpdatePayload.MAX_BYTES) break;
+                    bytes += size;
+                    end++;
+                }
+                if (end == first) throw new IllegalArgumentException("Map car exceeds packet budget");
+                var slice = new TrainMapData.Train(train.id(), train.running(), train.reason(), train.restored(),
+                        train.configuredSpeed(), train.actualSpeed(), train.cars().subList(first, end));
+                result.add(new TrainMapData.TrainFragment(slice, total, first));
+                first = end;
+            }
         }
 
         private void send(Watcher watcher, TrainMapUpdatePayload.Channel channel, boolean reset, List<Entry> entries) {

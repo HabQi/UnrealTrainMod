@@ -5,8 +5,12 @@
 package com.unrealtrainmod.item;
 
 import com.unrealtrainmod.entity.TrainEntity;
+import com.unrealtrainmod.train.TrainManager;
+import com.unrealtrainmod.train.TrainConsist.StopReason;
 import java.util.List;
+import java.util.Locale;
 import net.minecraft.network.chat.Component;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.Item;
@@ -18,10 +22,27 @@ public final class CrowbarItem extends Item {
 
     public InteractionResult useOnTrain(Player player, TrainEntity entity) {
         if (player.isSpectator() || !player.mayBuild()) return InteractionResult.FAIL;
-        if (!entity.level().isClientSide) {
-            entity.setCouplingEnabled(!entity.isCouplingEnabled());
-            player.displayClientMessage(Component.translatable("item.unrealtrainmod.crowbar."
-                    + (entity.isCouplingEnabled() ? "enabled" : "disabled")), true);
+        if (entity.level() instanceof ServerLevel server) {
+            try {
+                var end = TrainManager.nearestCoupler(entity, player.position());
+                var manager = TrainManager.get(server);
+                StopReason failure = null;
+                String action;
+                if (manager.couplingPeer(entity, end) != null) {
+                    failure = manager.uncouple(entity, end);
+                    action = "uncoupled";
+                } else {
+                    entity.setCouplingEnabled(end, !entity.isCouplingEnabled(end));
+                    action = entity.isCouplingEnabled(end) ? "enabled" : "disabled";
+                }
+                var endName = Component.translatable("item.unrealtrainmod.crowbar.end." + end.name().toLowerCase(Locale.ROOT));
+                player.displayClientMessage(failure == null
+                        ? Component.translatable("item.unrealtrainmod.crowbar." + action, endName)
+                        : Component.translatable("commands.unrealtrainmod.train.state." + failure.name().toLowerCase(Locale.ROOT)), true);
+            } catch (TrainManager.StateException exception) {
+                player.displayClientMessage(Component.translatable("commands.unrealtrainmod.train.state."
+                        + exception.reason().name().toLowerCase(Locale.ROOT)), true);
+            }
         }
         return InteractionResult.sidedSuccess(entity.level().isClientSide);
     }

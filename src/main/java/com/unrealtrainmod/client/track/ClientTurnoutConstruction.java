@@ -12,6 +12,7 @@ import com.unrealtrainmod.track.TrackCurveParameters;
 import com.unrealtrainmod.track.TurnoutPlacementGeometry;
 import com.unrealtrainmod.track.assembly.TrackAssemblyDefinition;
 import com.unrealtrainmod.track.block.TrackBlockVolume;
+import com.unrealtrainmod.track.geometry.BezierTrackGeometry;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Map;
@@ -69,6 +70,10 @@ public final class ClientTurnoutConstruction implements ResourceManagerReloadLis
         for (int i = 0; i < draft.points().size(); i++) {
             var raw = edited && endpoint == i ? curve : draft.curves().get(i);
             var automatic = draft.defaults().get(i);
+            if (i > 0 && raw == null && !draft.locked().get(i)) {
+                curves.add(null);
+                continue;
+            }
             double angle = raw == null || draft.locked().get(i) ? automatic.angle() : raw.angle();
             curves.add(new TrackCurveParameters(angle, raw == null ? automatic.length() : raw.length()));
         }
@@ -85,6 +90,16 @@ public final class ClientTurnoutConstruction implements ResourceManagerReloadLis
             volume = cells;
             if (edited) feedback = Feedback.START;
         } catch (IllegalArgumentException exception) { feedback = Feedback.INVALID_GEOMETRY; }
+    }
+
+    /** The free exit's editor values follow the current preview, including after restoring automatic. */
+    public TrackCurveParameters automaticEndParameters(int endpoint) {
+        if (geometry == null) return draft.defaults().get(endpoint);
+        var path = (BezierTrackGeometry) geometry.paths().get(endpoint == 1 ? "straight" : "diverging").getFirst();
+        var end = draft.points().get(endpoint).position();
+        double dx = path.control2().x() - end.x(), dz = path.control2().z() - end.z();
+        return new TrackCurveParameters(Math.toDegrees(Math.atan2(-dx, dz)),
+                Math.clamp(Math.hypot(dx, dz), TrackCurveParameters.MIN_LENGTH, TrackCurveParameters.MAX_LENGTH));
     }
 
     boolean isActive() {

@@ -11,7 +11,6 @@ import com.unrealtrainmod.track.path.TrackPathSampler;
 import com.unrealtrainmod.track.path.TrackRoute;
 import com.unrealtrainmod.vehicle.VehicleCatalog;
 import com.unrealtrainmod.vehicle.VehicleDefinition;
-import com.unrealtrainmod.vehicle.VehicleMotionSpec;
 import com.unrealtrainmod.vehicle.VehiclePoseSolver;
 import java.util.ArrayList;
 import java.util.List;
@@ -97,10 +96,6 @@ final class TrainMotion {
         return offsets;
     }
 
-    static List<Double> sampleOffsets(VehicleMotionSpec spec, int direction) {
-        return List.of(0.0, direction * spec.frontBogieOffset(), direction * spec.rearBogieOffset());
-    }
-
     /** The complete swept consist must stay inside one genuinely straight route occurrence. */
     static boolean isSingleStraight(TrackGraph graph, Prepared motion, double from, double target) {
         if (Math.abs(target - from) <= 0.25) return false;
@@ -150,7 +145,7 @@ final class TrainMotion {
         return false;
     }
 
-    /** Chooses the uniquely nearest occurrence for a single car being aligned during coupling. */
+    /** Chooses the uniquely nearest reference occurrence for a consist being aligned during coupling. */
     static double nearestDistance(TrainRouteWindow window, TrainAnchor anchor, double expected, int direction) {
         var positions = new ArrayList<Double>();
         double best = Double.NaN, difference = Double.POSITIVE_INFINITY;

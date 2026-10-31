@@ -8,6 +8,7 @@ import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import net.minecraft.core.HolderLookup;
@@ -23,7 +24,7 @@ import net.minecraft.world.level.storage.LevelResource;
 /** One file per dimension. Routes, poses and running flags are rebuilt rather than serialized. */
 public final class TrainSavedData extends SavedData {
     private static final String NAME = "unrealtrainmod_trains";
-    private static final int FORMAT_VERSION = 3;
+    private static final int FORMAT_VERSION = 4;
     private static final Factory<TrainSavedData> FACTORY =
             new Factory<>(TrainSavedData::new, (tag, registries) -> load(tag));
     private final Map<UUID, TrainConsist> trains = new HashMap<>();
@@ -66,8 +67,8 @@ public final class TrainSavedData extends SavedData {
             var entry = entries.getCompound(i);
             UUID id = uuid(entry, "Id");
             var cars = list(entry, "Cars");
-            if (cars.isEmpty() || cars.size() > 2 || (version == 1 && cars.size() != 1)) {
-                throw new IllegalArgumentException("Expected one or two train members");
+            if (cars.isEmpty() || (version < 4 && cars.size() > 2) || (version == 1 && cars.size() != 1)) {
+                throw new IllegalArgumentException("Invalid train member count");
             }
             var restored = new ArrayList<TrainCarState>(cars.size());
             for (int j = 0; j < cars.size(); j++) {
@@ -86,14 +87,31 @@ public final class TrainSavedData extends SavedData {
                 boolean reversed = version >= 3 && car.getBoolean("Reversed");
                 if (j == 0 && reversed) throw new IllegalArgumentException("Reference member must face the route direction");
                 var anchor = anchor(version == 1 ? entry : car);
-                if (cars.size() == 2 && anchor == null) throw new IllegalArgumentException("Missing coupled member anchor");
-                restored.add(new TrainCarState(entityId, modelId, offset, reversed, anchor));
+                if (cars.size() > 1 && anchor == null) throw new IllegalArgumentException("Missing coupled member anchor");
+                UUID previousId = car.contains("PreviousTrainId") ? uuid(car, "PreviousTrainId") : null;
+                restored.add(new TrainCarState(entityId, modelId, offset, reversed, anchor, previousId));
             }
             double speed = number(entry, "ConfiguredSpeed");
             if (speed == 0 || Math.abs(speed) > TrainConsist.MAX_SPEED) {
                 throw new IllegalArgumentException("Configured speed must be nonzero and within [-100, 100]");
             }
-            var train = new TrainConsist(id, restored, speed);
+            List<TrainCoupling> couplings;
+            if (version >= 4 && entry.contains("Couplings")) {
+                var links = list(entry, "Couplings");
+                couplings = new ArrayList<>(links.size());
+                for (int j = 0; j < links.size(); j++) {
+                    var link = links.getCompound(j);
+                    couplings.add(new TrainCoupling(end(link, "First"), end(link, "Second")));
+                }
+                TrainCoupling.validate(restored, couplings);
+            } else if (cars.size() == 2 && (version < 4
+                    || entry.contains("LegacyTwoCar", Tag.TAG_BYTE) && entry.getBoolean("LegacyTwoCar"))) {
+                couplings = null;
+            } else {
+                if (version >= 4) throw new IllegalArgumentException("Missing train couplings");
+                couplings = List.of();
+            }
+            var train = new TrainConsist(id, restored, speed, couplings);
             if (data.trains.putIfAbsent(id, train) != null) throw new IllegalArgumentException("Duplicate train ID: " + id);
         }
         data.setDirty(version < FORMAT_VERSION);
@@ -115,10 +133,23 @@ public final class TrainSavedData extends SavedData {
                 car.putString("ModelId", member.modelId().toString());
                 car.putDouble("Offset", member.offset());
                 car.putBoolean("Reversed", member.reversed());
+                if (member.previousTrainId() != null) car.putUUID("PreviousTrainId", member.previousTrainId());
                 if (member.anchor() != null) car.put("Anchor", member.anchor().save());
                 cars.add(car);
             }
             entry.put("Cars", cars);
+            if (train.couplingsReady()) {
+                var links = new ListTag();
+                for (var coupling : train.couplings()) {
+                    var link = new CompoundTag();
+                    putEnd(link, "First", coupling.first());
+                    putEnd(link, "Second", coupling.second());
+                    links.add(link);
+                }
+                entry.put("Couplings", links);
+            } else {
+                entry.putBoolean("LegacyTwoCar", true);
+            }
             entries.add(entry);
         }
         tag.put("Trains", entries);
@@ -137,6 +168,17 @@ public final class TrainSavedData extends SavedData {
     private static UUID uuid(CompoundTag tag, String key) {
         if (!tag.hasUUID(key)) throw new IllegalArgumentException("Missing UUID: " + key);
         return tag.getUUID(key);
+    }
+
+    private static TrainCoupling.End end(CompoundTag tag, String prefix) {
+        if (!tag.contains(prefix + "Front", Tag.TAG_BYTE)) throw new IllegalArgumentException("Missing coupler end");
+        return new TrainCoupling.End(uuid(tag, prefix + "Vehicle"),
+                tag.getBoolean(prefix + "Front") ? TrainCarEnd.FRONT : TrainCarEnd.REAR);
+    }
+
+    private static void putEnd(CompoundTag tag, String prefix, TrainCoupling.End end) {
+        tag.putUUID(prefix + "Vehicle", end.vehicle());
+        tag.putBoolean(prefix + "Front", end.end() == TrainCarEnd.FRONT);
     }
 
     private static TrainAnchor anchor(CompoundTag tag) {

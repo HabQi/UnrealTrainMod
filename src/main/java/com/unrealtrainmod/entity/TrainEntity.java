@@ -8,6 +8,7 @@ import com.unrealtrainmod.UnrealTrainMod;
 import com.unrealtrainmod.model.ModelBounds;
 import com.unrealtrainmod.registry.ModDataComponents;
 import com.unrealtrainmod.train.TrainAnchor;
+import com.unrealtrainmod.train.TrainCarEnd;
 import com.unrealtrainmod.train.TrainManager;
 import com.unrealtrainmod.vehicle.VehicleCatalog;
 import com.unrealtrainmod.vehicle.VehiclePose;
@@ -54,7 +55,7 @@ public final class TrainEntity extends Entity {
     private UUID trainId;
     private Tag invalidTrainId;
     private boolean invalidAnchor;
-    private boolean couplingEnabled;
+    private boolean frontCouplingEnabled, rearCouplingEnabled;
     private int lerpSteps;
     private double targetX, targetY, targetZ;
     private float targetYaw, targetPitch;
@@ -91,8 +92,13 @@ public final class TrainEntity extends Entity {
     }
     public VehiclePose getRailPose() { return railPose; }
     public boolean hasInvalidAnchor() { return invalidAnchor; }
-    public boolean isCouplingEnabled() { return couplingEnabled; }
-    public void setCouplingEnabled(boolean enabled) { couplingEnabled = enabled; }
+    public boolean isCouplingEnabled(TrainCarEnd end) {
+        return end == TrainCarEnd.FRONT ? frontCouplingEnabled : rearCouplingEnabled;
+    }
+    public void setCouplingEnabled(TrainCarEnd end, boolean enabled) {
+        if (end == TrainCarEnd.FRONT) frontCouplingEnabled = enabled;
+        else rearCouplingEnabled = enabled;
+    }
 
     public void setRailAnchor(TrainAnchor anchor) {
         railAnchor = anchor;
@@ -240,7 +246,10 @@ public final class TrainEntity extends Entity {
         invalidAnchor = false;
         trainId = null;
         invalidTrainId = null;
-        couplingEnabled = tag.getBoolean("CouplingEnabled");
+        frontCouplingEnabled = tag.contains("FrontCouplingEnabled", Tag.TAG_BYTE)
+                ? tag.getBoolean("FrontCouplingEnabled") : tag.getBoolean("CouplingEnabled");
+        rearCouplingEnabled = tag.contains("RearCouplingEnabled", Tag.TAG_BYTE)
+                ? tag.getBoolean("RearCouplingEnabled") : tag.getBoolean("CouplingEnabled");
         if (tag.contains("TrainId")) {
             if (tag.hasUUID("TrainId")) trainId = tag.getUUID("TrainId");
             else {
@@ -277,7 +286,8 @@ public final class TrainEntity extends Entity {
     @Override
     protected void addAdditionalSaveData(CompoundTag tag) {
         tag.putString("ModelId", entityData.get(MODEL_ID));
-        tag.putBoolean("CouplingEnabled", couplingEnabled);
+        tag.putBoolean("FrontCouplingEnabled", frontCouplingEnabled);
+        tag.putBoolean("RearCouplingEnabled", rearCouplingEnabled);
         if (trainId != null) tag.putUUID("TrainId", trainId);
         else if (invalidTrainId != null) tag.put("TrainId", invalidTrainId.copy());
         if (railAnchor != null) tag.put("RailAnchor", railAnchor.save());

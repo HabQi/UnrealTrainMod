@@ -12,7 +12,6 @@ import com.unrealtrainmod.track.path.TrackCursor;
 import com.unrealtrainmod.track.path.TrackPathSampler;
 import com.unrealtrainmod.track.path.TrackRoute;
 import com.unrealtrainmod.vehicle.VehicleCatalog;
-import com.unrealtrainmod.vehicle.VehicleMotionSpec;
 import com.unrealtrainmod.vehicle.VehiclePoseSolver;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -140,18 +139,27 @@ final class TrainRouteWindow {
         return copy;
     }
 
-    /** Rebase a detached reversed member into its own forward-facing route without moving it. */
-    TrainRouteWindow reversedAt(TrackGraph graph, double reference, VehicleMotionSpec spec) {
-        var reversedRoute = route.reversed();
-        var cursor = sampler.locate(reference);
-        int index = reversedRoute.connections().size() - 1 - cursor.segmentIndex();
-        double local = route.segmentLength(cursor.segmentIndex()) - cursor.distance();
-        var copy = new TrainRouteWindow(graph, reversedRoute, 0, endBoundary, startBoundary, -preparedSpeed);
-        copy.setProgress(copy.sampler().distance(new TrackCursor(index, local)));
-        var oldRange = VehiclePoseSolver.range(route.getLength(), spec, -1);
-        var newRange = VehiclePoseSolver.range(reversedRoute.getLength(), spec);
-        if (reference == oldRange.max()) copy.setProgress(newRange.min());
-        else if (reference == oldRange.min()) copy.setProgress(newRange.max());
+    /** Keep the same physical segment occurrence while choosing a component's new reference car. */
+    TrainRouteWindow rebased(TrackGraph graph, double originalProgress, List<TrainCarState> members, TrainConsist component) {
+        var referenceCar = members.getFirst();
+        var spec = VehicleCatalog.find(referenceCar.modelId()).motionSpec();
+        double reference = TrainMotion.carProgress(originalProgress, referenceCar.offset(),
+                VehiclePoseSolver.range(route.getLength(), spec, referenceCar.direction()));
+        TrainRouteWindow copy;
+        if (!referenceCar.reversed()) {
+            copy = copyAt(graph, reference);
+        } else {
+            var reversedRoute = route.reversed();
+            var cursor = sampler.locate(reference);
+            int index = reversedRoute.connections().size() - 1 - cursor.segmentIndex();
+            double local = route.segmentLength(cursor.segmentIndex()) - cursor.distance();
+            copy = new TrainRouteWindow(graph, reversedRoute, 0, endBoundary, startBoundary, -preparedSpeed);
+            copy.setProgress(copy.sampler().distance(new TrackCursor(index, local)));
+        }
+        var oldRange = TrainMotion.range(route.getLength(), members);
+        var newRange = TrainMotion.range(copy.route().getLength(), component.cars());
+        if (originalProgress == oldRange.max()) copy.setProgress(referenceCar.reversed() ? newRange.min() : newRange.max());
+        else if (originalProgress == oldRange.min()) copy.setProgress(referenceCar.reversed() ? newRange.max() : newRange.min());
         copy.requestRefresh();
         return copy;
     }

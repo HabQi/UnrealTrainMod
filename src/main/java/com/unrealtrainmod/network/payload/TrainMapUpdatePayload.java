@@ -67,24 +67,12 @@ public record TrainMapUpdatePayload(UUID session, ResourceLocation dimension, Ch
             case Track value -> { buffer.writeByte(0); TrackPayloadCodec.write(buffer, value.segment()); }
             case Removed value -> { buffer.writeByte(1); buffer.writeUUID(value.segmentId()); }
             case Train value -> {
-                buffer.writeByte(2);
-                buffer.writeUUID(value.id());
-                buffer.writeBoolean(value.running());
-                buffer.writeEnum(value.reason());
-                buffer.writeBoolean(value.restored());
-                buffer.writeDouble(value.configuredSpeed());
-                buffer.writeDouble(value.actualSpeed());
-                buffer.writeVarInt(value.cars().size());
-                for (var car : value.cars()) {
-                    buffer.writeUUID(car.id());
-                    buffer.writeResourceLocation(car.model());
-                    buffer.writeBoolean(car.loaded());
-                    buffer.writeEnum(car.source());
-                    buffer.writeBoolean(car.position() != null);
-                    if (car.position() != null) writeVector(buffer, car.position());
-                    buffer.writeDouble(car.directionX());
-                    buffer.writeDouble(car.directionZ());
-                }
+                writeTrainHeader(buffer, value, value.cars().size(), 0, value.cars().size());
+                for (var car : value.cars()) writeCar(buffer, car);
+            }
+            case TrainFragment value -> {
+                writeTrainHeader(buffer, value.train(), value.totalCars(), value.firstCar(), value.train().cars().size());
+                for (var car : value.train().cars()) writeCar(buffer, car);
             }
             case Occupancy value -> {
                 buffer.writeByte(3);
@@ -105,6 +93,30 @@ public record TrainMapUpdatePayload(UUID session, ResourceLocation dimension, Ch
         }
     }
 
+    public static void writeTrainHeader(RegistryFriendlyByteBuf buffer, Train train, int total, int first, int size) {
+        buffer.writeByte(2);
+        buffer.writeUUID(train.id());
+        buffer.writeBoolean(train.running());
+        buffer.writeEnum(train.reason());
+        buffer.writeBoolean(train.restored());
+        buffer.writeDouble(train.configuredSpeed());
+        buffer.writeDouble(train.actualSpeed());
+        buffer.writeVarInt(total);
+        buffer.writeVarInt(first);
+        buffer.writeVarInt(size);
+    }
+
+    public static void writeCar(RegistryFriendlyByteBuf buffer, Car car) {
+        buffer.writeUUID(car.id());
+        buffer.writeResourceLocation(car.model());
+        buffer.writeBoolean(car.loaded());
+        buffer.writeEnum(car.source());
+        buffer.writeBoolean(car.position() != null);
+        if (car.position() != null) writeVector(buffer, car.position());
+        buffer.writeDouble(car.directionX());
+        buffer.writeDouble(car.directionZ());
+    }
+
     private static Entry readEntry(RegistryFriendlyByteBuf buffer) {
         return switch (buffer.readUnsignedByte()) {
             case 0 -> new Track(TrackPayloadCodec.read(buffer));
@@ -115,8 +127,10 @@ public record TrainMapUpdatePayload(UUID session, ResourceLocation dimension, Ch
                 var reason = buffer.readEnum(TrainConsist.StopReason.class);
                 boolean restored = buffer.readBoolean();
                 double configured = finite(buffer.readDouble()), actual = finite(buffer.readDouble());
-                int size = buffer.readVarInt();
-                if (size < 1 || size > 2) throw new IllegalArgumentException("Invalid map member count");
+                int total = buffer.readVarInt(), first = buffer.readVarInt(), size = buffer.readVarInt();
+                // Bound allocation by this packet's actual bytes, not the total consist length.
+                if (total < 1 || first < 0 || first >= total || size < 1 || size > total - first
+                        || size > buffer.readableBytes() / 36) throw new IllegalArgumentException("Invalid map member fragment");
                 var cars = new ArrayList<Car>(size);
                 for (int i = 0; i < size; i++) {
                     var carId = buffer.readUUID();
@@ -130,7 +144,7 @@ public record TrainMapUpdatePayload(UUID session, ResourceLocation dimension, Ch
                     }
                     cars.add(new Car(carId, model, loaded, source, position, dx, dz));
                 }
-                yield new Train(id, running, reason, restored, configured, actual, cars);
+                yield new TrainFragment(new Train(id, running, reason, restored, configured, actual, cars), total, first);
             }
             case 3 -> {
                 var train = buffer.readUUID();

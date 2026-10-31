@@ -355,6 +355,7 @@ public final class TrackGraph {
         return new PreparedAssembly(instance, List.copyOf(preparedNodes.values()), List.copyOf(batch));
     }
 
+    /** Curves contain the shared directed toe; a null exit curve keeps that free exit automatic. */
     public PreparedAssembly prepareTurnout(List<TrackPlacementEndpoint> endpoints, double gauge,
                                            List<TrackCurveParameters> curves, List<Boolean> edited, String modelId) {
         if (endpoints.size() != 3 || curves.size() != 3 || edited.size() != 3) {

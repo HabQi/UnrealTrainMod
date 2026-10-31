@@ -26,6 +26,10 @@ public final class TurnoutPlacementGeometry {
                 Math.clamp(length / 3, TrackCurveParameters.MIN_LENGTH, TrackCurveParameters.MAX_LENGTH));
     }
 
+    public static TrackCurveParameters endDefaults(TrackVector a, TrackVector end, TrackCurveParameters toe) {
+        return TrackPlacementGeometry.defaults(a, end, toe, null, false, toe.angle(), true, false);
+    }
+
     public static TrackAssemblyDefinition.Geometry create(TrackVector a, TrackVector b, TrackVector c, double gauge,
             TrackCurveParameters toe, TrackCurveParameters endB, TrackCurveParameters endC,
             boolean lockedB, boolean lockedC) {
@@ -49,14 +53,10 @@ public final class TurnoutPlacementGeometry {
         if (Math.abs(end.y() - a.y()) > 1e-6 || distance < 1e-6 || distance > TrackPlacementGeometry.MAX_LENGTH) {
             throw new IllegalArgumentException("Turnout endpoints must be distinct, horizontal and within 256 blocks");
         }
-        double radians = Math.toRadians(toe.angle());
-        var first = new TrackPoint(a.x() - Math.sin(radians) * toe.length(), a.z() + Math.cos(radians) * toe.length());
-        var last = TrackPlacementGeometry.control(end, a, endCurve);
-        if (locked) {
-            // The external tangent points out of the turnout; its control point is on the opposite side.
-            double exit = Math.toRadians(endCurve.angle());
-            last = new TrackPoint(end.x() + Math.sin(exit) * endCurve.length(), end.z() - Math.cos(exit) * endCurve.length());
-        }
+        var first = TrackPlacementGeometry.control(a, end, toe, true);
+        // The external tangent points out of the turnout; its control point is on the opposite side.
+        var inward = locked ? new TrackCurveParameters(endCurve.angle() + 180, endCurve.length()) : endCurve;
+        var last = TrackPlacementGeometry.control(a, end, toe, inward, false, true, locked);
         var geometry = new BezierTrackGeometry(new TrackPoint(a.x(), a.z()), first, last, new TrackPoint(end.x(), end.z()),
                 new LinearGrade(a.y(), a.y()), gauge);
         if (geometry.getLength() > TrackPlacementGeometry.MAX_LENGTH) throw new IllegalArgumentException("Turnout path exceeds 256 blocks");

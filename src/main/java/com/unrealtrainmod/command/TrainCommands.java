@@ -11,6 +11,7 @@ import com.mojang.brigadier.exceptions.SimpleCommandExceptionType;
 import com.unrealtrainmod.entity.TrainEntity;
 import com.unrealtrainmod.track.block.TrackBlockManager;
 import com.unrealtrainmod.train.TrainAnchor;
+import com.unrealtrainmod.train.TrainCarEnd;
 import com.unrealtrainmod.train.TrainConsist;
 import com.unrealtrainmod.train.TrainManager;
 import com.unrealtrainmod.train.TrainDiagnostics;
@@ -57,7 +58,10 @@ public final class TrainCommands {
                             return execute(context, "couple", "frontVehicle", (manager, front) -> manager.couple(front, rear));
                         }))))
                 .then(literal("uncouple").then(vehicleArgument()
-                        .executes(context -> execute(context, "uncouple", TrainManager::uncouple))))
+                        .then(literal("front").executes(context -> execute(context, "uncouple",
+                                (manager, vehicle) -> manager.uncouple(vehicle, TrainCarEnd.FRONT))))
+                        .then(literal("rear").executes(context -> execute(context, "uncouple",
+                                (manager, vehicle) -> manager.uncouple(vehicle, TrainCarEnd.REAR))))))
                 .then(literal("start").then(vehicleArgument()
                         .executes(context -> execute(context, "start", TrainManager::start))))
                 .then(literal("stop").then(vehicleArgument().executes(context -> execute(context, "stop", (manager, vehicle) -> {
@@ -144,6 +148,15 @@ public final class TrainCommands {
             var ready = Component.translatable(PREFIX + (manager.isRestored(train) ? "member_restored" : "member_restore_pending"));
             context.getSource().sendSuccess(() -> Component.translatable(PREFIX + "member", ordinal, member.entityId().toString(),
                     member.modelId().toString(), number(member.offset()), loaded, ready), false);
+            for (var end : TrainCarEnd.values()) {
+                var peer = train.peer(member.entityId(), end);
+                var endName = Component.translatable("item.unrealtrainmod.crowbar.end." + end.name().toLowerCase(Locale.ROOT));
+                Component connection = !train.couplingsReady() ? Component.translatable(PREFIX + "coupler_pending")
+                        : peer == null ? Component.translatable(PREFIX + "coupler_free")
+                        : Component.translatable(PREFIX + "coupler_peer", peer.vehicle().toString(),
+                                Component.translatable("item.unrealtrainmod.crowbar.end." + peer.end().name().toLowerCase(Locale.ROOT)));
+                context.getSource().sendSuccess(() -> Component.translatable(PREFIX + "member_coupler", ordinal, endName, connection), false);
+            }
             var savedAnchor = member.anchor();
             context.getSource().sendSuccess(() -> savedAnchor == null
                     ? Component.translatable(PREFIX + "member_anchor_none", ordinal)
