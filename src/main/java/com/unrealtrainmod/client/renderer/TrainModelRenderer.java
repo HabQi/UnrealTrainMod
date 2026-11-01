@@ -5,6 +5,7 @@
 package com.unrealtrainmod.client.renderer;
 
 import com.mojang.blaze3d.vertex.PoseStack;
+import com.mojang.math.Axis;
 import com.unrealtrainmod.client.model.LoadedModel;
 import com.unrealtrainmod.compat.rtm.script.VehicleScriptManager;
 import com.unrealtrainmod.entity.TrainEntity;
@@ -48,10 +49,12 @@ public final class TrainModelRenderer {
                 } else {
                     var offset = instance.offset();
                     pose.translate(offset.x(), offset.y(), offset.z());
+                    if (instance.definition().reversedBogie()) pose.mulPose(Axis.YP.rotationDegrees(180));
                 }
                 if (!VehicleScriptManager.render(queue, entity, vehiclePose, instance, pose, light, partialTick)) {
                     // The caller already applied the instance offset, so submit source-local geometry directly.
                     queue.submitGeometry(instance.model(), instance.visibleParts(), pose, light);
+                    VehicleActionRenderer.submit(queue, instance, entity, partialTick, pose, light);
                 }
             } finally {
                 pose.popPose();

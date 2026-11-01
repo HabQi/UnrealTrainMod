@@ -16,9 +16,21 @@ public record VehicleDefinition(ResourceLocation id, String name, PackageAsset c
                                 List<Instance> parts, ModelBounds bounds, VehicleMotionSpec motionSpec,
                                 VehiclePerformanceSpec performanceSpec) {
     public VehicleDefinition { parts = List.copyOf(parts); }
-    /** Bounds and pivot are source-local; offset retains the original static assembly. */
+    /**
+     * Bounds and pivot are source-local; offset retains the original static assembly. Door actions belong to
+     * the body instance; bogie instances carry {@link VehicleActions#NONE}.
+     */
     public record Instance(ModelSource source, ModelData.Position offset, VehiclePartRole role,
-                           TrackVector pivot, ModelBounds bounds) {}
+                           TrackVector pivot, ModelBounds bounds, VehicleActions actions) {
+        public Instance {
+            if (actions == null) actions = VehicleActions.NONE;
+        }
+
+        /** RTM mounts the same bogie model facing opposite directions at the two ends. */
+        public boolean reversedBogie() {
+            return source.format() == ModelSource.Format.MQO && role == VehiclePartRole.REAR_BOGIE;
+        }
+    }
 
     public VehicleDefinition withMotionSpec(VehicleMotionSpec spec) {
         var calibrated = parts.stream().map(part -> {
@@ -26,7 +38,7 @@ public record VehicleDefinition(ResourceLocation id, String name, PackageAsset c
             double z = part.role() == VehiclePartRole.FRONT_BOGIE
                     ? spec.frontBogieOffset() : spec.rearBogieOffset();
             return new Instance(part.source(), part.offset(), part.role(),
-                    new TrackVector(0, 0, z), part.bounds());
+                    new TrackVector(0, 0, z), part.bounds(), part.actions());
         }).toList();
         return new VehicleDefinition(id, name, config, buttonTexture, trainType, calibrated, bounds, spec, performanceSpec);
     }

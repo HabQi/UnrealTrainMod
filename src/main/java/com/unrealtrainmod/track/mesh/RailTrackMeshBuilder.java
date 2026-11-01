@@ -80,7 +80,8 @@ public final class RailTrackMeshBuilder {
         }
         // Own an entire repeated module by its within-track interval midpoint, never by individual faces.
         if (Math.floor(middle.x() / 16) != chunkX || Math.floor(middle.z() / 16) != chunkZ) return;
-        if (!filter.shouldRender(source.part(), first, count)) return;        double center = first * period + period / 2;
+        if (!filter.shouldRender(source.part(), first, count)) return;
+        double center = first * period + period / 2;
         var mesh = source.mesh();
         int[] indices = mesh.indices();
         for (int index : indices) emit(mesh, index, center, vertices, colors);

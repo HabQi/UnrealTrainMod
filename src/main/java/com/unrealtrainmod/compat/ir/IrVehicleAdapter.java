@@ -15,6 +15,7 @@ import com.unrealtrainmod.resource.LoadReport;
 import com.unrealtrainmod.resource.PackageArchive;
 import com.unrealtrainmod.resource.PackageAsset;
 import com.unrealtrainmod.resource.ResourceIds;
+import com.unrealtrainmod.vehicle.VehicleActions;
 import com.unrealtrainmod.vehicle.VehicleDefinition;
 import com.unrealtrainmod.vehicle.VehicleMotionSpec;
 import com.unrealtrainmod.vehicle.VehiclePerformanceSpec;
@@ -105,7 +106,7 @@ final class IrVehicleAdapter {
                 case REAR_BOGIE -> spec.rearBogieOffset();
             };
             parts.add(new VehicleDefinition.Instance(source, new ModelData.Position(0, 0, 0), role,
-                    new TrackVector(0, 0, z), builder.build()));
+                    new TrackVector(0, 0, z), builder.build(), VehicleActions.NONE));
         });
         return new VehicleDefinition(id, name, config, null, type, parts, bounds, spec,
                 VehiclePerformanceSpec.DEFAULT);

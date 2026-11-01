@@ -7,6 +7,7 @@ package com.unrealtrainmod.client;
 import com.unrealtrainmod.entity.TrainEntity;
 import com.unrealtrainmod.network.TrackSyncEvent;
 import com.unrealtrainmod.network.payload.TrainControlInputPayload;
+import com.unrealtrainmod.network.payload.TrainControlInputPayload.Action;
 import com.unrealtrainmod.network.payload.TrainControlSyncPayload;
 import com.unrealtrainmod.train.TrainControlProfile;
 import com.unrealtrainmod.train.TrainControlState.Reverser;
@@ -33,7 +34,7 @@ import net.neoforged.neoforge.event.level.LevelEvent;
 import net.neoforged.neoforge.network.PacketDistributor;
 import org.lwjgl.glfw.GLFW;
 
-/** Local handle intentions; speed and position are always read from the server. */
+/** Discrete driving requests; shared controls and motion always come from the server. */
 public final class TrainDrivingClient {
     private static final String PREFIX = "gui.unrealtrainmod.driving.";
     private static final IKeyConflictContext CONTEXT = new IKeyConflictContext() {
@@ -46,10 +47,7 @@ public final class TrainDrivingClient {
     private static final KeyMapping EMERGENCY = key("emergency", GLFW.GLFW_KEY_SPACE);
     private static TrainControlSyncPayload snapshot;
     private static long sequence;
-    private static long intentSequence;
-    private static int handle, silence, heartbeat;
-    private static Reverser reverser;
-    private static boolean emergency;
+    private static int silence, heartbeat;
     private static TrainControlSyncPayload hudSnapshot;
     private static Language hudLanguage;
     private static Font hudFont;
@@ -86,14 +84,9 @@ public final class TrainDrivingClient {
             return;
         }
         boolean newSession = snapshot == null || !snapshot.session().equals(incoming.session());
-        if (newSession) { sequence = incoming.sequence(); intentSequence = sequence; }
+        if (newSession) sequence = incoming.sequence();
         snapshot = incoming;
         silence = 0;
-        if (newSession || incoming.sequence() >= intentSequence) {
-            handle = incoming.handle();
-            reverser = incoming.reverser();
-            emergency = incoming.emergency();
-        }
         if (incoming.feedback() != TrainControlSyncPayload.Feedback.NONE && mc.player != null) {
             mc.player.displayClientMessage(Component.translatable(PREFIX
                     + incoming.feedback().name().toLowerCase(Locale.ROOT)), true);
@@ -109,7 +102,7 @@ public final class TrainDrivingClient {
             return;
         }
         for (var key : new KeyMapping[] {POWER, BRAKE, REVERSER, EMERGENCY}) while (key.consumeClick()) { }
-        if (riding() && ++heartbeat >= 10) send(false);
+        if (riding() && ++heartbeat >= 10) send(Action.HEARTBEAT);
     }
 
     public static void keyPressed(InputEvent.Key event) {
@@ -126,25 +119,16 @@ public final class TrainDrivingClient {
 
     /** Consume actual press events, so quick taps are retained and keyboard repeat cannot change a notch. */
     private static void press(boolean power, boolean brake, boolean direction, boolean stop) {
-        boolean changed = false;
-        if (!emergency && power && !brake) {
-            handle = Math.min(TrainControlProfile.POWER_NOTCHES, handle + 1);
-            changed = true;
-        }
-        if (!emergency && brake && !power) {
-            handle = Math.max(-TrainControlProfile.BRAKE_NOTCHES, handle - 1);
-            changed = true;
-        }
-        if (direction) { reverser = reverser.next(); changed = true; }
-        if (stop) { emergency = !emergency; handle = 0; changed = true; }
-        if (changed) send(true);
+        if (power && !brake) send(Action.HANDLE_UP);
+        if (brake && !power) send(Action.HANDLE_DOWN);
+        if (direction) send(Action.REVERSER_NEXT);
+        if (stop) send(snapshot.emergency() ? Action.EMERGENCY_RELEASE : Action.EMERGENCY_APPLY);
     }
 
-    private static void send(boolean changed) {
+    private static void send(Action action) {
         heartbeat = 0;
         sequence++;
-        if (changed) intentSequence = sequence;
-        PacketDistributor.sendToServer(new TrainControlInputPayload(snapshot.session(), sequence, handle, reverser, emergency));
+        PacketDistributor.sendToServer(new TrainControlInputPayload(snapshot.session(), sequence, action));
     }
 
     public static void movement(MovementInputUpdateEvent event) {
@@ -202,10 +186,7 @@ public final class TrainDrivingClient {
     public static void clear() {
         snapshot = null;
         sequence = 0;
-        intentSequence = 0;
-        silence = heartbeat = handle = 0;
-        reverser = null;
-        emergency = false;
+        silence = heartbeat = 0;
         hudSnapshot = null;
         hudLanguage = null;
         hudFont = null;

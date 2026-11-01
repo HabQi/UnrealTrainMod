@@ -10,8 +10,10 @@ import com.unrealtrainmod.model.ModelBounds;
 import com.unrealtrainmod.registry.ModDataComponents;
 import com.unrealtrainmod.train.TrainAnchor;
 import com.unrealtrainmod.train.TrainCarEnd;
+import com.unrealtrainmod.train.TrainDriverManager;
 import com.unrealtrainmod.train.TrainManager;
 import com.unrealtrainmod.vehicle.VehicleCatalog;
+import com.unrealtrainmod.vehicle.VehicleDoor;
 import com.unrealtrainmod.vehicle.VehiclePose;
 import com.unrealtrainmod.vehicle.VehiclePosePlayback;
 import com.unrealtrainmod.vehicle.VehiclePoseSnapshot;
@@ -53,6 +55,10 @@ public final class TrainEntity extends Entity {
             SynchedEntityData.defineId(TrainEntity.class, EntityDataSerializers.STRING);
     private static final EntityDataAccessor<CompoundTag> RAIL_POSE =
             SynchedEntityData.defineId(TrainEntity.class, EntityDataSerializers.COMPOUND_TAG);
+    private static final EntityDataAccessor<CompoundTag> DOOR_STATE =
+            SynchedEntityData.defineId(TrainEntity.class, EntityDataSerializers.COMPOUND_TAG);
+    /** Legacy RTM advances a door by one unit per tick for {@code MAX_DOOR_MOVE = 60} ticks. */
+    private static final int DOOR_MOVE_TICKS = 60;
     private TrainAnchor railAnchor;
     private UUID trainId;
     private Tag invalidTrainId;
@@ -64,6 +70,9 @@ public final class TrainEntity extends Entity {
     private VehiclePose railPose, motionStartPose;
     private long motionStartTick = Long.MIN_VALUE, poseRevision;
     private VehiclePosePlayback playback;
+    /** Server-side transition bookkeeping shared by the synced state and late observers. */
+    private final DoorState leftDoor = new DoorState(), rightDoor = new DoorState();
+    private boolean doorStateLoaded;
 
     public TrainEntity(EntityType<? extends TrainEntity> type, Level level) {
         super(type, level);
@@ -75,6 +84,7 @@ public final class TrainEntity extends Entity {
     protected void defineSynchedData(SynchedEntityData.Builder builder) {
         builder.define(MODEL_ID, "");
         builder.define(RAIL_POSE, new CompoundTag());
+        builder.define(DOOR_STATE, new CompoundTag());
     }
 
     public ResourceLocation getModelId() {
@@ -104,6 +114,55 @@ public final class TrainEntity extends Entity {
     public void setCouplingEnabled(TrainCarEnd end, boolean enabled) {
         if (end == TrainCarEnd.FRONT) frontCouplingEnabled = enabled;
         else rearCouplingEnabled = enabled;
+    }
+
+    /** Authoritative per-vehicle target; left and right use the vehicle's own forward direction. */
+    public boolean isDoorOpen(VehicleDoor side) { return door(side).open; }
+
+    /** Server-only transition. Returns false when the requested target is already current. */
+    public boolean setDoorOpen(VehicleDoor side, boolean open) {
+        if (level().isClientSide) return false;
+        var state = door(side);
+        if (state.open == open) return false;
+        long now = level().getGameTime();
+        state.changeProgress = state.progressAt(now);
+        state.open = open;
+        state.changeTick = now;
+        syncDoorState();
+        return true;
+    }
+
+    /** Client render query, interpolated with the same partial tick as the vehicle pose. */
+    public float doorMovement(VehicleDoor side, float partialTick) {
+        if (!level().isClientSide) return isDoorOpen(side) ? 1.0f : 0.0f;
+        ensureDoorState();
+        // Sample the previous-to-current world tick interval even when this entity has stopped ticking.
+        return door(side).progressAt(level().getGameTime() - 1.0 + partialTick);
+    }
+
+    private DoorState door(VehicleDoor side) { return side == VehicleDoor.LEFT ? leftDoor : rightDoor; }
+
+    /** Client-side lazy read of the default state before the first synced update arrives. */
+    private void ensureDoorState() {
+        if (!doorStateLoaded) applyDoorState(entityData.get(DOOR_STATE));
+    }
+
+    /**
+     * Adopts the synced transition. The server records the progress at the change tick, so a new observer
+     * starts at the settled endpoint for parked vehicles and mid-transition when tracking begins during one.
+     */
+    private void applyDoorState(CompoundTag tag) {
+        long now = level().getGameTime();
+        leftDoor.load(tag, "Left", now);
+        rightDoor.load(tag, "Right", now);
+        doorStateLoaded = true;
+    }
+
+    private void syncDoorState() {
+        var tag = new CompoundTag();
+        leftDoor.save(tag, "Left");
+        rightDoor.save(tag, "Right");
+        entityData.set(DOOR_STATE, tag);
     }
 
     public void setRailAnchor(TrainAnchor anchor) {
@@ -230,6 +289,7 @@ public final class TrainEntity extends Entity {
         railPose = null;
         lerpSteps = 0;
         poseRevision++;
+        doorStateLoaded = false;
         setOldPosAndRot();
     }
 
@@ -244,11 +304,14 @@ public final class TrainEntity extends Entity {
                 railPose = null;
                 playback = null;
                 lerpSteps = 0;
+                // Clearing the pose also resets render-time wheel references.
+                poseRevision++;
                 setBoundingBox(makeBoundingBox());
             } else {
                 TrainPoseClient.enqueue(this, VehiclePoseSnapshot.load(snapshot));
             }
         }
+        if (DOOR_STATE.equals(key) && level().isClientSide) applyDoorState(entityData.get(DOOR_STATE));
     }
 
     /** Applied once this frame's simulation ticks have finished, before camera and entity rendering. */
@@ -256,6 +319,11 @@ public final class TrainEntity extends Entity {
         if (playback == null) playback = new VehiclePosePlayback();
         if (!playback.accepts(incoming)) return;
         boolean reset = playback.accept(incoming, time);
+        if (poseRevision != incoming.revision()) {
+            // Track the accepted authoritative reset generation so animation state drops position jumps.
+            poseRevision = incoming.revision();
+            reset = true;
+        }
         applyPose(playback.sample(time));
         if (reset) setOldPosAndRot();
         lerpSteps = 0;
@@ -279,6 +347,10 @@ public final class TrainEntity extends Entity {
                 ? tag.getBoolean("FrontCouplingEnabled") : tag.getBoolean("CouplingEnabled");
         rearCouplingEnabled = tag.contains("RearCouplingEnabled", Tag.TAG_BYTE)
                 ? tag.getBoolean("RearCouplingEnabled") : tag.getBoolean("CouplingEnabled");
+        long doorNow = level().getGameTime();
+        leftDoor.load(tag, "DoorLeft", doorNow);
+        rightDoor.load(tag, "DoorRight", doorNow);
+        doorStateLoaded = false;
         if (tag.contains("TrainId")) {
             if (tag.hasUUID("TrainId")) trainId = tag.getUUID("TrainId");
             else {
@@ -308,6 +380,7 @@ public final class TrainEntity extends Entity {
                 LOGGER.warn("Invalid bogie pose for vehicle {}: {}", getUUID(), exception.getMessage());
             }
         }
+        if (!level().isClientSide) syncDoorState();
         setNoGravity(true);
         setBoundingBox(makeBoundingBox());
     }
@@ -321,6 +394,8 @@ public final class TrainEntity extends Entity {
         else if (invalidTrainId != null) tag.put("TrainId", invalidTrainId.copy());
         if (railAnchor != null) tag.put("RailAnchor", railAnchor.save());
         if (railPose != null) tag.put("BogiePose", railPose.saveBogies());
+        leftDoor.save(tag, "DoorLeft");
+        rightDoor.save(tag, "DoorRight");
     }
 
     /** A dimension transfer copies NBT before removing the source entity. Do not copy its rail binding. */
@@ -390,7 +465,8 @@ public final class TrainEntity extends Entity {
             return dismantle(player) ? InteractionResult.sidedSuccess(level().isClientSide) : InteractionResult.FAIL;
         }
         if (!player.isShiftKeyDown() && hand == InteractionHand.MAIN_HAND && !player.isSpectator()) {
-            if (level().isClientSide) return InteractionResult.SUCCESS;
+            if (level().isClientSide) return player.getMainHandItem().is(UnrealTrainMod.KEY.get())
+                    ? InteractionResult.SUCCESS : InteractionResult.PASS;
             return TrainManager.get((ServerLevel) level()).drivers().board((ServerPlayer) player, this)
                     ? InteractionResult.CONSUME : InteractionResult.FAIL;
         }
@@ -399,7 +475,7 @@ public final class TrainEntity extends Entity {
 
     @Override
     protected boolean canAddPassenger(Entity passenger) {
-        return passenger instanceof Player && getPassengers().isEmpty();
+        return passenger instanceof Player && getPassengers().size() < TrainDriverManager.MAX_DRIVERS;
     }
 
     /** Passenger ownership never gives the client authority to send vehicle position updates. */
@@ -485,5 +561,36 @@ public final class TrainEntity extends Entity {
         }
         discard();
         return true;
+    }
+
+    /**
+     * Target plus the progress and tick when that target was last committed. Progress is a pure function of
+     * game time, so the server does not need to tick every vehicle just to answer observers.
+     */
+    private static final class DoorState {
+        private boolean open;
+        private long changeTick;
+        private float changeProgress;
+
+        private float progressAt(double now) {
+            double elapsed = Math.max(0.0, now - changeTick) / DOOR_MOVE_TICKS;
+            double value = changeProgress + (open ? elapsed : -elapsed);
+            return Mth.clamp((float)value, 0.0f, 1.0f);
+        }
+
+        private void save(CompoundTag tag, String prefix) {
+            tag.putBoolean(prefix + "Open", open);
+            tag.putLong(prefix + "Tick", changeTick);
+            tag.putFloat(prefix + "Progress", changeProgress);
+        }
+
+        private void load(CompoundTag tag, String prefix, long now) {
+            open = tag.getBoolean(prefix + "Open");
+            changeTick = tag.contains(prefix + "Tick", Tag.TAG_LONG) ? tag.getLong(prefix + "Tick") : now;
+            changeProgress = tag.contains(prefix + "Progress", Tag.TAG_FLOAT)
+                    ? tag.getFloat(prefix + "Progress") : (open ? 1.0f : 0.0f);
+            if (!Float.isFinite(changeProgress)) changeProgress = open ? 1.0f : 0.0f;
+            changeProgress = Mth.clamp(changeProgress, 0.0f, 1.0f);
+        }
     }
 }

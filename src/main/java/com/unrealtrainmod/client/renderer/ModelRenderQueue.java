@@ -11,6 +11,7 @@ import com.mojang.blaze3d.vertex.ByteBufferBuilder;
 import com.mojang.blaze3d.vertex.DefaultVertexFormat;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexFormat;
+import com.mojang.math.Axis;
 import com.unrealtrainmod.client.ClientConfig;
 import com.unrealtrainmod.client.GpuModel;
 import com.unrealtrainmod.client.RenderCategory;
@@ -57,6 +58,7 @@ public final class ModelRenderQueue implements AutoCloseable {
         try {
             var offset = instance.offset();
             pose.translate(offset.x(), offset.y(), offset.z());
+            if (instance.definition().reversedBogie()) pose.mulPose(Axis.YP.rotationDegrees(180));
             submitGeometry(instance.model(), selection, pose, light);
         } finally {
             pose.popPose();

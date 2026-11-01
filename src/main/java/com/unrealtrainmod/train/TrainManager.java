@@ -919,7 +919,6 @@ public final class TrainManager {
 
     TrainConsist prepareDriving(TrainEntity entity) {
         var train = state(entity);
-        if (drivers.hasDriver(train)) throw new StateException(StopReason.DRIVER_PRESENT);
         var failure = activate(train, entity, null);
         if (failure != null) throw new StateException(failure);
         return train;
@@ -1006,7 +1005,6 @@ public final class TrainManager {
             if (first == second) return StopReason.COUPLING_REJECTED;
             List<TrainEntity> firstEntities, secondEntities;
             if (automatic) {
-                if (drivers.hasDriver(first) && drivers.hasDriver(second)) return StopReason.DRIVER_PRESENT;
                 firstEntities = readyMembers(first);
                 secondEntities = readyMembers(second);
             } else {

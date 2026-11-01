@@ -65,7 +65,9 @@ public record VehiclePose(Body body, Bogie frontBogie, Bogie rearBogie) {
         // Longitudinal placement comes from motionSpec sampling, not the static assembly's Z offset.
         var local = new TrackVector(offset.x() - pivot.x(), offset.y() - pivot.y(), -pivot.z());
         var rotation = bogie.rotation();
-        return Bogie.of(add(bogie.position, rotate(rotation, local)), rotation);
+        var position = add(bogie.position, rotate(rotation, local));
+        if (part.reversedBogie()) rotation.rotateY((float)Math.PI);
+        return Bogie.of(position, rotation);
     }
 
     /** All visible components and the entity-owning origin participate in area checks and selection. */

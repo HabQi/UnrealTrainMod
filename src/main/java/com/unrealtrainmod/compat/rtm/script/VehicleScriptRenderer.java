@@ -10,10 +10,16 @@ import java.util.List;
 public final class VehicleScriptRenderer extends RtmPartsRenderer {
     private ScriptDrawContext context;
     private float wheelRotation;
+    private float doorMovementLeft, doorMovementRight;
 
     void context(ScriptDrawContext value) { context = value; }
 
     void wheelRotation(float value) { wheelRotation = value; }
+
+    void doorMovement(float left, float right) {
+        doorMovementLeft = left;
+        doorMovementRight = right;
+    }
 
     @Override
     protected void draw(List<String> names) {
@@ -25,10 +31,10 @@ public final class VehicleScriptRenderer extends RtmPartsRenderer {
 
     public float getWheelRotationL(Object entity) { return wheelRotation; }
 
-    // Door, pantograph and light state are not synchronised yet; scripts see the closed/retracted state.
-    public float getDoorMovementR(Object entity) { return 0.0f; }
+    /** Raw RTM progress in {@code 0.0..1.0}; the configuration renderer applies its own easing. */
+    public float getDoorMovementR(Object entity) { return doorMovementRight; }
 
-    public float getDoorMovementL(Object entity) { return 0.0f; }
+    public float getDoorMovementL(Object entity) { return doorMovementLeft; }
 
     public float getPantographMovementFront(Object entity) { return 0.0f; }
 

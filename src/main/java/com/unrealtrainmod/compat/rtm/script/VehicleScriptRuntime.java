@@ -9,12 +9,14 @@ import com.unrealtrainmod.client.model.LoadedModel;
 import com.unrealtrainmod.client.renderer.ModelRenderQueue;
 import com.unrealtrainmod.entity.TrainEntity;
 import com.unrealtrainmod.resource.PackageAsset;
+import com.unrealtrainmod.vehicle.VehicleDoor;
 import com.unrealtrainmod.vehicle.VehiclePartRole;
 import com.unrealtrainmod.vehicle.VehiclePose;
 import java.io.IOException;
 import javax.script.ScriptContext;
 import javax.script.ScriptEngine;
 import javax.script.ScriptException;
+import org.joml.Vector3f;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -24,6 +26,8 @@ public final class VehicleScriptRuntime implements AutoCloseable {
     /** RTM wheel animation is distance based; the sample packs use roughly a 0.86 m wheel. */
     private static final double WHEEL_RADIUS = 0.43;
     private static final double MAX_FRAME_TRAVEL = 32.0;
+    /** Ignores sub-micrometre interpolation noise so parked vehicles keep a stable wheel angle. */
+    private static final double MIN_FRAME_TRAVEL = 1e-7;
 
     private final ScriptEngine engine;
     private final VehicleScriptRenderer renderer;
@@ -85,6 +89,12 @@ public final class VehicleScriptRuntime implements AutoCloseable {
         var context = new ScriptDrawContext(queue, source, pose, prepared.primaryFile() + " [" + role + "]");
         renderer.context(context);
         renderer.wheelRotation(wheelDegrees());
+        float doorLeft = 0.0f, doorRight = 0.0f;
+        if (role == VehiclePartRole.BODY && entity instanceof TrainEntity train) {
+            doorLeft = train.doorMovement(VehicleDoor.LEFT, partialTick);
+            doorRight = train.doorMovement(VehicleDoor.RIGHT, partialTick);
+        }
+        renderer.doorMovement(doorLeft, doorRight);
         GL11.attach(context);
         try {
             RtmScript.invoke(engine, "render", entity, 0, partialTick);
@@ -103,6 +113,7 @@ public final class VehicleScriptRuntime implements AutoCloseable {
             context.restore();
             renderer.context(null);
             renderer.wheelRotation(0.0f);
+            renderer.doorMovement(0.0f, 0.0f);
         }
     }
 
@@ -125,9 +136,11 @@ public final class VehicleScriptRuntime implements AutoCloseable {
             double moved = Math.sqrt(dx * dx + dy * dy + dz * dz);
             // Placement, re-binding and teleports reset the reference instead of spinning the wheels.
             if (moved < MAX_FRAME_TRAVEL) {
-                // Local +Z is the authored forward direction; reversing must turn the wheels backwards.
-                double yaw = Math.toRadians(pose.body().yaw());
-                distance += -dx * Math.sin(yaw) + dz * Math.cos(yaw);
+                // Local +Z is the authored forward direction and already includes pitch, so slopes accumulate
+                // their full three-dimensional travel. Reversing produces a negative distance.
+                var forward = new Vector3f(0, 0, 1).rotate(pose.body().rotation());
+                double travel = dx * forward.x + dy * forward.y + dz * forward.z;
+                if (Math.abs(travel) > MIN_FRAME_TRAVEL) distance += travel;
             }
         }
         lastX = p.x();
@@ -136,9 +149,13 @@ public final class VehicleScriptRuntime implements AutoCloseable {
         hasPosition = true;
     }
 
+    /**
+     * RTM's rear bogie faces backwards, so its model-local wheel angle has the opposite sign.
+     * The result is in degrees for {@code GL11.glRotatef}.
+     */
     private float wheelDegrees() {
         double sign = role == VehiclePartRole.REAR_BOGIE ? -1.0 : 1.0;
-        double degrees = distance / WHEEL_RADIUS * (180.0 / Math.PI) * sign;
+        double degrees = sign * distance / WHEEL_RADIUS * (180.0 / Math.PI);
         return (float)(degrees % 360.0);
     }
 

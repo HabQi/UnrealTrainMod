@@ -4,11 +4,14 @@
  */
 package com.unrealtrainmod.train;
 
+import com.unrealtrainmod.UnrealTrainMod;
 import com.unrealtrainmod.entity.TrainEntity;
 import com.unrealtrainmod.network.payload.TrainControlInputPayload;
 import com.unrealtrainmod.network.payload.TrainControlSyncPayload;
 import com.unrealtrainmod.network.payload.TrainControlSyncPayload.Feedback;
-import java.util.HashMap;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -19,33 +22,52 @@ import net.minecraft.server.level.ServerPlayer;
 import net.neoforged.neoforge.network.PacketDistributor;
 import net.neoforged.neoforge.network.handling.IPayloadContext;
 
-/** One driver per consist. Owned and ticked by the level's TrainManager. */
+/** Up to three independent driver sessions share each consist's authoritative controls. */
 public final class TrainDriverManager {
+    public static final int MAX_DRIVERS = 3;
     private final ServerLevel level;
     private final TrainManager manager;
-    private final Map<UUID, TrainDriverSession> sessions = new HashMap<>();
+    // Player keys provide direct input lookup; insertion order records boarding priority within each train.
+    private final Map<UUID, TrainDriverSession> sessions = new LinkedHashMap<>();
 
     TrainDriverManager(ServerLevel level, TrainManager manager) { this.level = level; this.manager = manager; }
 
-    public boolean hasDriver(TrainConsist train) { return sessions.containsKey(train.id()); }
+    private List<TrainDriverSession> sessionsFor(TrainConsist train) {
+        return sessions.values().stream().filter(session -> session.train == train).toList();
+    }
+
+    public boolean hasDriver(TrainConsist train) {
+        return sessions.values().stream().anyMatch(session -> session.train == train);
+    }
 
     public boolean isDriver(ServerPlayer player, TrainEntity entity) {
-        return sessions.values().stream().anyMatch(session -> session.player == player
-                && session.vehicle.equals(entity.getUUID()));
+        var session = sessions.get(player.getUUID());
+        return session != null && session.player == player && session.vehicle.equals(entity.getUUID());
     }
 
     public boolean board(ServerPlayer player, TrainEntity entity) {
-        if (!player.isAlive() || player.isSpectator() || player.isPassenger() || !entity.getPassengers().isEmpty()
-                || sessions.values().stream().anyMatch(session -> session.player == player)) return false;
+        if (!player.isAlive() || player.isSpectator() || player.isShiftKeyDown() || player.isPassenger()
+                || sessions.containsKey(player.getUUID())) return false;
+        if (!player.getMainHandItem().is(UnrealTrainMod.KEY.get())) {
+            player.displayClientMessage(Component.translatable("item.unrealtrainmod.key.required"), true);
+            return false;
+        }
         try {
             var train = manager.prepareDriving(entity);
+            var aboard = sessionsFor(train);
+            if (aboard.size() >= MAX_DRIVERS) {
+                player.displayClientMessage(Component.translatable("item.unrealtrainmod.key.driver_limit", MAX_DRIVERS), true);
+                return false;
+            }
             if (!player.startRiding(entity)) return false;
-            boolean emergency = train.control().emergencyBrake();
-            int handle = train.commandControlled() ? (train.running() || emergency ? 0 : -TrainControlProfile.BRAKE_NOTCHES)
-                    : TrainControlProfile.handle(train.control());
-            var session = new TrainDriverSession(player, train, entity.getUUID(), handle);
-            train.startManual(TrainControlProfile.control(handle, train.control().reverser(), emergency));
-            sessions.put(train.id(), session);
+            if (aboard.isEmpty()) {
+                boolean emergency = train.control().emergencyBrake();
+                int handle = train.commandControlled() ? (train.running() || emergency ? 0 : -TrainControlProfile.BRAKE_NOTCHES)
+                        : TrainControlProfile.handle(train.control());
+                train.startManual(TrainControlProfile.control(handle, train.control().reverser(), emergency));
+            }
+            var session = new TrainDriverSession(player, train, entity.getUUID());
+            sessions.put(player.getUUID(), session);
             send(session, true, Feedback.NONE);
             return true;
         } catch (TrainManager.StateException exception) {
@@ -64,44 +86,67 @@ public final class TrainDriverManager {
     private boolean valid(TrainDriverSession session) {
         var player = session.player;
         return player.serverLevel() == level && player.isAlive() && !player.isSpectator() && !player.hasDisconnected()
+                && !player.isRemoved() && !player.isChangingDimension()
                 && player.getVehicle() instanceof TrainEntity entity && entity.getUUID().equals(session.vehicle)
                 && manager.knownTrain(session.vehicle) == session.train && manager.drivingReady(session.train);
     }
 
     private void input(ServerPlayer player, TrainControlInputPayload payload) {
-        var session = sessions.values().stream().filter(value -> value.player == player && value.id.equals(payload.session()))
-                .findFirst().orElse(null);
-        if (session == null || !valid(session) || payload.sequence() <= session.sequence
-                || !TrainControlProfile.validHandle(payload.handle())) return;
+        var session = sessions.get(player.getUUID());
+        if (session == null || session.player != player || !session.id.equals(payload.session()) || !valid(session)
+                || payload.sequence() <= session.sequence) return;
         session.sequence = payload.sequence();
         session.silentTicks = 0;
+        if (payload.action() == TrainControlInputPayload.Action.HEARTBEAT) return;
         var train = session.train;
         var old = train.control();
-        var reverser = payload.reverser().inFrame(train.member(session.vehicle).direction());
+        int handle = TrainControlProfile.handle(old);
+        var reverser = old.reverser();
+        boolean emergency = old.emergencyBrake();
         Feedback feedback = Feedback.NONE;
-        if (payload.emergency() && !old.emergencyBrake()) {
-            // A pending/rejected reverser intention must never prevent the emergency key from working.
-            session.handle = 0;
-            train.setControl(TrainControlProfile.control(0, old.reverser(), true));
-        } else if (reverser != old.reverser() && (train.running() || session.handle != 0 || payload.handle() != 0)) {
-            feedback = Feedback.REVERSER_LOCKED;
-        } else if (old.emergencyBrake() && (payload.handle() != 0 || !payload.emergency() && train.running())) {
-            feedback = Feedback.EMERGENCY_LOCKED;
-        } else {
-            session.handle = payload.emergency() ? 0 : payload.handle();
-            train.setControl(TrainControlProfile.control(session.handle, reverser, payload.emergency()));
+        switch (payload.action()) {
+            case HANDLE_UP, HANDLE_DOWN -> {
+                if (emergency) feedback = Feedback.EMERGENCY_LOCKED;
+                else handle = payload.action() == TrainControlInputPayload.Action.HANDLE_UP
+                        ? Math.min(TrainControlProfile.POWER_NOTCHES, handle + 1)
+                        : Math.max(-TrainControlProfile.BRAKE_NOTCHES, handle - 1);
+            }
+            case REVERSER_NEXT -> {
+                if (train.running() || handle != 0) feedback = Feedback.REVERSER_LOCKED;
+                else {
+                    int direction = train.member(session.vehicle).direction();
+                    reverser = reverser.inFrame(direction).next().inFrame(direction);
+                }
+            }
+            case EMERGENCY_APPLY -> { emergency = true; handle = 0; }
+            case EMERGENCY_RELEASE -> {
+                if (emergency && train.running()) feedback = Feedback.EMERGENCY_LOCKED;
+                else if (emergency) { emergency = false; handle = 0; }
+            }
+            case HEARTBEAT -> { }
         }
-        send(session, true, feedback);
+        if (feedback == Feedback.NONE) train.setControl(TrainControlProfile.control(handle, reverser, emergency));
+        for (var driver : sessionsFor(train)) send(driver, true, driver == session ? feedback : Feedback.NONE);
     }
 
     /** Counts only normal simulation ticks, independent of paused/frozen server time. */
     void tick() {
-        for (var session : List.copyOf(sessions.values())) {
-            if (!valid(session) || ++session.silentTicks >= 60) {
-                session.train.safetyBrake();
-                close(session.train);
-            }
+        var failed = new ArrayList<TrainDriverSession>();
+        for (var session : sessions.values()) {
+            if (!valid(session) || ++session.silentTicks >= 60) failed.add(session);
         }
+        removeFailedSessions(failed);
+    }
+
+    private void removeFailedSessions(List<TrainDriverSession> failed) {
+        var affected = new LinkedHashSet<TrainConsist>();
+        // Remove the entire failed batch before dismount callbacks or remaining-driver checks.
+        for (var session : failed) {
+            sessions.remove(session.player.getUUID());
+            affected.add(session.train);
+        }
+        for (var session : failed) finish(session);
+        for (var train : affected) if (!hasDriver(train)) train.safetyBrake();
     }
 
     void publish() {
@@ -111,61 +156,81 @@ public final class TrainDriverManager {
     }
 
     public void dismounted(ServerPlayer player, TrainEntity entity) {
-        var session = sessions.values().stream().filter(value -> value.player == player && value.vehicle.equals(entity.getUUID()))
-                .findFirst().orElse(null);
-        if (session != null) {
-            // Player.rideTick clears the sneak flag only after stopRiding has removed the passenger.
-            // Ordinary dismount releases ownership while the consist keeps its current controls.
-            boolean manualExit = player.isShiftKeyDown() && player.isAlive() && !player.isSpectator()
-                    && !player.hasDisconnected() && !player.isRemoved() && !player.isChangingDimension()
-                    && player.serverLevel() == level && !entity.isRemoved();
-            if (!manualExit) session.train.safetyBrake();
-            close(session.train);
-        }
+        var session = sessions.get(player.getUUID());
+        if (session == null || session.player != player || !session.vehicle.equals(entity.getUUID())) return;
+        // Player.rideTick clears the sneak flag only after stopRiding has removed the passenger.
+        boolean manualExit = player.isShiftKeyDown() && player.isAlive() && !player.isSpectator()
+                && !player.hasDisconnected() && !player.isRemoved() && !player.isChangingDimension()
+                && player.serverLevel() == level && !entity.isRemoved();
+        if (manualExit) close(session);
+        else removeFailedSessions(sessionsFor(session.train).stream()
+                .filter(value -> value == session || !valid(value) || value.silentTicks >= 60).toList());
     }
 
     void stoppedAtEnd(TrainConsist train) {
-        var session = sessions.get(train.id());
-        session.handle = -TrainControlProfile.BRAKE_NOTCHES;
-        send(session, true, Feedback.NONE);
-        session.player.displayClientMessage(Component.translatable("commands.unrealtrainmod.train.state.end_of_route"), true);
+        for (var session : sessionsFor(train)) {
+            send(session, true, Feedback.NONE);
+            session.player.displayClientMessage(Component.translatable("commands.unrealtrainmod.train.state.end_of_route"), true);
+        }
     }
 
-    /** Automatic coupling parks the merged consist and transfers its sole driver without dismounting. */
+    /** The reference train's drivers take priority; overflow leaves only after the merge commits. */
     void coupled(TrainConsist first, TrainConsist second, TrainConsist combined) {
-        var session = sessions.remove(first.id());
-        var rearSession = sessions.remove(second.id());
-        if (session == null) session = rearSession;
-        if (session == null) return;
-        var control = session.train.control();
-        var driverReverser = control.reverser().inFrame(session.train.member(session.vehicle).direction());
-        session.train = combined;
-        session.handle = control.emergencyBrake() ? 0 : -TrainControlProfile.BRAKE_NOTCHES;
-        var reverser = driverReverser.inFrame(combined.member(session.vehicle).direction());
-        combined.startManual(TrainControlProfile.control(session.handle, reverser, control.emergencyBrake()));
-        sessions.put(combined.id(), session);
-        send(session, true, Feedback.NONE);
-        session.player.displayClientMessage(Component.translatable("item.unrealtrainmod.crowbar.coupled"), true);
+        var ordered = new ArrayList<>(sessionsFor(first));
+        ordered.addAll(sessionsFor(second));
+        var source = ordered.isEmpty() ? first : ordered.getFirst().train;
+        var vehicle = ordered.isEmpty() ? first.cars().getFirst().entityId() : ordered.getFirst().vehicle;
+        var reverser = source.control().reverser().inFrame(source.member(vehicle).direction())
+                .inFrame(combined.member(vehicle).direction());
+        boolean emergency = first.control().emergencyBrake() || second.control().emergencyBrake();
+        var control = TrainControlProfile.control(emergency ? 0 : -TrainControlProfile.BRAKE_NOTCHES, reverser, emergency);
+        if (ordered.isEmpty()) {
+            combined.setControl(control);
+            return;
+        }
+        combined.startManual(control);
+        for (int i = 0; i < ordered.size(); i++) {
+            var session = ordered.get(i);
+            if (i >= MAX_DRIVERS) {
+                close(session);
+                session.player.displayClientMessage(Component.translatable("item.unrealtrainmod.key.coupling_overflow", MAX_DRIVERS), true);
+            } else {
+                session.train = combined;
+                send(session, true, Feedback.NONE);
+                session.player.displayClientMessage(Component.translatable("item.unrealtrainmod.crowbar.coupled"), true);
+            }
+        }
     }
 
-    /** A stopped split keeps the same seat/session and expresses its reverser in the new reference frame. */
+    /** Each new component gets one control state, and every driver stays with their original car. */
     void split(TrainConsist original, List<TrainConsist> parts) {
-        var session = sessions.remove(original.id());
-        if (session == null) return;
-        var component = parts.stream().filter(part -> part.member(session.vehicle) != null).findFirst().orElseThrow();
+        var aboard = sessionsFor(original);
         var control = original.control();
-        var reverser = control.reverser().inFrame(original.member(session.vehicle).direction())
-                .inFrame(component.member(session.vehicle).direction());
-        session.train = component;
-        session.handle = control.emergencyBrake() ? 0 : -TrainControlProfile.BRAKE_NOTCHES;
-        component.startManual(TrainControlProfile.control(session.handle, reverser, control.emergencyBrake()));
-        sessions.put(component.id(), session);
-        send(session, true, Feedback.NONE);
+        for (var component : parts) {
+            var drivers = aboard.stream().filter(session -> component.member(session.vehicle) != null).toList();
+            var vehicle = drivers.isEmpty() ? component.cars().getFirst().entityId() : drivers.getFirst().vehicle;
+            var reverser = control.reverser().inFrame(original.member(vehicle).direction())
+                    .inFrame(component.member(vehicle).direction());
+            var parked = TrainControlProfile.control(control.emergencyBrake() ? 0 : -TrainControlProfile.BRAKE_NOTCHES,
+                    reverser, control.emergencyBrake());
+            if (drivers.isEmpty()) component.setControl(parked);
+            else component.startManual(parked);
+            for (var session : drivers) {
+                session.train = component;
+                send(session, true, Feedback.NONE);
+            }
+        }
     }
 
-    void close(TrainConsist train) {
-        var session = sessions.remove(train.id());
-        if (session == null) return;
+    void close(TrainConsist train) { for (var session : sessionsFor(train)) close(session); }
+
+    private void close(TrainDriverSession session) {
+        sessions.remove(session.player.getUUID());
+        finish(session);
+    }
+
+    private void finish(TrainDriverSession session) {
+        var train = session.train;
         if (!session.player.hasDisconnected()) {
             send(session, false, Feedback.NONE);
             if (train.stopReason() != TrainConsist.StopReason.STOPPED) {
@@ -178,14 +243,15 @@ public final class TrainDriverManager {
         }
     }
 
-    void closeAll() { for (var session : List.copyOf(sessions.values())) close(session.train); }
+    void closeAll() { for (var session : List.copyOf(sessions.values())) close(session); }
 
     private void send(TrainDriverSession session, boolean open, Feedback feedback) {
         var train = session.train;
         int direction = train.member(session.vehicle).direction();
         PacketDistributor.sendToPlayer(session.player, new TrainControlSyncPayload(session.id, level.dimension().location(),
-                train.id(), session.vehicle, open, session.sequence, session.handle, train.control().reverser().inFrame(direction),
-                train.control().emergencyBrake(), direction * train.actualSpeed(), direction * train.dynamics().acceleration(), direction * train.dynamics().grade(),
+                train.id(), session.vehicle, open, session.sequence, TrainControlProfile.handle(train.control()),
+                train.control().reverser().inFrame(direction), train.control().emergencyBrake(),
+                direction * train.actualSpeed(), direction * train.dynamics().acceleration(), direction * train.dynamics().grade(),
                 direction * train.dynamics().tractionForce(), train.dynamics().brakeForce(), train.dynamics().tractionPower(),
                 train.stopReason(), feedback));
     }

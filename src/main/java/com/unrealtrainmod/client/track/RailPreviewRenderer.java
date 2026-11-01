@@ -22,6 +22,7 @@ public final class RailPreviewRenderer implements AutoCloseable {
     private final PreviewRenderer renderer = new PreviewRenderer();
     private ClientRailModelManager.Model model;
     private RailTrackGpuMesh mesh;
+    private boolean staticMesh;
 
     public void render(GuiGraphics graphics, int x, int y, int width, int height,
                        ClientRailModelManager.Model selected, PreviewCamera camera) {
@@ -39,21 +40,30 @@ public final class RailPreviewRenderer implements AutoCloseable {
 
     private void draw(ClientRailModelManager.Model selected, PoseStack pose) {
         // Prepared model identity changes on resource reload, even when the selection keeps its ID.
-        if (model != selected) {
+        // A script that failed elsewhere in the world also forces the cached filtered preview to rebuild.
+        boolean scriptFailed = selected.script() != null && selected.script().failed();
+        if (model != selected || (scriptFailed && !staticMesh)) {
             clearMesh();
             var b = selected.bounds();
             var batches = new ArrayList<RailTrackMeshData.Batch>();
-            if (selected.script() == null) {
-                for (var batch : selected.batches()) {
-                    batches.add(new RailTrackMeshData.Batch(batch.texture(), batch.doubleSided(), batch.mesh()));
-                }
+            if (selected.script() == null || scriptFailed) {
+                addStatic(selected, batches);
+                staticMesh = true;
             } else {
                 // The preview shows one authored module; apply the same part filter as world generation.
-                for (var part : selected.parts()) {
-                    if (!selected.script().shouldRender(part.name(), 0, 1)) continue;
-                    for (var batch : part.batches()) {
-                        batches.add(new RailTrackMeshData.Batch(batch.texture(), batch.doubleSided(), batch.mesh()));
+                var filter = new RailScriptFilter(selected);
+                try {
+                    for (var part : selected.parts()) {
+                        if (!filter.shouldRender(part.name(), 0, 1)) continue;
+                        for (var batch : part.batches()) {
+                            batches.add(new RailTrackMeshData.Batch(batch.texture(), batch.doubleSided(), batch.mesh()));
+                        }
                     }
+                } catch (RailScriptFilter.Failure failure) {
+                    // Discard the partially filtered preview and let world meshes fall back on the next frame.
+                    staticMesh = true;
+                    batches.clear();
+                    addStatic(selected, batches);
                 }
             }
             mesh = new RailTrackGpuMesh(new RailTrackMeshData(new TrackVector(0, 0, 0),
@@ -68,10 +78,17 @@ public final class RailPreviewRenderer implements AutoCloseable {
         }
     }
 
+    private static void addStatic(ClientRailModelManager.Model model, List<RailTrackMeshData.Batch> batches) {
+        for (var batch : model.batches()) {
+            batches.add(new RailTrackMeshData.Batch(batch.texture(), batch.doubleSided(), batch.mesh()));
+        }
+    }
+
     public void clearMesh() {
         if (mesh != null) mesh.close();
         mesh = null;
         model = null;
+        staticMesh = false;
     }
 
     @Override

@@ -8,6 +8,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.unrealtrainmod.model.ModelSource;
+import com.unrealtrainmod.vehicle.VehicleActions;
 import com.unrealtrainmod.vehicle.VehicleDefinition;
 import com.unrealtrainmod.vehicle.VehiclePartRole;
 import com.unrealtrainmod.compat.ir.IrBogieGroups;
@@ -24,8 +25,10 @@ import java.util.HashMap;
 import java.util.EnumMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import net.minecraft.resources.ResourceLocation;
 
 /** Prepares vehicle geometry and pixels without registering textures or uploading GPU resources. */
@@ -54,6 +57,7 @@ public final class ModelPreparer {
     public static PreparedReload prepare(List<VehicleDefinition> definitions) {
         var classified = new LinkedHashMap<ModelSource, List<ModelPart>>();
         var failed = new HashSet<ModelSource>();
+        var actionSets = collectActionSets(definitions);
         try (var textures = new TexturePool()) {
             for (var definition : definitions) {
                 for (var instance : definition.parts()) {
@@ -74,7 +78,8 @@ public final class ModelPreparer {
             while (iterator.hasNext()) {
                 var entry = iterator.next();
                 try {
-                    prepared.put(entry.getKey(), prepareSource(entry.getKey(), entry.getValue(), regions));
+                    prepared.put(entry.getKey(), prepareSource(entry.getKey(), entry.getValue(), regions,
+                            actionSets.getOrDefault(entry.getKey(), Set.of())));
                 } catch (RuntimeException e) {
                     LOGGER.error("Unable to prepare vehicle model {}", entry.getKey().model(), e);
                 }
@@ -85,6 +90,21 @@ public final class ModelPreparer {
                     .allMatch(instance -> prepared.containsKey(instance.source()))).toList();
             return new PreparedReload(Map.copyOf(prepared), vehicles, textures.takeImages(prepared.values()));
         }
+    }
+
+    /** One body selection per distinct configured action-name set sharing this source. */
+    private static Map<ModelSource, Set<Set<String>>> collectActionSets(List<VehicleDefinition> definitions) {
+        var result = new HashMap<ModelSource, Set<Set<String>>>();
+        for (var definition : definitions) {
+            for (var instance : definition.parts()) {
+                if (instance.actions().isEmpty()) continue;
+                var names = new HashSet<String>();
+                instance.actions().collectPartNames(names);
+                result.computeIfAbsent(instance.source(), ignored -> new LinkedHashSet<>())
+                        .add(Set.copyOf(names));
+            }
+        }
+        return result;
     }
 
     private static List<ModelPart> classifySource(ModelSource source, TexturePool textures) throws IOException {
@@ -155,7 +175,8 @@ public final class ModelPreparer {
     }
 
     private static PreparedModel prepareSource(ModelSource source, List<ModelPart> parts,
-                                               Map<ResourceLocation, TextureAtlas.Region> regions) {
+                                               Map<ResourceLocation, TextureAtlas.Region> regions,
+                                               Set<Set<String>> actionSets) {
         var originalVisible = parts.stream().filter(ModelPart::visible).flatMap(part -> part.batches().stream())
                 .filter(batch -> batch.category() == RenderCategory.CUTOUT).toList();
         int beforeAtlas = OpaqueBatchMerger.visibleBatchCount(parts);
@@ -173,6 +194,30 @@ public final class ModelPreparer {
         }
         var partsByName = new HashMap<String, PartSelection>();
         named.forEach((name, matching) -> partsByName.put(name, new PartSelection(matching)));
+        // Actions use one normalized lookup for every matching object, including case-only duplicates.
+        var actionNames = new HashSet<String>();
+        actionSets.forEach(actionNames::addAll);
+        var actionObjects = new HashMap<String, List<ModelPart>>();
+        for (var part : merged.parts()) {
+            String name = VehicleActions.key(part.name());
+            if (actionNames.contains(name)) {
+                actionObjects.computeIfAbsent(name, ignored -> new ArrayList<>()).add(part);
+            }
+        }
+        var actionParts = new HashMap<String, PartSelection>();
+        actionObjects.forEach((name, matching) -> actionParts.put(name, new PartSelection(matching)));
+        // Configured door objects are drawn by the action renderer instead of the static body ranges.
+        var visibleSelection = new PartSelection(visible, merged.visibleBatches());
+        var bodySelections = new LinkedHashMap<Set<String>, PartSelection>();
+        for (var excludedNames : actionSets) {
+            var selection = PartSelection.grouped(merged.parts().stream()
+                    .filter(ModelPart::visible)
+                    .filter(part -> !excludedNames.contains(VehicleActions.key(part.name())))
+                    .toList());
+            bodySelections.put(excludedNames, selection);
+            // Register the extra ranges before GPU upload; they alias the same packed meshes.
+            allBatches.addAll(selection.batches());
+        }
         var componentParts = new EnumMap<VehiclePartRole, PartSelection>(VehiclePartRole.class);
         if (source.format() == ModelSource.Format.IR_OBJ) {
             for (var role : VehiclePartRole.values()) {
@@ -190,7 +235,7 @@ public final class ModelPreparer {
                 mergedVisible.stream().mapToInt(batch -> batch.indexCount() / 3).sum());
         LOGGER.info("Model {}: atlas visible CUTOUT batches {} -> {}",
                 source.model(), beforeAtlas, mergedVisible.size());
-        return new PreparedModel(merged.parts(), new PartSelection(visible, merged.visibleBatches()),
-                Map.copyOf(partsByName), Map.copyOf(componentParts), List.copyOf(allBatches));
+        return new PreparedModel(merged.parts(), visibleSelection, Map.copyOf(bodySelections),
+                Map.copyOf(actionParts), Map.copyOf(partsByName), Map.copyOf(componentParts), List.copyOf(allBatches));
     }
 }

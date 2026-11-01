@@ -4,6 +4,7 @@
  */
 package com.unrealtrainmod.command;
 
+import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.builder.RequiredArgumentBuilder;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
@@ -15,6 +16,7 @@ import com.unrealtrainmod.train.TrainCarEnd;
 import com.unrealtrainmod.train.TrainConsist;
 import com.unrealtrainmod.train.TrainManager;
 import com.unrealtrainmod.train.TrainDiagnostics;
+import com.unrealtrainmod.vehicle.VehicleDoor;
 import java.util.Locale;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.SharedSuggestionProvider;
@@ -50,6 +52,17 @@ public final class TrainCommands {
                 .executes(context -> execute(context, "bind", (manager, vehicle) -> manager.bind(vehicle,
                         new TrainAnchor(UuidArgument.getUuid(context, "segmentId"),
                                 getDouble(context, "distance"), getBool(context, "fromStart")))))));
+        var doorLeft = literal("left");
+        var doorRight = literal("right");
+        var doorBoth = literal("both");
+        addDoorOperations(doorLeft, VehicleDoor.LEFT);
+        addDoorOperations(doorRight, VehicleDoor.RIGHT);
+        addDoorOperations(doorBoth, null);
+        var door = literal("door").then(vehicleArgument()
+                .then(doorLeft)
+                .then(doorRight)
+                .then(doorBoth)
+                .then(literal("info").executes(TrainCommands::doorInfo)));
         var train = literal("train")
                 .then(literal("bind").then(vehicleArgument().then(segment)))
                 .then(literal("couple").then(vehicleArgument("frontVehicle").then(vehicleArgument("rearVehicle")
@@ -74,6 +87,7 @@ public final class TrainCommands {
                                 manager.setSpeed(vehicle, getDouble(context, "blocksPerSecond")))))))
                 .then(literal("reverse").then(vehicleArgument()
                         .executes(context -> execute(context, "reverse", TrainManager::reverse))))
+                .then(door)
                 .then(literal("info").then(vehicleArgument().executes(TrainCommands::info)))
                 .then(literal("debug")
                         .then(literal("off").executes(context -> {
@@ -129,6 +143,45 @@ public final class TrainCommands {
                 Component.translatable(PREFIX + "action." + operation), vehicle.getUUID().toString(),
                 number(train.configuredSpeed()), number(train.actualSpeed())), true);
         return 1;
+    }
+
+    private static void addDoorOperations(LiteralArgumentBuilder<CommandSourceStack> node, VehicleDoor side) {
+        node.then(literal("open").executes(context -> setDoor(context, side, Boolean.TRUE)))
+                .then(literal("close").executes(context -> setDoor(context, side, Boolean.FALSE)))
+                .then(literal("toggle").executes(context -> setDoor(context, side, null)));
+    }
+
+    private static int setDoor(CommandContext<CommandSourceStack> context, VehicleDoor side, Boolean open)
+            throws CommandSyntaxException {
+        var vehicle = vehicle(context);
+        boolean changed;
+        if (side == null) {
+            changed = applyDoor(vehicle, VehicleDoor.LEFT, open);
+            changed |= applyDoor(vehicle, VehicleDoor.RIGHT, open);
+        } else {
+            changed = applyDoor(vehicle, side, open);
+        }
+        sendDoorState(context, vehicle);
+        return changed ? 1 : 0;
+    }
+
+    private static boolean applyDoor(TrainEntity vehicle, VehicleDoor side, Boolean open) {
+        return vehicle.setDoorOpen(side, open == null ? !vehicle.isDoorOpen(side) : open);
+    }
+
+    private static int doorInfo(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        sendDoorState(context, vehicle(context));
+        return 1;
+    }
+
+    private static void sendDoorState(CommandContext<CommandSourceStack> context, TrainEntity vehicle) {
+        context.getSource().sendSuccess(() -> Component.translatable(PREFIX + "door_state",
+                vehicle.getUUID().toString(), doorState(vehicle, VehicleDoor.LEFT),
+                doorState(vehicle, VehicleDoor.RIGHT)), true);
+    }
+
+    private static Component doorState(TrainEntity vehicle, VehicleDoor side) {
+        return Component.translatable(PREFIX + (vehicle.isDoorOpen(side) ? "door_open" : "door_closed"));
     }
 
     private static int info(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {

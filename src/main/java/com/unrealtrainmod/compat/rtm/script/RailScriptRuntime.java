@@ -62,6 +62,9 @@ public final class RailScriptRuntime implements AutoCloseable {
                 RtmScript.hasFunction(engine, "shouldRenderObject"), label);
     }
 
+    /** A failed instance stays disabled; the caller must discard its current filtered build. */
+    public boolean failed() { return failed; }
+
     /** Called for every repeated module and every prepared part, matching the old static render loop. */
     public boolean shouldRender(String partName, long index, long count) {
         if (failed || !hasShouldRenderObject) return true;

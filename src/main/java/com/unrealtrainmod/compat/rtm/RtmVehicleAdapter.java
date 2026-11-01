@@ -4,6 +4,7 @@
  */
 package com.unrealtrainmod.compat.rtm;
 
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.unrealtrainmod.UnrealTrainMod;
 import com.unrealtrainmod.model.MaterialRenderMode;
@@ -16,6 +17,8 @@ import com.unrealtrainmod.resource.LoadReport;
 import com.unrealtrainmod.resource.PackageArchive;
 import com.unrealtrainmod.resource.PackageAsset;
 import com.unrealtrainmod.resource.ResourceIds;
+import com.unrealtrainmod.vehicle.VehicleAction;
+import com.unrealtrainmod.vehicle.VehicleActions;
 import com.unrealtrainmod.vehicle.VehicleDefinition;
 import com.unrealtrainmod.vehicle.VehicleMotionSpec;
 import com.unrealtrainmod.vehicle.VehiclePerformanceSpec;
@@ -60,9 +63,11 @@ final class RtmVehicleAdapter {
             }
             boolean smoothing = GsonHelper.getAsBoolean(json, "smoothing", false);
             boolean cullFaces = GsonHelper.getAsBoolean(json, "doCulling", false);
+            var actions = readActions(json, name);
             var parts = new ArrayList<VehicleDefinition.Instance>();
             parts.add(readPart(readSource(json.getAsJsonObject("trainModel2"), archive,
-                    prefix, smoothing, cullFaces), new ModelData.Position(0, 0, 0), VehiclePartRole.BODY, archive));
+                    prefix, smoothing, cullFaces), new ModelData.Position(0, 0, 0), VehiclePartRole.BODY, archive,
+                    actions));
             var bogiePositions = readBogiePositions(json);
             if (json.has("bogieModel2")) {
                 var bogie = readSource(json.getAsJsonObject("bogieModel2"), archive, prefix, smoothing, cullFaces);
@@ -70,12 +75,18 @@ final class RtmVehicleAdapter {
                 float frontZ = Math.max(bogiePositions.get(0).z(), bogiePositions.get(1).z());
                 for (var position : bogiePositions) {
                     parts.add(readPart(bogie, position, position.z() == frontZ
-                            ? VehiclePartRole.FRONT_BOGIE : VehiclePartRole.REAR_BOGIE, archive));
+                            ? VehiclePartRole.FRONT_BOGIE : VehiclePartRole.REAR_BOGIE, archive,
+                            VehicleActions.NONE));
                 }
             }
             var combined = new ModelBounds.Builder();
             for (var part : parts) {
-                combined.include(part.bounds().translated(part.offset()));
+                var partBounds = part.bounds();
+                if (part.reversedBogie()) {
+                    partBounds = new ModelBounds(-partBounds.maxX(), partBounds.minY(), -partBounds.maxZ(),
+                            -partBounds.minX(), partBounds.maxY(), -partBounds.minZ());
+                }
+                combined.include(partBounds.translated(part.offset()));
             }
             var bounds = combined.build();
             var definition = new VehicleDefinition(id, name, config, RtmButtonTexture.read(json, archive, prefix, config),
@@ -89,7 +100,8 @@ final class RtmVehicleAdapter {
     }
 
     private VehicleDefinition.Instance readPart(ModelSource source, ModelData.Position offset,
-                                                VehiclePartRole role, PackageArchive archive) throws IOException {
+                                                VehiclePartRole role, PackageArchive archive,
+                                                VehicleActions actions) throws IOException {
         var asset = source.model();
         var bounds = boundsCache.get(asset);
         if (bounds == null) {
@@ -98,7 +110,124 @@ final class RtmVehicleAdapter {
             }
             boundsCache.put(asset, bounds);
         }
-        return new VehicleDefinition.Instance(source, offset, role, new TrackVector(0, 0, 0), bounds);
+        return new VehicleDefinition.Instance(source, offset, role, new TrackVector(0, 0, 0), bounds, actions);
+    }
+
+    /**
+     * RTM stores door actions as {@code VehicleParts[]}: object names, a pivot, transforms and nested child
+     * parts. A missing field leaves the model static; a present but malformed node rejects the vehicle config.
+     */
+    private static VehicleActions readActions(JsonObject json, String trainName) throws IOException {
+        return new VehicleActions(readActionList(json, "door_left", trainName),
+                readActionList(json, "door_right", trainName));
+    }
+
+    private static List<VehicleAction> readActionList(JsonObject json, String field, String trainName)
+            throws IOException {
+        if (!json.has(field) || json.get(field).isJsonNull()) return List.of();
+        return readActionArray(json.get(field), field, trainName);
+    }
+
+    private static List<VehicleAction> readActionArray(JsonElement element, String path,
+                                                       String trainName) throws IOException {
+        if (!element.isJsonArray()) throw configError(trainName, path, "must be an array");
+        var array = element.getAsJsonArray();
+        var result = new ArrayList<VehicleAction>(array.size());
+        for (int i = 0; i < array.size(); i++) {
+            result.add(readAction(array.get(i), path + "[" + i + "]", trainName));
+        }
+        return List.copyOf(result);
+    }
+
+    private static VehicleAction readAction(JsonElement element, String path, String trainName)
+            throws IOException {
+        if (!element.isJsonObject()) throw configError(trainName, path, "must be an object");
+        var json = element.getAsJsonObject();
+        var objectsElement = json.get("objects");
+        if (objectsElement == null || !objectsElement.isJsonArray()) {
+            throw configError(trainName, path + ".objects", "must be an array of object names");
+        }
+        var objects = new ArrayList<String>();
+        for (var object : objectsElement.getAsJsonArray()) {
+            if (!object.isJsonPrimitive() || !object.getAsJsonPrimitive().isString()) {
+                throw configError(trainName, path + ".objects", "entries must be strings");
+            }
+            String name = object.getAsString().trim();
+            if (name.isEmpty()) throw configError(trainName, path + ".objects", "names must not be blank");
+            objects.add(name);
+        }
+
+        var pivot = readPivot(json, path, trainName);
+        var transforms = new ArrayList<VehicleAction.Transform>();
+        if (json.has("transform") && !json.get("transform").isJsonNull()) {
+            var transformElement = json.get("transform");
+            if (!transformElement.isJsonArray()) {
+                throw configError(trainName, path + ".transform", "must be an array");
+            }
+            var transformArray = transformElement.getAsJsonArray();
+            for (int i = 0; i < transformArray.size(); i++) {
+                transforms.add(readTransform(transformArray.get(i), path + ".transform[" + i + "]", trainName));
+            }
+        }
+
+        var children = List.<VehicleAction>of();
+        if (json.has("childParts") && !json.get("childParts").isJsonNull()) {
+            children = readActionArray(json.get("childParts"), path + ".childParts", trainName);
+        }
+        return new VehicleAction(objects, pivot, transforms, children);
+    }
+
+    private static TrackVector readPivot(JsonObject json, String path, String trainName) throws IOException {
+        if (!json.has("pos") || json.get("pos").isJsonNull()) return new TrackVector(0, 0, 0);
+        var element = json.get("pos");
+        if (!element.isJsonArray() || element.getAsJsonArray().size() != 3) {
+            throw configError(trainName, path + ".pos", "must contain three finite XYZ values");
+        }
+        var values = element.getAsJsonArray();
+        double x = readFinite(values.get(0), trainName, path + ".pos[0]");
+        double y = readFinite(values.get(1), trainName, path + ".pos[1]");
+        double z = readFinite(values.get(2), trainName, path + ".pos[2]");
+        return new TrackVector(x, y, z);
+    }
+
+    private static VehicleAction.Transform readTransform(JsonElement element, String path,
+                                                         String trainName) throws IOException {
+        if (!element.isJsonArray()) throw configError(trainName, path, "must be an array");
+        var values = element.getAsJsonArray();
+        if (values.size() != 3 && values.size() != 4) {
+            throw configError(trainName, path, "must contain XYZ translation or angle/axis rotation");
+        }
+        if (values.size() == 3) {
+            return new VehicleAction.Translate(
+                    (float)readFinite(values.get(0), trainName, path + "[0]"),
+                    (float)readFinite(values.get(1), trainName, path + "[1]"),
+                    (float)readFinite(values.get(2), trainName, path + "[2]"));
+        }
+        float angle = (float)readFinite(values.get(0), trainName, path + "[0]");
+        float x = (float)readFinite(values.get(1), trainName, path + "[1]");
+        float y = (float)readFinite(values.get(2), trainName, path + "[2]");
+        float z = (float)readFinite(values.get(3), trainName, path + "[3]");
+        if ((double)x * x + (double)y * y + (double)z * z < 1e-12) {
+            throw configError(trainName, path, "rotation axis must not be zero");
+        }
+        return new VehicleAction.Rotate(angle, x, y, z);
+    }
+
+    private static double readFinite(JsonElement element, String trainName, String path)
+            throws IOException {
+        if (!element.isJsonPrimitive() || !element.getAsJsonPrimitive().isNumber()) {
+            throw configError(trainName, path, "must be a number");
+        }
+        double value = element.getAsDouble();
+        if (!Double.isFinite(value)) throw configError(trainName, path, "must be finite");
+        if (!Float.isFinite((float)value)) {
+            throw configError(trainName, path, "must be within the finite float range");
+        }
+        return value;
+    }
+
+    private static IOException configError(String trainName, String path, String message) {
+        return new IOException(trainName + " " + path + ": " + message);
     }
 
     private static List<ModelData.Position> readBogiePositions(JsonObject json) throws IOException {

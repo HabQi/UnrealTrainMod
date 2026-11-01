@@ -37,6 +37,8 @@ public final class TrackWorldRenderer {
         var level = Minecraft.getInstance().level;
         if (level == null || cache.world() != level || (cache.entries.isEmpty() && cache.assemblies.isEmpty())) return;
         RenderSystem.assertOnRenderThread();
+        // Script failures are recorded during a build; rebuild those meshes at a point outside cache iteration.
+        cache.flushScriptFailures();
         var previousShader = RenderSystem.getShader();
         float[] previousColor = RenderSystem.getShaderColor().clone();
         int builds = BUILDS_PER_FRAME, uploads = UPLOADS_PER_FRAME;
@@ -144,26 +146,20 @@ public final class TrackWorldRenderer {
             var model = ClientRailModelManager.INSTANCE.model(modelId);
             if (model != null) {
                 try {
-                    var sources = new ArrayList<RailTrackMeshBuilder.Source>();
-                    RailTrackMeshBuilder.Filter filter;
-                    if (filterScript && model.script() != null) {
-                        for (var part : model.parts()) {
-                            for (var batch : part.batches()) {
-                                sources.add(new RailTrackMeshBuilder.Source(part.name(), batch.texture(),
-                                        batch.doubleSided(), batch.mesh()));
-                            }
+                    double scale = model.scaleForGauge(gauge);
+                    var script = filterScript ? model.script() : null;
+                    if (script != null && !script.failed()) {
+                        try {
+                            var filtered = RailTrackMeshBuilder.build(geometry, partSources(model), x, z,
+                                    scale, model.period(), new RailScriptFilter(model));
+                            return new RailTrackGpuMesh(filtered, false);
+                        } catch (RailScriptFilter.Failure failure) {
+                            LOGGER.warn("Rail script for {} failed; using the full static model from now on", modelId);
                         }
-                        filter = model.script()::shouldRender;
-                    } else {
-                        // No script or a dynamic assembly: use the flat material merge and keep every part.
-                        for (var batch : model.batches()) {
-                            sources.add(new RailTrackMeshBuilder.Source("", batch.texture(),
-                                    batch.doubleSided(), batch.mesh()));
-                        }
-                        filter = RailTrackMeshBuilder.Filter.ALL;
                     }
-                    return new RailTrackGpuMesh(RailTrackMeshBuilder.build(geometry, sources, x, z,
-                            model.scaleForGauge(gauge), model.period(), filter), false);
+                    // No script, a failed script or a dynamic assembly: flat material merge with every part.
+                    return new RailTrackGpuMesh(RailTrackMeshBuilder.build(geometry, staticSources(model), x, z,
+                            scale, model.period(), RailTrackMeshBuilder.Filter.ALL), false);
                 } catch (IllegalArgumentException exception) {
                     LOGGER.warn("Cannot build rail {} using {} in chunk {}, {}: {}; using native appearance",
                             id, modelId, x, z, exception.getMessage());
@@ -179,5 +175,26 @@ public final class TrackWorldRenderer {
             LOGGER.warn("Cannot build track {} in chunk {}, {}: {}", id, x, z, exception.getMessage());
             return new TrackGpuMesh(TrackMeshData.EMPTY);
         }
+    }
+
+    /** Authored object groups, so the script filter can still name individual parts. */
+    private static List<RailTrackMeshBuilder.Source> partSources(ClientRailModelManager.Model model) {
+        var sources = new ArrayList<RailTrackMeshBuilder.Source>();
+        for (var part : model.parts()) {
+            for (var batch : part.batches()) {
+                sources.add(new RailTrackMeshBuilder.Source(part.name(), batch.texture(),
+                        batch.doubleSided(), batch.mesh()));
+            }
+        }
+        return sources;
+    }
+
+    /** Flat material merge used when no filter runs or after the script fell back to the full model. */
+    private static List<RailTrackMeshBuilder.Source> staticSources(ClientRailModelManager.Model model) {
+        var sources = new ArrayList<RailTrackMeshBuilder.Source>();
+        for (var batch : model.batches()) {
+            sources.add(new RailTrackMeshBuilder.Source("", batch.texture(), batch.doubleSided(), batch.mesh()));
+        }
+        return sources;
     }
 }

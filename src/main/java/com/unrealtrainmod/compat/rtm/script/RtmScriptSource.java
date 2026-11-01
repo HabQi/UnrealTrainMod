@@ -31,19 +31,30 @@ public final class RtmScriptSource {
     private static final int MAX_DEPTH = 16;
     private static final Map<PackageAsset, Prepared> CACHE = new ConcurrentHashMap<>();
 
-    public record Segment(int firstLine, int lastLine, String file) {}
+    /**
+     * One contiguous run of output lines copied from an archived file. {@code fileLine} is the 1-based line in
+     * that file which produced {@code firstLine}, so expanded includes keep their original positions.
+     */
+    public record Segment(int firstLine, int lastLine, String file, int fileLine) {}
+
+    /** 1-based location inside the archived script source. */
+    public record Location(String file, int line) {
+        @Override public String toString() { return file + ":" + line; }
+    }
 
     public record Prepared(String primaryFile, String source, List<Segment> segments) {
         public Prepared {
             segments = List.copyOf(segments);
         }
 
-        /** Map a 1-based Nashorn line number back to the included file that produced it. */
-        public String fileOf(int line) {
+        /** Map a 1-based Nashorn line number back to the included file and its original line. */
+        public Location locationOf(int line) {
             for (var segment : segments) {
-                if (line >= segment.firstLine() && line <= segment.lastLine()) return segment.file();
+                if (line >= segment.firstLine() && line <= segment.lastLine()) {
+                    return new Location(segment.file(), segment.fileLine() + line - segment.firstLine());
+                }
             }
-            return primaryFile;
+            return new Location(primaryFile, line);
         }
     }
 
@@ -73,6 +84,7 @@ public final class RtmScriptSource {
         private final ZipFile zip;
         private String segmentFile;
         private int segmentStart;
+        private int segmentFileLine;
 
         private ReadState(List<String> output, List<Segment> segments, ZipFile zip) {
             this.output = output;
@@ -90,6 +102,7 @@ public final class RtmScriptSource {
                 bytes = input.readAllBytes();
             }
             String source = decode(bytes, entry);
+            int lineNumber = 1;
             for (String raw : source.split("\n", -1)) {
                 String line = raw.endsWith("\r") ? raw.substring(0, raw.length() - 1) : raw;
                 var matcher = INCLUDE.matcher(line);
@@ -106,20 +119,23 @@ public final class RtmScriptSource {
                         throw new IOException("Included script not found from " + entry + ": " + reference);
                     }
                     // Preserve the directive's line position before splicing the included file in.
-                    append(entry, "");
+                    append(entry, lineNumber, "");
                     file(resolved, stack, depth + 1);
+                    lineNumber++;
                     continue;
                 }
-                append(entry, line);
+                append(entry, lineNumber, line);
+                lineNumber++;
             }
             stack.remove(entry);
         }
 
-        private void append(String file, String line) {
+        private void append(String file, int lineNumber, String line) {
             if (segmentFile != null && !segmentFile.equals(file)) finishSegment();
             if (segmentFile == null) {
                 segmentFile = file;
                 segmentStart = output.size() + 1;
+                segmentFileLine = lineNumber;
             }
             output.add(line);
         }
@@ -128,7 +144,7 @@ public final class RtmScriptSource {
 
         private void finishSegment() {
             if (segmentFile == null) return;
-            segments.add(new Segment(segmentStart, output.size(), segmentFile));
+            segments.add(new Segment(segmentStart, output.size(), segmentFile, segmentFileLine));
             segmentFile = null;
         }
 

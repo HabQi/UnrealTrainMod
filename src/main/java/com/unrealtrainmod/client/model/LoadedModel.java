@@ -11,11 +11,18 @@ import com.unrealtrainmod.vehicle.VehicleDefinition;
 import com.unrealtrainmod.vehicle.VehiclePartRole;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /** Vehicle assembly referencing shared source geometry. */
 public record LoadedModel(List<Instance> instances, ModelBounds bounds) {
-    /** Owns GPU geometry; selections only reference its parts and never own rendering resources. */
+    /**
+     * Owns GPU geometry; selections only reference its parts and never own rendering resources.
+     * {@code bodyParts} maps an action-name set to the body selection that omits those objects.
+     * {@code actionParts} groups all objects with the same normalized action name.
+     */
     public record Source(List<ModelPart> parts, PartSelection visibleParts,
+                         Map<Set<String>, PartSelection> bodyParts,
+                         Map<String, PartSelection> actionParts,
                          Map<String, PartSelection> partsByName, Map<VehiclePartRole, PartSelection> componentParts,
                          GpuModel gpu) {}
     public record Instance(Source model, VehicleDefinition.Instance definition, PartSelection visibleParts) {

@@ -10,8 +10,6 @@ public final class TrainControlProfile {
     public static final int POWER_NOTCHES = 5;
     private TrainControlProfile() {}
 
-    public static boolean validHandle(int handle) { return handle >= -BRAKE_NOTCHES && handle <= POWER_NOTCHES; }
-
     public static TrainControlState control(int handle, TrainControlState.Reverser reverser, boolean emergency) {
         return new TrainControlState(reverser, emergency ? 0 : Math.max(0, handle) / (double) POWER_NOTCHES,
                 Math.max(0, -handle) / (double) BRAKE_NOTCHES, emergency);

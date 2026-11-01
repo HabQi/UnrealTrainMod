@@ -26,5 +26,19 @@ public final class ScriptDiagnostics {
         if (REPORTED.add(key)) LOGGER.warn("RTM script names part '{}', but model {} has no matching object", name, model);
     }
 
+    /** A configured door action name that matches no prepared model part. */
+    public static void missingActionPart(String model, String name) {
+        String key = "action|" + model + "|" + name;
+        if (REPORTED.add(key)) LOGGER.warn("RTM vehicle action names part '{}', but model {} has no matching object", name, model);
+    }
+
+    /** A model with both door actions and a body renderer; the script keeps ownership of all body parts. */
+    public static void actionIgnoredForScript(String model) {
+        String key = "action-script|" + model;
+        if (REPORTED.add(key)) LOGGER.info(
+                "Vehicle model {} declares door actions and a body renderer; the script owns the body and configured actions are ignored",
+                model);
+    }
+
     public static void clear() { REPORTED.clear(); }
 }

@@ -9,6 +9,7 @@ import org.slf4j.LoggerFactory;
 
 import com.unrealtrainmod.model.ModelSource;
 import com.unrealtrainmod.vehicle.VehicleCatalog;
+import com.unrealtrainmod.vehicle.VehiclePartRole;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.unrealtrainmod.UnrealTrainMod;
 import com.unrealtrainmod.client.model.LoadedModel;
@@ -85,7 +86,7 @@ public final class ClientModelManager extends SimplePreparableReloadListener<Pre
                     }
                 }
                 uploaded.put(entry.getKey(), new LoadedModel.Source(source.parts(), source.visibleParts(),
-                        source.partsByName(), source.componentParts(), gpu));
+                        source.bodyParts(), source.actionParts(), source.partsByName(), source.componentParts(), gpu));
             }
             var loaded = new HashMap<ResourceLocation, LoadedModel>();
             for (var vehicle : prepared.vehicles()) {
@@ -93,6 +94,13 @@ public final class ClientModelManager extends SimplePreparableReloadListener<Pre
                         .map(instance -> {
                             var source = uploaded.get(instance.source());
                             var selection = source.componentParts().getOrDefault(instance.role(), source.visibleParts());
+                            // A body script owns the whole model, so only script-free bodies animate configured doors.
+                            if (instance.role() == VehiclePartRole.BODY && !instance.actions().isEmpty()
+                                    && instance.source().rendererPath() == null) {
+                                var names = new HashSet<String>();
+                                instance.actions().collectPartNames(names);
+                                selection = source.bodyParts().getOrDefault(Set.copyOf(names), source.visibleParts());
+                            }
                             return new LoadedModel.Instance(source, instance, selection);
                         }).toList();
                 loaded.put(vehicle.id(), new LoadedModel(instances, vehicle.bounds()));

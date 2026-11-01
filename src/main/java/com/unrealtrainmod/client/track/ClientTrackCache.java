@@ -14,8 +14,10 @@ import com.unrealtrainmod.track.assembly.TrackAssemblyInstance;
 import com.unrealtrainmod.network.payload.TrackAssemblyPayload;
 import com.unrealtrainmod.network.payload.TrackAssemblyStatePayload;
 import com.unrealtrainmod.network.payload.TrackAssemblyRemovePayload;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -40,6 +42,9 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
     final Map<UUID, AssemblyEntry> assemblies = new LinkedHashMap<>();
     private final Map<UUID, TrackAssemblyStatePayload> states = new HashMap<>();
     private final Set<UUID> deletedAssemblies = new HashSet<>();
+    /** Failed script variants awaiting a static rebuild; identity keeps reloaded variants apart. */
+    private final Set<ClientRailModelManager.Model> scriptFailures =
+            Collections.newSetFromMap(new IdentityHashMap<>());
     private ClientLevel world;
 
     private ClientTrackCache() {}
@@ -158,6 +163,27 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
     public void invalidateMeshes() {
         for (Entry entry : entries.values()) entry.close();
         for (var entry : assemblies.values()) entry.close();
+        scriptFailures.clear();
+    }
+
+    /** Marks every mesh built from this prepared model for a static rebuild after its script failed. */
+    public void invalidateScriptedModel(ClientRailModelManager.Model model) {
+        if (model != null) scriptFailures.add(model);
+    }
+
+    /**
+     * Closes affected meshes between frames, never while a cache map is being iterated. The next build sees the
+     * failed runtime and uses the full static geometry.
+     */
+    public void flushScriptFailures() {
+        if (scriptFailures.isEmpty()) return;
+        for (Entry entry : entries.values()) {
+            if (scriptFailures.contains(ClientRailModelManager.INSTANCE.model(entry.data.modelId()))) entry.close();
+        }
+        for (var entry : assemblies.values()) {
+            if (scriptFailures.contains(ClientRailModelManager.INSTANCE.model(entry.data.modelId()))) entry.close();
+        }
+        scriptFailures.clear();
     }
 
     @Override
@@ -165,6 +191,7 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
         for (Entry entry : entries.values()) entry.close();
         for (var entry : assemblies.values()) entry.close();
         assemblies.clear(); states.clear(); deletedAssemblies.clear();
+        scriptFailures.clear();
         entries.clear();
         chunks.clear();
         world = null;

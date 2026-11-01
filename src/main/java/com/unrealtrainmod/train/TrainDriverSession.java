@@ -15,12 +15,10 @@ public final class TrainDriverSession {
     final UUID vehicle;
     long sequence;
     int silentTicks;
-    int handle;
 
-    TrainDriverSession(ServerPlayer player, TrainConsist train, UUID vehicle, int handle) {
+    TrainDriverSession(ServerPlayer player, TrainConsist train, UUID vehicle) {
         this.player = player;
         this.train = train;
         this.vehicle = vehicle;
-        this.handle = handle;
     }
 }

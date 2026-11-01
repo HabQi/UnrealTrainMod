@@ -12,11 +12,14 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import org.joml.Matrix3f;
+import org.joml.Matrix4f;
 import org.joml.Quaternionf;
 
 /**
- * Collects transforms and part draws for one script invocation. Commands are only submitted after the
- * script returns successfully, so a failing script cannot leave a half-recorded vehicle in the queue.
+ * Collects transforms and part draws for one script invocation. The caller's entry transform is copied up front
+ * and restored on every exit path, so a script cannot leak its own pushes, pops or direct transforms into the
+ * static fallback. Commands are only submitted after the script returns successfully.
  */
 final class ScriptDrawContext {
     private record Command(PartSelection selection, PoseStack.Pose pose) {}
@@ -25,6 +28,9 @@ final class ScriptDrawContext {
     private final LoadedModel.Source source;
     private final PoseStack pose;
     private final String modelLabel;
+    /** Independent baseline of the caller matrix; the script never owns this level of the stack. */
+    private final Matrix4f entryPose;
+    private final Matrix3f entryNormal;
     private final List<Command> commands = new ArrayList<>();
     private final Map<String, PartSelection> resolved = new HashMap<>();
     private int depth;
@@ -34,6 +40,8 @@ final class ScriptDrawContext {
         this.source = source;
         this.pose = pose;
         this.modelLabel = modelLabel;
+        entryPose = new Matrix4f(pose.last().pose());
+        entryNormal = new Matrix3f(pose.last().normal());
     }
 
     void push() {
@@ -96,12 +104,17 @@ final class ScriptDrawContext {
         for (var command : commands) queue.submitGeometry(source, command.selection(), command.pose(), light);
     }
 
-    /** Drop unclosed pushes even when the script threw or returned with an unbalanced stack. */
+    /**
+     * Drop unclosed pushes, pending commands and every script transform. The caller then draws its static fallback
+     * from the same pose it submitted with.
+     */
     void restore() {
         while (depth > 0) {
             pose.popPose();
             depth--;
         }
+        pose.last().pose().set(entryPose);
+        pose.last().normal().set(entryNormal);
         commands.clear();
     }
 }
