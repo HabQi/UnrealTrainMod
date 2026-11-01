@@ -21,14 +21,17 @@ import java.util.regex.Pattern;
 import java.util.zip.ZipFile;
 
 /**
- * Reads one legacy script and its {@code //include} dependencies from the owning ZIP. Includes are
- * resolved only inside that archive; no cross-package search is performed.
+ * Reads one legacy script and its {@code //include} dependencies from the owning ZIP. A missing
+ * Minecraft LibRenderRail include can use the built-in static-stage library; no cross-package search is performed.
  */
 public final class RtmScriptSource {
     private static final Pattern INCLUDE = Pattern.compile(
             "^\\s*//\\s*include\\s*(?:<([^>]+)>|\"([^\"]+)\"|'([^']+)'|(\\S+))\\s*(?://.*)?$",
             Pattern.CASE_INSENSITIVE);
     private static final int MAX_DEPTH = 16;
+    private static final String LEGACY_RAIL_LIBRARY = "assets/minecraft/scripts/LibRenderRail.js";
+    private static final String RAIL_LIBRARY_RESOURCE = "assets/unrealtrainmod/compat/rtm/scripts/LibRenderRail.js";
+    private static final String BUILTIN_RAIL_LIBRARY = "builtin:" + RAIL_LIBRARY_RESOURCE;
     private static final Map<PackageAsset, Prepared> CACHE = new ConcurrentHashMap<>();
 
     /**
@@ -66,7 +69,7 @@ public final class RtmScriptSource {
         var output = new ArrayList<String>();
         var segments = new ArrayList<Segment>();
         try (var zip = new ZipFile(asset.archive().toFile())) {
-            var read = new ReadState(output, segments, zip);
+            var read = new ReadState(output, segments, zip, asset);
             read.file(asset.entry(), new HashSet<>(), 0);
             read.finish();
         }
@@ -82,24 +85,34 @@ public final class RtmScriptSource {
         private final List<String> output;
         private final List<Segment> segments;
         private final ZipFile zip;
+        private final PackageAsset asset;
         private String segmentFile;
         private int segmentStart;
         private int segmentFileLine;
 
-        private ReadState(List<String> output, List<Segment> segments, ZipFile zip) {
+        private ReadState(List<String> output, List<Segment> segments, ZipFile zip, PackageAsset asset) {
             this.output = output;
             this.segments = segments;
             this.zip = zip;
+            this.asset = asset;
         }
 
         private void file(String entry, Set<String> stack, int depth) throws IOException {
             if (depth > MAX_DEPTH) throw new IOException("Script include nesting is too deep at " + entry);
             if (!stack.add(entry)) throw new IOException("Script include cycle at " + entry);
-            var zipEntry = zip.getEntry(entry);
-            if (zipEntry == null || zipEntry.isDirectory()) throw new IOException("Missing script entry: " + entry);
             byte[] bytes;
-            try (var input = zip.getInputStream(zipEntry)) {
-                bytes = input.readAllBytes();
+            if (entry.equals(BUILTIN_RAIL_LIBRARY)) {
+                try (var input = RtmScriptSource.class.getResourceAsStream("/" + RAIL_LIBRARY_RESOURCE)) {
+                    if (input == null) throw new IOException("Missing built-in script resource: " + entry);
+                    bytes = input.readAllBytes();
+                }
+                ScriptDiagnostics.builtinLibrary(asset, entry);
+            } else {
+                var zipEntry = zip.getEntry(entry);
+                if (zipEntry == null || zipEntry.isDirectory()) throw new IOException("Missing script entry: " + entry);
+                try (var input = zip.getInputStream(zipEntry)) {
+                    bytes = input.readAllBytes();
+                }
             }
             String source = decode(bytes, entry);
             int lineNumber = 1;
@@ -175,6 +188,13 @@ public final class RtmScriptSource {
                 if (candidate == null) continue;
                 var entry = zip.getEntry(candidate);
                 if (entry != null && !entry.isDirectory()) return candidate;
+            }
+            // Every package-local candidate takes precedence over the one supported built-in library.
+            for (String candidate : candidates) {
+                if (candidate != null && (candidate.equals(LEGACY_RAIL_LIBRARY)
+                        || candidate.endsWith("/" + LEGACY_RAIL_LIBRARY))) {
+                    return BUILTIN_RAIL_LIBRARY;
+                }
             }
             return null;
         }

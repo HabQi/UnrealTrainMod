@@ -117,7 +117,11 @@ public final class TrainEntity extends Entity {
     }
 
     /** Authoritative per-vehicle target; left and right use the vehicle's own forward direction. */
-    public boolean isDoorOpen(VehicleDoor side) { return door(side).open; }
+    public boolean isDoorOpen(VehicleDoor side) {
+        // A client that has not received an update yet must read the default synced state, not a stale local flag.
+        if (level().isClientSide) ensureDoorState();
+        return door(side).open;
+    }
 
     /** Server-only transition. Returns false when the requested target is already current. */
     public boolean setDoorOpen(VehicleDoor side, boolean open) {

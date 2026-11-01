@@ -20,13 +20,13 @@ public final class TrainModelRenderer {
 
     private TrainModelRenderer() {}
 
-    /** Running vehicle: each source owns its part transform, then a script or the static geometry. */
+    /** Running or placed world vehicle: each source owns its part transform, then a script or the static geometry. */
     public static void render(LoadedModel model, VehiclePose vehiclePose, TrainEntity entity, float partialTick,
                               PoseStack pose, int light) {
         submit(WORLD, model, vehiclePose, entity, partialTick, pose, light);
     }
 
-    /** Placed/static vehicle with no rail pose; scripts run with an entity-less preview context. */
+    /** Static display model with no entity and no rail pose; scripts run in the entity-less preview context. */
     public static void renderPlaced(LoadedModel model, PoseStack pose, int light) {
         submit(WORLD, model, null, null, 0.0f, pose, light);
     }
@@ -54,7 +54,10 @@ public final class TrainModelRenderer {
                 if (!VehicleScriptManager.render(queue, entity, vehiclePose, instance, pose, light, partialTick)) {
                     // The caller already applied the instance offset, so submit source-local geometry directly.
                     queue.submitGeometry(instance.model(), instance.visibleParts(), pose, light);
-                    VehicleActionRenderer.submit(queue, instance, entity, partialTick, pose, light);
+                    VehicleActionRenderer.submit(queue, instance, entity, partialTick, pose, light, false);
+                } else {
+                    // A working body script owns every body part, including any part named by a door action.
+                    VehicleActionRenderer.submit(queue, instance, entity, partialTick, pose, light, true);
                 }
             } finally {
                 pose.popPose();

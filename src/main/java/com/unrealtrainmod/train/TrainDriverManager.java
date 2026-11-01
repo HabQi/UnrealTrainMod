@@ -9,6 +9,7 @@ import com.unrealtrainmod.entity.TrainEntity;
 import com.unrealtrainmod.network.payload.TrainControlInputPayload;
 import com.unrealtrainmod.network.payload.TrainControlSyncPayload;
 import com.unrealtrainmod.network.payload.TrainControlSyncPayload.Feedback;
+import com.unrealtrainmod.vehicle.VehicleDoor;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -97,17 +98,19 @@ public final class TrainDriverManager {
                 || payload.sequence() <= session.sequence) return;
         session.sequence = payload.sequence();
         session.silentTicks = 0;
-        if (payload.action() == TrainControlInputPayload.Action.HEARTBEAT) return;
+        var action = payload.action();
+        if (action == TrainControlInputPayload.Action.HEARTBEAT) return;
         var train = session.train;
         var old = train.control();
         int handle = TrainControlProfile.handle(old);
         var reverser = old.reverser();
         boolean emergency = old.emergencyBrake();
+        boolean controlChange = true;
         Feedback feedback = Feedback.NONE;
-        switch (payload.action()) {
+        switch (action) {
             case HANDLE_UP, HANDLE_DOWN -> {
                 if (emergency) feedback = Feedback.EMERGENCY_LOCKED;
-                else handle = payload.action() == TrainControlInputPayload.Action.HANDLE_UP
+                else handle = action == TrainControlInputPayload.Action.HANDLE_UP
                         ? Math.min(TrainControlProfile.POWER_NOTCHES, handle + 1)
                         : Math.max(-TrainControlProfile.BRAKE_NOTCHES, handle - 1);
             }
@@ -123,9 +126,18 @@ public final class TrainDriverManager {
                 if (emergency && train.running()) feedback = Feedback.EMERGENCY_LOCKED;
                 else if (emergency) { emergency = false; handle = 0; }
             }
+            // Only the car the driver rides; the administrator door command's rules apply unchanged.
+            case DOOR_LEFT_OPEN, DOOR_LEFT_CLOSE, DOOR_RIGHT_OPEN, DOOR_RIGHT_CLOSE -> {
+                controlChange = false;
+                boolean left = action == TrainControlInputPayload.Action.DOOR_LEFT_OPEN
+                        || action == TrainControlInputPayload.Action.DOOR_LEFT_CLOSE;
+                boolean open = action == TrainControlInputPayload.Action.DOOR_LEFT_OPEN
+                        || action == TrainControlInputPayload.Action.DOOR_RIGHT_OPEN;
+                ((TrainEntity) session.player.getVehicle()).setDoorOpen(left ? VehicleDoor.LEFT : VehicleDoor.RIGHT, open);
+            }
             case HEARTBEAT -> { }
         }
-        if (feedback == Feedback.NONE) train.setControl(TrainControlProfile.control(handle, reverser, emergency));
+        if (controlChange && feedback == Feedback.NONE) train.setControl(TrainControlProfile.control(handle, reverser, emergency));
         for (var driver : sessionsFor(train)) send(driver, true, driver == session ? feedback : Feedback.NONE);
     }
 

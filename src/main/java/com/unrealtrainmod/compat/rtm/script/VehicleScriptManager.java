@@ -80,7 +80,8 @@ public final class VehicleScriptManager {
         try {
             return new Handle(source, VehicleScriptRuntime.create(script, source, role, label));
         } catch (IOException | ScriptException | NoSuchMethodException | RuntimeException | LinkageError exception) {
-            LOGGER.warn("Cannot initialise vehicle script {} for {}: {}", script.entry(), label, exception.getMessage());
+            LOGGER.warn("Cannot initialise vehicle script {}!{} for {}: {}", script.archive(), script.entry(), label,
+                    exception.getMessage());
             LOGGER.debug("Vehicle script initialisation failure", exception);
             return new Handle(source, null);
         }

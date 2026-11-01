@@ -12,6 +12,7 @@ import com.unrealtrainmod.network.payload.TrainControlSyncPayload;
 import com.unrealtrainmod.train.TrainControlProfile;
 import com.unrealtrainmod.train.TrainControlState.Reverser;
 import com.unrealtrainmod.train.TrainConsist.StopReason;
+import com.unrealtrainmod.vehicle.VehicleDoor;
 import java.util.Locale;
 import java.util.ArrayList;
 import java.util.List;
@@ -45,6 +46,8 @@ public final class TrainDrivingClient {
     private static final KeyMapping BRAKE = key("brake", GLFW.GLFW_KEY_S);
     private static final KeyMapping REVERSER = key("reverser", GLFW.GLFW_KEY_R);
     private static final KeyMapping EMERGENCY = key("emergency", GLFW.GLFW_KEY_SPACE);
+    private static final KeyMapping DOOR_LEFT = key("door_left", GLFW.GLFW_KEY_J);
+    private static final KeyMapping DOOR_RIGHT = key("door_right", GLFW.GLFW_KEY_K);
     private static TrainControlSyncPayload snapshot;
     private static long sequence;
     private static int silence, heartbeat;
@@ -66,13 +69,21 @@ public final class TrainDrivingClient {
         event.register(BRAKE);
         event.register(REVERSER);
         event.register(EMERGENCY);
+        event.register(DOOR_LEFT);
+        event.register(DOOR_RIGHT);
+    }
+
+    private static TrainEntity riddenVehicle() {
+        var mc = Minecraft.getInstance();
+        if (snapshot == null || mc.player == null) return null;
+        return mc.player.getVehicle() instanceof TrainEntity entity && entity.getUUID().equals(snapshot.vehicle())
+                ? entity : null;
     }
 
     private static boolean riding() {
         var mc = Minecraft.getInstance();
-        return snapshot != null && mc.player != null && mc.level != null
-                && mc.level.dimension().location().equals(snapshot.dimension())
-                && mc.player.getVehicle() instanceof TrainEntity entity && entity.getUUID().equals(snapshot.vehicle());
+        return snapshot != null && mc.level != null
+                && mc.level.dimension().location().equals(snapshot.dimension()) && riddenVehicle() != null;
     }
 
     public static void onSync(TrackSyncEvent event) {
@@ -101,7 +112,7 @@ public final class TrainDrivingClient {
             clear();
             return;
         }
-        for (var key : new KeyMapping[] {POWER, BRAKE, REVERSER, EMERGENCY}) while (key.consumeClick()) { }
+        for (var key : new KeyMapping[] {POWER, BRAKE, REVERSER, EMERGENCY, DOOR_LEFT, DOOR_RIGHT}) while (key.consumeClick()) { }
         if (riding() && ++heartbeat >= 10) send(Action.HEARTBEAT);
     }
 
@@ -109,12 +120,16 @@ public final class TrainDrivingClient {
         if (event.getAction() != GLFW.GLFW_PRESS || !CONTEXT.isActive()) return;
         press(POWER.matches(event.getKey(), event.getScanCode()), BRAKE.matches(event.getKey(), event.getScanCode()),
                 REVERSER.matches(event.getKey(), event.getScanCode()), EMERGENCY.matches(event.getKey(), event.getScanCode()));
+        if (DOOR_LEFT.matches(event.getKey(), event.getScanCode())) door(VehicleDoor.LEFT);
+        if (DOOR_RIGHT.matches(event.getKey(), event.getScanCode())) door(VehicleDoor.RIGHT);
     }
 
     public static void mousePressed(InputEvent.MouseButton.Post event) {
         if (event.getAction() != GLFW.GLFW_PRESS || !CONTEXT.isActive()) return;
         press(POWER.matchesMouse(event.getButton()), BRAKE.matchesMouse(event.getButton()),
                 REVERSER.matchesMouse(event.getButton()), EMERGENCY.matchesMouse(event.getButton()));
+        if (DOOR_LEFT.matchesMouse(event.getButton())) door(VehicleDoor.LEFT);
+        if (DOOR_RIGHT.matchesMouse(event.getButton())) door(VehicleDoor.RIGHT);
     }
 
     /** Consume actual press events, so quick taps are retained and keyboard repeat cannot change a notch. */
@@ -129,6 +144,19 @@ public final class TrainDrivingClient {
         heartbeat = 0;
         sequence++;
         PacketDistributor.sendToServer(new TrainControlInputPayload(snapshot.session(), sequence, action));
+    }
+
+    /**
+     * Sends an explicit open or close target for the ridden car. Several drivers pressing the key before the
+     * synced target arrives repeat the same request instead of toggling it back on the server.
+     */
+    private static void door(VehicleDoor side) {
+        var vehicle = riddenVehicle();
+        if (vehicle == null) return;
+        boolean open = !vehicle.isDoorOpen(side);
+        send(side == VehicleDoor.LEFT
+                ? (open ? Action.DOOR_LEFT_OPEN : Action.DOOR_LEFT_CLOSE)
+                : (open ? Action.DOOR_RIGHT_OPEN : Action.DOOR_RIGHT_CLOSE));
     }
 
     public static void movement(MovementInputUpdateEvent event) {
@@ -170,7 +198,9 @@ public final class TrainDrivingClient {
             Component.translatable(PREFIX + "traction", number(state.tractionForce() / 1000), number(state.tractionPower() / 1000)),
             Component.translatable(PREFIX + "brake", brakeDemand, number(state.brakeForce() / 1000)),
             Component.translatable(PREFIX + "help", POWER.getTranslatedKeyMessage(), BRAKE.getTranslatedKeyMessage(),
-                    REVERSER.getTranslatedKeyMessage(), EMERGENCY.getTranslatedKeyMessage(), mc.options.keyShift.getTranslatedKeyMessage())
+                    REVERSER.getTranslatedKeyMessage(), EMERGENCY.getTranslatedKeyMessage(),
+                    DOOR_LEFT.getTranslatedKeyMessage(), DOOR_RIGHT.getTranslatedKeyMessage(),
+                    mc.options.keyShift.getTranslatedKeyMessage())
         };
         var wrapped = new ArrayList<FormattedCharSequence>();
         for (var line : lines) wrapped.addAll(mc.font.split(line, width));

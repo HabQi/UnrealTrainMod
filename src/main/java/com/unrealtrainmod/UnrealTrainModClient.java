@@ -19,6 +19,7 @@ import com.unrealtrainmod.client.gui.TrainDebugOverlay;
 import com.unrealtrainmod.client.network.ClientPayloadHandlers;
 import com.unrealtrainmod.client.map.TrainMapClient;
 import com.unrealtrainmod.client.renderer.TrainModelRenderer;
+import com.unrealtrainmod.client.renderer.instancing.InstancedModelShader;
 import com.unrealtrainmod.client.track.ClientTrackCache;
 import com.unrealtrainmod.client.track.ClientRailModelManager;
 import com.unrealtrainmod.client.track.ClientTrackConstruction;
@@ -52,6 +53,7 @@ public class UnrealTrainModClient {
     @SubscribeEvent
     static void registerShaders(RegisterShadersEvent event) {
         StaticModelShader.register(event);
+        InstancedModelShader.register(event);
     }
 
     @SubscribeEvent

@@ -55,8 +55,9 @@ public final class TrainEntityRenderer extends EntityRenderer<TrainEntity> {
                     }
                 } else lineBox(definition == null ? ModelBounds.MISSING : definition.bounds(), pose, buffers);
             } else {
-                if (vehiclePose == null) TrainModelRenderer.renderPlaced(model, pose, light);
-                else TrainModelRenderer.render(model, vehiclePose, entity, partialTick, pose, light);
+                // A placed vehicle may have no rail pose yet. Keep the entity and partial tick anyway, so door
+                // actions and scripts read authoritative state instead of the entity-less preview context.
+                TrainModelRenderer.render(model, vehiclePose, entity, partialTick, pose, light);
             }
         } finally {
             pose.popPose();

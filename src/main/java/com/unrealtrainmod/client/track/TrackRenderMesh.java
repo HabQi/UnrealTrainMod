@@ -15,8 +15,17 @@ interface TrackRenderMesh extends AutoCloseable {
     TrackVector origin();
     boolean isEmpty();
     boolean isUploaded();
+    /** {@link TrackRenderStats#NATIVE} or {@link TrackRenderStats#RAIL_MODEL}, for the statistics breakdown. */
+    int source();
+    /** GL draw calls and submitted primitives of the last/next draw. */
+    int drawCalls();
+    int drawVertices();
+    int drawTriangles();
     /** Check for light changes and upload within budget, keeping previously uploaded buffers drawable. */
-    int upload(ClientLevel level, int budget);
-    void draw(Matrix4f modelView, Matrix4f projection);
+    int upload(ClientLevel level, int budget, TrackRenderStats stats);
+    /** Original per-mesh path, kept as the comparison baseline. */
+    void draw(Matrix4f modelView, Matrix4f projection, TrackRenderStats stats);
+    /** Shared-scope path: reuses material state across consecutive meshes. */
+    void draw(TrackRenderState state, Matrix4f modelView, Matrix4f projection);
     @Override void close();
 }

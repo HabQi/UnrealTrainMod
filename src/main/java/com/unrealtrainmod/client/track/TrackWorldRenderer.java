@@ -9,6 +9,7 @@ import org.slf4j.LoggerFactory;
 
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.VertexBuffer;
+import com.unrealtrainmod.client.ClientConfig;
 import com.unrealtrainmod.track.mesh.TrackMeshBuilder;
 import com.unrealtrainmod.track.geometry.TrackGeometry;
 import com.unrealtrainmod.track.mesh.TrackMeshData;
@@ -18,6 +19,7 @@ import java.util.List;
 import java.util.UUID;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.phys.Vec3;
 import net.neoforged.neoforge.client.event.RenderLevelStageEvent;
@@ -37,36 +39,40 @@ public final class TrackWorldRenderer {
         var level = Minecraft.getInstance().level;
         if (level == null || cache.world() != level || (cache.entries.isEmpty() && cache.assemblies.isEmpty())) return;
         RenderSystem.assertOnRenderThread();
-        // Script failures are recorded during a build; rebuild those meshes at a point outside cache iteration.
-        cache.flushScriptFailures();
-        var previousShader = RenderSystem.getShader();
-        float[] previousColor = RenderSystem.getShaderColor().clone();
+        // The two paths share cached geometry, build and upload budgets; only the material state differs.
+        boolean stateCache = ClientConfig.USE_TRACK_RENDER_STATE_CACHE.getAsBoolean();
+        TrackRenderStats stats = TrackRenderStats.begin(level, "world", stateCache ? "stateCache" : "legacy");
+        long stageStart = stats == null ? 0L : System.nanoTime();
+        var previousShader = stateCache ? null : RenderSystem.getShader();
+        float[] previousColor = stateCache ? null : RenderSystem.getShaderColor().clone();
         int builds = BUILDS_PER_FRAME, uploads = UPLOADS_PER_FRAME;
         var camera = event.getCamera().getPosition();
         Matrix4f modelView = new Matrix4f();
-        try {
+        try (var state = stateCache ? new TrackRenderState(stats) : null) {
+            // Script failures are recorded during a build; rebuild those meshes at a point outside cache iteration.
+            cache.flushScriptFailures();
             RenderSystem.setShaderColor(1, 1, 1, 1);
             for (var chunkEntry : cache.chunks.entrySet()) {
                 long chunk = chunkEntry.getKey();
                 int x = ChunkPos.getX(chunk), z = ChunkPos.getZ(chunk);
                 if (!level.hasChunk(x, z)) continue;
+                if (stats != null) stats.chunk();
                 for (UUID id : chunkEntry.getValue()) {
                     var entry = cache.entries.get(id);
                     TrackRenderMesh mesh = entry.meshes.get(chunk);
                     if (mesh == null) {
-                        if (builds == 0 || !event.getFrustum().isVisible(entry.broadBounds(x, z))) continue;
+                        if (builds == 0 || !event.getFrustum().isVisible(entry.broadBounds(x, z))) {
+                            if (stats != null) stats.candidate();
+                            continue;
+                        }
+                        long buildStart = stats == null ? 0L : System.nanoTime();
                         mesh = build(entry, id, x, z);
                         entry.meshes.put(chunk, mesh);
                         builds--;
+                        if (stats != null) stats.built(System.nanoTime() - buildStart);
                     }
-                    if (mesh.isEmpty() || !event.getFrustum().isVisible(mesh.bounds())) continue;
-                    // Uploaded meshes also check for local light changes; old buffers remain drawable during updates.
-                    uploads -= mesh.upload(level, uploads);
-                    if (!mesh.isUploaded()) continue;
-                    var origin = mesh.origin();
-                    modelView.set(event.getModelViewMatrix()).translate((float)(origin.x() - camera.x),
-                            (float)(origin.y() - camera.y), (float)(origin.z() - camera.z));
-                    mesh.draw(modelView, event.getProjectionMatrix());
+                    uploads = draw(stats, state, event, level, camera, modelView, uploads, mesh,
+                            TrackRenderStats.STRUCTURE_TRACK);
                 }
             }
             for (var entry : cache.assemblies.values()) {
@@ -75,6 +81,7 @@ public final class TrackWorldRenderer {
                 for (long chunk : entry.chunks) {
                     int x = ChunkPos.getX(chunk), z = ChunkPos.getZ(chunk);
                     if (!level.hasChunk(x, z)) continue;
+                    if (stats != null) stats.chunk();
                     if (simplified) {
                         // Built-in turnouts keep their moving tongue meshes on a dedicated two-pass path.
                         for (int pass = 0; pass < 2; pass++) {
@@ -82,7 +89,11 @@ public final class TrackWorldRenderer {
                             var meshes = tongue ? entry.tongues : entry.meshes;
                             var group = meshes.get(chunk);
                             if (group == null) {
-                                if (builds == 0) continue;
+                                if (builds == 0) {
+                                    if (stats != null) stats.candidate();
+                                    continue;
+                                }
+                                long buildStart = stats == null ? 0L : System.nanoTime();
                                 TrackRenderMesh mesh;
                                 try {
                                     mesh = new TrackGpuMesh(TrackMeshBuilder.buildTurnout(entry.data, x, z, tongue));
@@ -91,45 +102,83 @@ public final class TrackWorldRenderer {
                                     mesh = new TrackGpuMesh(TrackMeshData.EMPTY);
                                 }
                                 group = List.of(mesh); meshes.put(chunk, group); builds--;
+                                if (stats != null) stats.built(System.nanoTime() - buildStart);
                             }
-                            uploads = draw(group, event, level, camera, modelView, uploads);
+                            uploads = drawAll(stats, state, event, level, camera, modelView, uploads, group);
                         }
                     } else {
                         var group = entry.meshes.get(chunk);
                         if (group == null) {
-                            if (builds == 0) continue;
+                            if (builds == 0) {
+                                if (stats != null) stats.candidate();
+                                continue;
+                            }
                             group = new ArrayList<TrackRenderMesh>();
                             entry.meshes.put(chunk, group);
                         }
                         // The cached prefix survives budget exhaustion and is drawn while later segments wait.
                         while (builds > 0 && group.size() < entry.geometries.size()) {
                             var geometry = entry.geometries.get(group.size());
+                            long buildStart = stats == null ? 0L : System.nanoTime();
                             group.add(build(geometry, entry.data.gauge(), entry.data.modelId(), entry.data.id(),
                                     x, z, !entry.missingReported, false));
                             entry.missingReported = true;
                             builds--;
+                            if (stats != null) stats.built(System.nanoTime() - buildStart);
                         }
-                        uploads = draw(group, event, level, camera, modelView, uploads);
+                        uploads = drawAll(stats, state, event, level, camera, modelView, uploads, group);
                     }
                 }
             }
         } finally {
-            VertexBuffer.unbind();
-            RenderSystem.setShader(() -> previousShader);
-            RenderSystem.setShaderColor(previousColor[0], previousColor[1], previousColor[2], previousColor[3]);
+            if (!stateCache) {
+                VertexBuffer.unbind();
+                RenderSystem.setShader(() -> previousShader);
+                RenderSystem.setShaderColor(previousColor[0], previousColor[1], previousColor[2], previousColor[3]);
+            }
+            if (stats != null) {
+                stats.stage(System.nanoTime() - stageStart);
+                stats.endFrame();
+            }
         }
+        if (stats != null) stats.logIfDue();
     }
 
-    private static int draw(List<TrackRenderMesh> group, RenderLevelStageEvent event, ClientLevel level,
-                            Vec3 camera, Matrix4f modelView, int uploads) {
+    private static int drawAll(TrackRenderStats stats, TrackRenderState state, RenderLevelStageEvent event,
+                               ClientLevel level, Vec3 camera, Matrix4f modelView, int uploads,
+                               List<TrackRenderMesh> group) {
         for (var mesh : group) {
-            if (mesh.isEmpty() || !event.getFrustum().isVisible(mesh.bounds())) continue;
-            uploads -= mesh.upload(level, uploads);
-            if (!mesh.isUploaded()) continue;
-            var origin = mesh.origin();
-            modelView.set(event.getModelViewMatrix()).translate((float)(origin.x() - camera.x),
-                    (float)(origin.y() - camera.y), (float)(origin.z() - camera.z));
-            mesh.draw(modelView, event.getProjectionMatrix());
+            uploads = draw(stats, state, event, level, camera, modelView, uploads, mesh,
+                    TrackRenderStats.STRUCTURE_ASSEMBLY);
+        }
+        return uploads;
+    }
+
+    private static int draw(TrackRenderStats stats, TrackRenderState state, RenderLevelStageEvent event,
+                            ClientLevel level, Vec3 camera, Matrix4f modelView, int uploads,
+                            TrackRenderMesh mesh, int structure) {
+        if (stats != null) stats.candidate();
+        if (mesh.isEmpty()) {
+            if (stats != null) stats.empty();
+            return uploads;
+        }
+        if (!event.getFrustum().isVisible(mesh.bounds())) return uploads;
+        if (stats != null) stats.visible();
+        // Uploaded meshes also check for local light changes; old buffers remain drawable during updates.
+        uploads -= mesh.upload(level, uploads, stats);
+        if (!mesh.isUploaded()) {
+            if (stats != null) stats.pending();
+            return uploads;
+        }
+        var origin = mesh.origin();
+        modelView.set(event.getModelViewMatrix()).translate((float)(origin.x() - camera.x),
+                (float)(origin.y() - camera.y), (float)(origin.z() - camera.z));
+        long drawStart = stats == null ? 0L : System.nanoTime();
+        if (state != null) mesh.draw(state, modelView, event.getProjectionMatrix());
+        else mesh.draw(modelView, event.getProjectionMatrix(), stats);
+        if (stats != null) {
+            stats.drawn(mesh.source(), structure, mesh.drawCalls(), mesh.drawVertices(), mesh.drawTriangles(),
+                    System.nanoTime() - drawStart);
         }
         return uploads;
     }
@@ -150,8 +199,10 @@ public final class TrackWorldRenderer {
                     var script = filterScript ? model.script() : null;
                     if (script != null && !script.failed()) {
                         try {
+                            var start = geometry.sample(0).position();
+                            var startPoint = BlockPos.containing(start.x(), start.y(), start.z());
                             var filtered = RailTrackMeshBuilder.build(geometry, partSources(model), x, z,
-                                    scale, model.period(), new RailScriptFilter(model));
+                                    scale, model.period(), new RailScriptFilter(model, startPoint));
                             return new RailTrackGpuMesh(filtered, false);
                         } catch (RailScriptFilter.Failure failure) {
                             LOGGER.warn("Rail script for {} failed; using the full static model from now on", modelId);

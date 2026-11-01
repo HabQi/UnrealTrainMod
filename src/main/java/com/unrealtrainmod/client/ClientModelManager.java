@@ -94,9 +94,9 @@ public final class ClientModelManager extends SimplePreparableReloadListener<Pre
                         .map(instance -> {
                             var source = uploaded.get(instance.source());
                             var selection = source.componentParts().getOrDefault(instance.role(), source.visibleParts());
-                            // A body script owns the whole model, so only script-free bodies animate configured doors.
-                            if (instance.role() == VehiclePartRole.BODY && !instance.actions().isEmpty()
-                                    && instance.source().rendererPath() == null) {
+                            // This selection is only submitted for static fallback. Scripts select named parts
+                            // from the full source, so their presence must not leave doors in the static body.
+                            if (instance.role() == VehiclePartRole.BODY && !instance.actions().isEmpty()) {
                                 var names = new HashSet<String>();
                                 instance.actions().collectPartNames(names);
                                 selection = source.bodyParts().getOrDefault(Set.copyOf(names), source.visibleParts());

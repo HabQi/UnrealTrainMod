@@ -18,9 +18,14 @@ import com.unrealtrainmod.client.RenderCategory;
 import com.unrealtrainmod.client.StaticModelShader;
 import com.unrealtrainmod.client.model.LoadedModel;
 import com.unrealtrainmod.client.model.PartSelection;
+import com.unrealtrainmod.client.renderer.instancing.InstanceBatchKey;
+import com.unrealtrainmod.client.renderer.instancing.InstanceBuffer;
+import com.unrealtrainmod.client.renderer.instancing.InstancedModelShader;
+import com.unrealtrainmod.client.renderer.instancing.InstancingStats;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.IdentityHashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.texture.OverlayTexture;
@@ -30,22 +35,35 @@ import org.joml.Vector3f;
 /** One world view or one preview. No per-triangle objects and no vertex uploads on the normal GPU path. */
 public final class ModelRenderQueue implements AutoCloseable {
     private record Draw(RenderBatch batch, GpuModel.Part gpu, PoseStack.Pose pose, int light) {}
+    private static final class InstanceGroup {
+        private final List<Draw> draws = new ArrayList<>();
+        private int startInstance;
+    }
+    private final String scene;
     private final boolean frontLighting;
     private final List<Draw> draws = new ArrayList<>();
     private final IdentityHashMap<GpuModel.Mesh, Boolean> sortedMeshes = new IdentityHashMap<>();
+    private final IdentityHashMap<GpuModel.Mesh, Boolean> instancedMeshes = new IdentityHashMap<>();
+    private final InstanceBuffer instanceBuffer = new InstanceBuffer();
+    private final InstancingStats stats = new InstancingStats();
     private final Matrix4f modelView = new Matrix4f(), projection = new Matrix4f();
     private final Vector3f normal = new Vector3f();
     private int[] triangleDraw = new int[0], triangleIndex = new int[0], order = new int[0];
     private int[] sortScratch = new int[0], gpuOffset = new int[0];
     private float[] depth = new float[0];
     private int triangles;
-    private boolean started, customShader;
+    private boolean started, customShader, collectStats;
     private ByteBufferBuilder fallbackBuffer;
 
-    public ModelRenderQueue() { this(false); }
+    public ModelRenderQueue() { this("world", false); }
+
+    public ModelRenderQueue(String scene) { this(scene, false); }
 
     /** Front lighting is reserved for GUI vehicle previews; world queues retain scene lighting. */
-    public ModelRenderQueue(boolean frontLighting) { this.frontLighting = frontLighting; }
+    public ModelRenderQueue(String scene, boolean frontLighting) {
+        this.scene = scene;
+        this.frontLighting = frontLighting;
+    }
 
     public void submit(LoadedModel model, PoseStack pose, int light) {
         for (var instance : model.instances()) submit(instance, instance.visibleParts(), pose, light);
@@ -88,27 +106,159 @@ public final class ModelRenderQueue implements AutoCloseable {
 
     public void drawOpaque() {
         RenderSystem.assertOnRenderThread();
+        boolean previousCollectStats = collectStats;
+        collectStats = ClientConfig.LOG_VEHICLE_INSTANCING_STATS.getAsBoolean();
+        if (collectStats) {
+            // The previous completed frame is logged before this frame resets its counters.
+            if (previousCollectStats) stats.logIfDue(scene);
+            stats.resetFrame();
+        }
         if (draws.isEmpty()) return;
-        try (var state = new ModelRenderState(frontLighting)) {
-            for (var draw : draws) {
-                var category = draw.batch().category();
-                if (category == RenderCategory.BLEND || (category == RenderCategory.MIXED && !customShader)) continue;
-                int alphaPass = draw.batch().alphaPass(false);
-                state.use(ModelRenderTypes.get(draw.batch().texture(), draw.batch().doubleSided(), false,
-                        alphaPass == StaticModelShader.FORCE_OPAQUE), false, draw.batch().doubleSided());
-                if (draw.gpu() != null) {
-                    var part = draw.gpu();
-                    state.prepareGpu(draw.pose(), draw.light(), alphaPass, modelView, projection);
-                    part.mesh().draw(false, part.firstIndex(), draw.batch().indexCount());
-                } else {
-                    state.endGpu();
-                    drawFallback(state, draw, alphaPass, 0, draw.batch().indexCount() / 3, false);
-                }
-            }
+        long opaqueStart = collectStats ? System.nanoTime() : 0L;
+        try (var state = new ModelRenderState(frontLighting, collectStats)) {
+            boolean instancing = instancingEnabled();
+            if (collectStats) stats.setInstancing(instancing);
+            if (instancing) drawOpaqueInstanced(state);
+            else drawOpaqueDirect(state);
+            if (collectStats) stats.addShaderCounts(state.shaderBinds(), state.shaderSwitches());
         } catch (RuntimeException | Error e) {
             clear();
             throw e;
+        } finally {
+            // Includes state capture, GL submission, instance-reference cleanup and caller-state restoration.
+            if (collectStats) stats.addOpaque(System.nanoTime() - opaqueStart);
         }
+    }
+
+    private void drawOpaqueDirect(ModelRenderState state) {
+        for (var draw : draws) {
+            if (!drawsOpaque(draw)) continue;
+            if (collectStats) {
+                stats.request();
+                if (instanceable(draw)) stats.instanceable();
+            }
+            drawOpaqueSingle(state, draw);
+        }
+    }
+
+    private void drawOpaqueSingle(ModelRenderState state, Draw draw) {
+        var batch = draw.batch();
+        int alphaPass = batch.alphaPass(false);
+        state.use(ModelRenderTypes.get(batch.texture(), batch.doubleSided(), false,
+                alphaPass == StaticModelShader.FORCE_OPAQUE), false, batch.doubleSided());
+        if (draw.gpu() != null) {
+            if (collectStats) stats.gpuDraw();
+            var part = draw.gpu();
+            state.prepareGpu(draw.pose(), draw.light(), alphaPass, modelView, projection);
+            part.mesh().draw(false, part.firstIndex(), batch.indexCount());
+        } else {
+            if (collectStats) stats.fallbackDraw();
+            state.endGpu();
+            drawFallback(state, draw, alphaPass, 0, batch.indexCount() / 3, false);
+        }
+    }
+
+    /**
+     * CUTOUT requests are grouped per run of consecutive drawable requests sharing the same GPU geometry and
+     * material state. A drawable request that cannot be instanced ends the run, so fallback and ordered draws
+     * keep their place; BLEND requests produce nothing here and therefore do not split batches.
+     */
+    private void drawOpaqueInstanced(ModelRenderState state) {
+        long groupingStart = collectStats ? System.nanoTime() : 0L;
+        var steps = new ArrayList<Object>();
+        var run = new LinkedHashMap<InstanceBatchKey, InstanceGroup>();
+        for (var draw : draws) {
+            if (!drawsOpaque(draw)) continue;
+            if (collectStats) stats.request();
+            if (instanceable(draw)) {
+                if (collectStats) stats.instanceable();
+                run.computeIfAbsent(instanceKey(draw), key -> new InstanceGroup()).draws.add(draw);
+            } else {
+                flushRun(run, steps);
+                steps.add(draw);
+            }
+        }
+        flushRun(run, steps);
+        int instances = 0;
+        for (var step : steps) {
+            if (step instanceof InstanceGroup group) {
+                group.startInstance = instances;
+                instances += group.draws.size();
+            }
+        }
+        if (collectStats) stats.addGrouping(System.nanoTime() - groupingStart);
+        if (steps.isEmpty()) return;
+        if (instances > 0) {
+            long packingStart = collectStats ? System.nanoTime() : 0L;
+            instanceBuffer.begin();
+            for (var step : steps) {
+                if (step instanceof InstanceGroup group) {
+                    for (var draw : group.draws) instanceBuffer.add(draw.pose(), draw.light());
+                }
+            }
+            long uploadStart = collectStats ? System.nanoTime() : 0L;
+            if (collectStats) stats.addPacking(uploadStart - packingStart);
+            instanceBuffer.upload();
+            if (collectStats) stats.addUpload(instanceBuffer.uploadedBytes(), System.nanoTime() - uploadStart);
+        }
+
+        int[] attributes = InstancedModelShader.state().attributes();
+        try {
+            for (var step : steps) {
+                if (step instanceof InstanceGroup group) drawInstanceGroup(state, group, attributes);
+                else drawOpaqueSingle(state, (Draw)step);
+            }
+        } finally {
+            try {
+                instancedMeshes.keySet().forEach(GpuModel.Mesh::releaseInstanceBuffer);
+            } finally {
+                instancedMeshes.clear();
+            }
+        }
+    }
+
+    private static void flushRun(LinkedHashMap<InstanceBatchKey, InstanceGroup> run, List<Object> steps) {
+        for (var group : run.values()) {
+            // A single request keeps the existing direct GPU draw instead of paying instancing overhead.
+            if (group.draws.size() >= 2) steps.add(group);
+            else steps.add(group.draws.getFirst());
+        }
+        run.clear();
+    }
+
+    private void drawInstanceGroup(ModelRenderState state, InstanceGroup group, int[] attributes) {
+        var first = group.draws.getFirst();
+        var batch = first.batch();
+        int alphaPass = batch.alphaPass(false);
+        state.use(ModelRenderTypes.get(batch.texture(), batch.doubleSided(), false,
+                alphaPass == StaticModelShader.FORCE_OPAQUE), false, batch.doubleSided());
+        state.prepareInstanced(alphaPass, modelView, projection);
+        var part = first.gpu();
+        instancedMeshes.put(part.mesh(), Boolean.TRUE);
+        part.mesh().drawInstanced(part.firstIndex(), batch.indexCount(), instanceBuffer.handle(),
+                instanceBuffer.offsetOf(group.startInstance), group.draws.size(), attributes);
+        if (collectStats) stats.instancedDraw(group.draws.size());
+    }
+
+    private static InstanceBatchKey instanceKey(Draw draw) {
+        var part = draw.gpu();
+        var batch = draw.batch();
+        return new InstanceBatchKey(part.mesh(), part.firstIndex(), batch.indexCount(), batch.texture(),
+                batch.doubleSided(), batch.alphaPass(false));
+    }
+
+    private boolean drawsOpaque(Draw draw) {
+        var category = draw.batch().category();
+        return category == RenderCategory.CUTOUT || (category == RenderCategory.MIXED && customShader);
+    }
+
+    private boolean instanceable(Draw draw) {
+        return customShader && draw.batch().category() == RenderCategory.CUTOUT && draw.gpu() != null
+                && InstancedModelShader.state() != null;
+    }
+
+    private boolean instancingEnabled() {
+        return ClientConfig.USE_VEHICLE_INSTANCING.getAsBoolean() && customShader && InstancedModelShader.usable();
     }
 
     public void drawTranslucent() {
@@ -137,6 +287,7 @@ public final class ModelRenderQueue implements AutoCloseable {
                         state.endGpu();
                         drawFallback(state, draw, alphaPass, start, end, true);
                     }
+                    if (collectStats) stats.translucentDraw();
                     start = end;
                 }
             }
@@ -178,6 +329,7 @@ public final class ModelRenderQueue implements AutoCloseable {
                     state.endGpu();
                     drawFallback(state, draw, alphaPass, 0, count / 3, false);
                 }
+                if (collectStats) stats.translucentDraw();
                 start = end;
             }
         }
@@ -310,6 +462,7 @@ public final class ModelRenderQueue implements AutoCloseable {
     @Override
     public void close() {
         clear();
+        instanceBuffer.close();
         if (fallbackBuffer != null) {
             fallbackBuffer.close();
             fallbackBuffer = null;

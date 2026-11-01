@@ -14,7 +14,7 @@ import net.minecraft.client.renderer.LightTexture;
 
 /** Vehicle scene queue, independent of the world and rail previews. */
 public final class TrainPreviewRenderer implements AutoCloseable {
-    private final ModelRenderQueue queue = new ModelRenderQueue(true);
+    private final ModelRenderQueue queue = new ModelRenderQueue("preview", true);
     private final PreviewRenderer renderer = new PreviewRenderer();
 
     public void render(GuiGraphics graphics, int x, int y, int width, int height,

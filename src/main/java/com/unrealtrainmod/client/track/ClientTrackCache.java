@@ -195,6 +195,8 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
         entries.clear();
         chunks.clear();
         world = null;
+        // The statistics window keys on the level object; release it with the cache.
+        TrackRenderStats.reset();
     }
 
     private static TrackAssemblyInstance state(TrackAssemblyInstance value, TrackAssemblyStatePayload state) {

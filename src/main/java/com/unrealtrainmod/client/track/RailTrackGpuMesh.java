@@ -45,23 +45,51 @@ final class RailTrackGpuMesh implements TrackRenderMesh {
     @Override public TrackVector origin() { return data.origin(); }
     @Override public boolean isEmpty() { return data.batches().isEmpty(); }
     @Override public boolean isUploaded() { return uploaded == buffers.length; }
+    @Override public int source() { return TrackRenderStats.RAIL_MODEL; }
+    @Override public int drawCalls() { return uploaded; }
 
     @Override
-    public int upload(ClientLevel level, int budget) {
-        if (lighting != null && nextUpload == buffers.length && lighting.refresh(level)) nextUpload = 0;
+    public int drawVertices() {
+        // Uploaded buffers expand the source indices, so the submitted count is the index count.
+        int vertices = 0;
+        for (int i = 0; i < uploaded; i++) vertices += data.batches().get(i).mesh().indices().length;
+        return vertices;
+    }
+
+    @Override
+    public int drawTriangles() {
+        int triangles = 0;
+        for (int i = 0; i < uploaded; i++) triangles += data.batches().get(i).mesh().indices().length / 3;
+        return triangles;
+    }
+
+    @Override
+    public int upload(ClientLevel level, int budget, TrackRenderStats stats) {
+        if (lighting != null && nextUpload == buffers.length) {
+            long start = stats == null ? 0L : System.nanoTime();
+            boolean changed = lighting.refresh(level);
+            if (stats != null) {
+                stats.lightRefresh(System.nanoTime() - start, lighting.checkedSamples(), lighting.changedSamples());
+            }
+            if (changed) nextUpload = 0;
+        }
         if (budget == 0 || nextUpload == buffers.length) return 0;
         int used = 0;
         try {
             while (used < budget && nextUpload < buffers.length) {
                 var mesh = data.batches().get(nextUpload).mesh();
                 var buffer = buffers[nextUpload];
-                if (buffer == null) {
+                boolean first = buffer == null;
+                if (first) {
                     buffer = new VertexBuffer(VertexBuffer.Usage.STATIC);
                     buffers[nextUpload] = buffer;
                 }
-                try (var bytes = new ByteBufferBuilder(Math.multiplyExact(mesh.indices().length, DefaultVertexFormat.NEW_ENTITY.getVertexSize()))) {
+                int vertexSize = DefaultVertexFormat.NEW_ENTITY.getVertexSize();
+                int capacity = Math.multiplyExact(mesh.indices().length, vertexSize);
+                try (var bytes = new ByteBufferBuilder(capacity)) {
                     var builder = new BufferBuilder(bytes, VertexFormat.Mode.TRIANGLES, DefaultVertexFormat.NEW_ENTITY);
                     float[] v = mesh.vertices();
+                    long packStart = stats == null ? 0L : System.nanoTime();
                     for (int index : mesh.indices()) {
                         int i = index * 8;
                         int light = lighting == null ? LightTexture.FULL_BRIGHT
@@ -70,8 +98,14 @@ final class RailTrackGpuMesh implements TrackRenderMesh {
                                 .setUv(v[i + 3], v[i + 4]).setOverlay(OverlayTexture.NO_OVERLAY).setLight(light)
                                 .setNormal(v[i + 5], v[i + 6], v[i + 7]);
                     }
+                    if (stats != null) stats.packed(System.nanoTime() - packStart);
+                    long uploadStart = stats == null ? 0L : System.nanoTime();
                     buffer.bind();
                     buffer.upload(builder.buildOrThrow());
+                    if (stats != null) {
+                        stats.gpuUpload(System.nanoTime() - uploadStart);
+                        stats.uploaded(capacity, capacity, first);
+                    }
                 }
                 nextUpload++;
                 uploaded = Math.max(uploaded, nextUpload);
@@ -85,11 +119,12 @@ final class RailTrackGpuMesh implements TrackRenderMesh {
     }
 
     @Override
-    public void draw(Matrix4f modelView, Matrix4f projection) {
+    public void draw(Matrix4f modelView, Matrix4f projection, TrackRenderStats stats) {
         for (int i = 0; i < uploaded; i++) {
             var batch = data.batches().get(i);
             var type = TrackRenderTypes.textured(batch.texture(), batch.doubleSided());
             type.setupRenderState();
+            if (stats != null) stats.renderTypeSetup();
             try {
                 buffers[i].bind();
                 var shader = RenderSystem.getShader();
@@ -101,6 +136,7 @@ final class RailTrackGpuMesh implements TrackRenderMesh {
                     if (previousLight0 != null) shader.LIGHT0_DIRECTION.set(LIGHT_0);
                     if (previousLight1 != null) shader.LIGHT1_DIRECTION.set(LIGHT_1);
                     shader.apply();
+                    if (stats != null) stats.legacyShaderBind();
                     buffers[i].draw();
                 } finally {
                     shader.clear();
@@ -108,6 +144,15 @@ final class RailTrackGpuMesh implements TrackRenderMesh {
                     if (previousLight1 != null) shader.LIGHT1_DIRECTION.set(previousLight1);
                 }
             } finally { type.clearRenderState(); }
+        }
+    }
+
+    @Override
+    public void draw(TrackRenderState state, Matrix4f modelView, Matrix4f projection) {
+        for (int i = 0; i < uploaded; i++) {
+            var batch = data.batches().get(i);
+            state.drawTextured(TrackRenderTypes.textured(batch.texture(), batch.doubleSided()), buffers[i],
+                    modelView, projection);
         }
     }
 

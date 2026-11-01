@@ -6,11 +6,13 @@ package com.unrealtrainmod.client;
 
 import com.mojang.blaze3d.platform.GlStateManager;
 import com.mojang.blaze3d.systems.RenderSystem;
+import com.mojang.blaze3d.vertex.BufferUploader;
 import com.mojang.blaze3d.vertex.ByteBufferBuilder;
 import com.mojang.blaze3d.vertex.MeshData;
 import com.mojang.blaze3d.vertex.VertexBuffer;
 import com.mojang.blaze3d.vertex.VertexFormat;
 import com.unrealtrainmod.client.renderer.RenderBatch;
+import com.unrealtrainmod.client.renderer.instancing.InstanceBuffer;
 import com.unrealtrainmod.model.IndexedMesh;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -21,6 +23,8 @@ import java.util.List;
 import java.util.Map;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL15;
+import org.lwjgl.opengl.GL31;
+import org.lwjgl.opengl.GL33;
 import org.lwjgl.system.MemoryUtil;
 
 /** Shared static vertices and canonical indices; only sorted triangle indices change during a scene. */
@@ -114,7 +118,8 @@ public final class GpuModel implements AutoCloseable {
             gpu.bind();
             // VertexBuffer.upload owns and closes both Result objects, even on upload failure.
             gpu.upload(new IndexedMeshData(vertices.build(), indices.build(), drawState));
-            // VertexBuffer owns this canonical IBO. Capture its VAO binding once, without accessing private engine fields.
+            // VertexBuffer owns both static buffers. Capture their upload bindings without accessing private fields.
+            gpu.staticVertexBuffer = GL11.glGetInteger(GL15.GL_ARRAY_BUFFER_BINDING);
             gpu.canonicalIndexBuffer = GL11.glGetInteger(GL15.GL_ELEMENT_ARRAY_BUFFER_BINDING);
             return gpu;
         } catch (RuntimeException | Error e) {
@@ -170,6 +175,32 @@ public final class GpuModel implements AutoCloseable {
             buffer.draw();
         }
 
+        /** The queue releases instance-buffer references once per mesh at the end of the opaque pass. */
+        public void drawInstanced(int firstIndex, int count, int instanceBuffer, long instanceOffset,
+                                  int instanceCount, int[] attributes) {
+            RenderSystem.assertOnRenderThread();
+            buffer.bindInstanced(attributes);
+            GlStateManager._glBindBuffer(GL15.GL_ARRAY_BUFFER, instanceBuffer);
+            for (int column = 0; column < 4; column++) {
+                GlStateManager._vertexAttribPointer(attributes[column], 4, GL11.GL_FLOAT, false,
+                        InstanceBuffer.STRIDE, instanceOffset + (long)column * 16);
+            }
+            for (int column = 0; column < 3; column++) {
+                GlStateManager._vertexAttribPointer(attributes[4 + column], 3, GL11.GL_FLOAT, false,
+                        InstanceBuffer.STRIDE, instanceOffset + InstanceBuffer.NORMAL_OFFSET + (long)column * 12);
+            }
+            GlStateManager._vertexAttribIPointer(attributes[7], 2, GL11.GL_UNSIGNED_SHORT,
+                    InstanceBuffer.STRIDE, instanceOffset + InstanceBuffer.LIGHT_OFFSET);
+            // GL 3.3 has no base-instance draw; the batch offset lives in the attribute pointers.
+            GL31.glDrawElementsInstanced(GL11.GL_TRIANGLES, count, GL11.GL_UNSIGNED_INT,
+                    (long)firstIndex * Integer.BYTES, instanceCount);
+        }
+
+        public void releaseInstanceBuffer() {
+            RenderSystem.assertOnRenderThread();
+            buffer.releaseInstanceBuffer();
+        }
+
         @Override
         public void close() {
             try {
@@ -184,14 +215,48 @@ public final class GpuModel implements AutoCloseable {
     /** Keeps Minecraft's buffer upload/ownership while providing indexed range draws. */
     private static final class RangeVertexBuffer extends VertexBuffer {
         private int firstIndex, count;
+        private int staticVertexBuffer;
         private int canonicalIndexBuffer;
         private int sortedIndexBuffer = -1;
+        private int instancedArray = -1;
+        private int[] instanceAttributes;
         private RangeVertexBuffer() { super(Usage.STATIC); }
 
         private void bindIndices(boolean sorted) {
             super.bind();
             // ELEMENT_ARRAY_BUFFER is VAO state; select the appropriate IBO on every draw, including shared instances/scenes.
             GlStateManager._glBindBuffer(GL15.GL_ELEMENT_ARRAY_BUFFER, sorted ? sortedIndexBuffer : canonicalIndexBuffer);
+        }
+
+        /** Separate VAO keeps enabled instance attributes and divisors out of normal and sorted draws. */
+        private void bindInstanced(int[] attributes) {
+            BufferUploader.invalidate();
+            if (instanceAttributes != attributes) {
+                if (instancedArray >= 0) RenderSystem.glDeleteVertexArrays(instancedArray);
+                instancedArray = GlStateManager._glGenVertexArrays();
+                instanceAttributes = attributes;
+                GlStateManager._glBindVertexArray(instancedArray);
+                GlStateManager._glBindBuffer(GL15.GL_ARRAY_BUFFER, staticVertexBuffer);
+                StaticModelShader.FORMAT.setupBufferState();
+                GlStateManager._glBindBuffer(GL15.GL_ELEMENT_ARRAY_BUFFER, canonicalIndexBuffer);
+                for (int attribute : attributes) {
+                    GlStateManager._enableVertexAttribArray(attribute);
+                    GL33.glVertexAttribDivisor(attribute, 1);
+                }
+            } else {
+                GlStateManager._glBindVertexArray(instancedArray);
+            }
+        }
+
+        private void releaseInstanceBuffer() {
+            if (instancedArray < 0) return;
+            BufferUploader.invalidate();
+            GlStateManager._glBindVertexArray(instancedArray);
+            GlStateManager._glBindBuffer(GL15.GL_ARRAY_BUFFER, staticVertexBuffer);
+            // Remove queue-owned VBO references, retaining the cached enables and divisors for the next pass.
+            for (int attribute : instanceAttributes) {
+                GlStateManager._vertexAttribPointer(attribute, 4, GL11.GL_FLOAT, false, 0, 0L);
+            }
         }
 
         private void uploadSortedIndices(ByteBuffer indices) {
@@ -208,11 +273,19 @@ public final class GpuModel implements AutoCloseable {
 
         @Override public void close() {
             try {
-                super.close();
+                if (instancedArray >= 0) {
+                    RenderSystem.glDeleteVertexArrays(instancedArray);
+                    instancedArray = -1;
+                    instanceAttributes = null;
+                }
             } finally {
-                if (sortedIndexBuffer >= 0) {
-                    RenderSystem.glDeleteBuffers(sortedIndexBuffer);
-                    sortedIndexBuffer = -1;
+                try {
+                    super.close();
+                } finally {
+                    if (sortedIndexBuffer >= 0) {
+                        RenderSystem.glDeleteBuffers(sortedIndexBuffer);
+                        sortedIndexBuffer = -1;
+                    }
                 }
             }
         }

@@ -6,9 +6,11 @@ package com.unrealtrainmod.compat.rtm.script;
 
 import com.unrealtrainmod.resource.PackageAsset;
 import java.io.IOException;
+import java.util.ArrayList;
 import javax.script.ScriptContext;
 import javax.script.ScriptEngine;
 import javax.script.ScriptException;
+import net.minecraft.core.BlockPos;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -58,17 +60,25 @@ public final class RailScriptRuntime implements AutoCloseable {
             throw new IOException("init failed at " + RtmScript.describe(prepared, exception)
                     + ": " + exception.getMessage(), exception);
         }
-        return new RailScriptRuntime(engine, prepared, tile,
-                RtmScript.hasFunction(engine, "shouldRenderObject"), label);
+        boolean hasShouldRenderObject = RtmScript.hasFunction(engine, "shouldRenderObject");
+        var notExecuted = new ArrayList<String>(2);
+        if (RtmScript.hasFunction(engine, "renderRailStatic")) notExecuted.add("renderRailStatic");
+        if (RtmScript.hasFunction(engine, "renderRailDynamic")) notExecuted.add("renderRailDynamic");
+        ScriptDiagnostics.scriptScope("rail", script, renderClass
+                + (hasShouldRenderObject
+                        ? "; shouldRenderObject selects the static parts" : "; no shouldRenderObject, every static part is kept")
+                + (notExecuted.isEmpty() ? "" : "; not executed in this stage: " + String.join(", ", notExecuted)));
+        return new RailScriptRuntime(engine, prepared, tile, hasShouldRenderObject, label);
     }
 
     /** A failed instance stays disabled; the caller must discard its current filtered build. */
     public boolean failed() { return failed; }
 
-    /** Called for every repeated module and every prepared part, matching the old static render loop. */
-    public boolean shouldRender(String partName, long index, long count) {
+    /** Each invocation restores its segment context on the tile also exposed as global tileEntity. */
+    public boolean shouldRender(String partName, long index, long count, BlockPos startPoint) {
         if (failed || !hasShouldRenderObject) return true;
         try {
+            tile.setStartPoint(startPoint);
             Object result = RtmScript.invoke(engine, "shouldRenderObject", tile, partName, (double)count, (double)index);
             if (result instanceof Boolean value) return value;
             // Missing/undefined results follow the legacy renderer: keep the object.

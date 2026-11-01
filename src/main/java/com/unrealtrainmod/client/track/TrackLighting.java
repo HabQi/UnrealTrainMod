@@ -20,6 +20,8 @@ final class TrackLighting {
     private final Long2IntOpenHashMap samples = new Long2IntOpenHashMap();
     private final BlockPos.MutableBlockPos position = new BlockPos.MutableBlockPos();
     private long nextCheck;
+    private int checkedSamples;
+    private int changedSamples;
 
     TrackLighting(TrackVector origin) {
         this.origin = origin;
@@ -39,19 +41,31 @@ final class TrackLighting {
         return light;
     }
 
+    /** Number of cached positions read by the last refresh; zero when the tick interval was not reached. */
+    int checkedSamples() { return checkedSamples; }
+
+    /** Cached positions whose packed light value changed in the last refresh. */
+    int changedSamples() { return changedSamples; }
+
     boolean refresh(ClientLevel level) {
         long time = level.getGameTime();
-        if (time < nextCheck) return false;
+        if (time < nextCheck) {
+            checkedSamples = 0;
+            changedSamples = 0;
+            return false;
+        }
         nextCheck = time + CHECK_INTERVAL;
-        boolean changed = false;
+        int changed = 0;
         for (var entry : samples.long2IntEntrySet()) {
             int light = read(level, entry.getLongKey());
             if (light != entry.getIntValue()) {
                 entry.setValue(light);
-                changed = true;
+                changed++;
             }
         }
-        return changed;
+        checkedSamples = samples.size();
+        changedSamples = changed;
+        return changed > 0;
     }
 
     private int read(ClientLevel level, long key) {

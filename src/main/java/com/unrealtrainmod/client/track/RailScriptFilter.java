@@ -6,6 +6,7 @@ package com.unrealtrainmod.client.track;
 
 import com.unrealtrainmod.compat.rtm.script.RailScriptRuntime;
 import com.unrealtrainmod.track.mesh.RailTrackMeshBuilder;
+import net.minecraft.core.BlockPos;
 
 /**
  * Stops a filtered build immediately after a script failure and schedules the variant's cached meshes for rebuild.
@@ -13,15 +14,17 @@ import com.unrealtrainmod.track.mesh.RailTrackMeshBuilder;
 final class RailScriptFilter implements RailTrackMeshBuilder.Filter {
     private final RailScriptRuntime script;
     private final ClientRailModelManager.Model model;
+    private final BlockPos startPoint;
 
-    RailScriptFilter(ClientRailModelManager.Model model) {
+    RailScriptFilter(ClientRailModelManager.Model model, BlockPos startPoint) {
         this.model = model;
+        this.startPoint = startPoint;
         script = model.script();
     }
 
     @Override
     public boolean shouldRender(String part, long index, long count) {
-        boolean visible = script.shouldRender(part, index, count);
+        boolean visible = script.shouldRender(part, index, count, startPoint);
         if (script.failed()) {
             ClientTrackCache.INSTANCE.invalidateScriptedModel(model);
             throw new Failure();

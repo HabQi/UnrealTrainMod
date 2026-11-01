@@ -7,7 +7,6 @@ package com.unrealtrainmod.client.track;
 import com.mojang.blaze3d.platform.NativeImage;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.PoseStack;
-import com.mojang.blaze3d.vertex.VertexBuffer;
 import com.unrealtrainmod.client.renderer.preview.PreviewCamera;
 import com.unrealtrainmod.client.renderer.preview.PreviewRenderer;
 import com.unrealtrainmod.track.geometry.TrackVector;
@@ -16,6 +15,7 @@ import com.unrealtrainmod.track.mesh.TrackMeshData;
 import java.util.ArrayList;
 import java.util.List;
 import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.core.BlockPos;
 
 /** Shows one authored rail module using the same textured buffers as world rails. */
 public final class RailPreviewRenderer implements AutoCloseable {
@@ -51,7 +51,7 @@ public final class RailPreviewRenderer implements AutoCloseable {
                 staticMesh = true;
             } else {
                 // The preview shows one authored module; apply the same part filter as world generation.
-                var filter = new RailScriptFilter(selected);
+                var filter = new RailScriptFilter(selected, BlockPos.ZERO);
                 try {
                     for (var part : selected.parts()) {
                         if (!filter.shouldRender(part.name(), 0, 1)) continue;
@@ -70,11 +70,9 @@ public final class RailPreviewRenderer implements AutoCloseable {
                     new TrackMeshData.Bounds(b.minX(), b.minY(), b.minZ(), b.maxX(), b.maxY(), b.maxZ()), List.copyOf(batches)), true);
             model = selected;
         }
-        try {
-            if (!mesh.isUploaded()) mesh.upload(null, Integer.MAX_VALUE);
-            mesh.draw(pose.last().pose(), RenderSystem.getProjectionMatrix());
-        } finally {
-            VertexBuffer.unbind();
+        try (var state = new TrackRenderState(null)) {
+            if (!mesh.isUploaded()) mesh.upload(null, Integer.MAX_VALUE, null);
+            mesh.draw(state, pose.last().pose(), RenderSystem.getProjectionMatrix());
         }
     }
 

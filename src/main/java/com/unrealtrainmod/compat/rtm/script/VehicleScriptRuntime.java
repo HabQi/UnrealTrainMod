@@ -78,6 +78,8 @@ public final class VehicleScriptRuntime implements AutoCloseable {
                     + ": " + exception.getMessage(), exception);
         }
         if (!RtmScript.hasFunction(engine, "render")) throw new IOException("Script has no render(entity, pass, partialTick)");
+        ScriptDiagnostics.scriptScope("vehicle", script, renderClass
+                + "; render(entity, pass=0, partialTick) replays part draws and GL11 matrix calls only");
         return new VehicleScriptRuntime(engine, renderer, source, role, prepared, label);
     }
 

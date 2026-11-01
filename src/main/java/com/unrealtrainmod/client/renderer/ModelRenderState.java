@@ -10,6 +10,7 @@ import com.mojang.blaze3d.vertex.BufferUploader;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexFormat;
 import com.unrealtrainmod.client.StaticModelShader;
+import com.unrealtrainmod.client.renderer.instancing.InstancedModelShader;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.RenderType;
 import net.minecraft.client.renderer.ShaderInstance;
@@ -27,6 +28,7 @@ final class ModelRenderState implements AutoCloseable {
     // Preview poses transform normals into view space; +Z points toward the window's viewer.
     private static final Vector3f FRONT_LIGHT = new Vector3f(0, 0, 1);
     private final boolean frontLighting;
+    private final boolean collectStats;
     private final GlStateBackup state = new GlStateBackup();
     private final ShaderInstance shader = RenderSystem.getShader();
     private final int program = GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM);
@@ -35,14 +37,23 @@ final class ModelRenderState implements AutoCloseable {
     private final int activeTexture = GL11.glGetInteger(GL13.GL_ACTIVE_TEXTURE);
     private final int[] shaderTextures = new int[3], boundTextures = new int[3];
     private final StaticModelShader.State custom = StaticModelShader.state();
+    private final InstancedModelShader.State instanced = InstancedModelShader.state();
     private RenderType active;
     private ShaderInstance boundShader;
     private PoseStack.Pose gpuPose;
     private int gpuLight, gpuPass;
+    private int instancedPass = -1;
+    private ShaderInstance lastGpuShader;
+    private int shaderBinds, shaderSwitches;
     private boolean texturesDirty;
 
     ModelRenderState(boolean frontLighting) {
+        this(frontLighting, false);
+    }
+
+    ModelRenderState(boolean frontLighting, boolean collectStats) {
         this.frontLighting = frontLighting;
+        this.collectStats = collectStats;
         RenderSystem.backupGlState(state);
         for (int i = 0; i < 3; i++) {
             shaderTextures[i] = RenderSystem.getShaderTexture(i);
@@ -69,13 +80,15 @@ final class ModelRenderState implements AutoCloseable {
 
     /** RenderTypes select engine shaders but do not bind a GL program; keep our shader across texture changes. */
     void prepareGpu(PoseStack.Pose pose, int light, int pass, Matrix4f modelView, Matrix4f projection) {
-        if (boundShader == null) {
+        if (boundShader != custom.shader()) {
+            // A previous instanced segment owns a different program; rebind this shader's common state.
+            endGpu();
             custom.prepare(pose, light, pass);
             custom.shader().setDefaultUniforms(VertexFormat.Mode.TRIANGLES, modelView, projection,
                     Minecraft.getInstance().getWindow());
             setupLights(custom.shader());
             boundShader = custom.shader();
-            boundShader.apply();
+            applyGpuShader();
         } else {
             if (texturesDirty) bindGpuTextures();
             // Uniform.upload does not skip unchanged values in this engine version.
@@ -100,6 +113,28 @@ final class ModelRenderState implements AutoCloseable {
         texturesDirty = false;
     }
 
+    /** Instance matrices and light come from the instance buffer; only the alpha pass changes per batch. */
+    void prepareInstanced(int pass, Matrix4f modelView, Matrix4f projection) {
+        if (boundShader != instanced.shader()) {
+            endGpu();
+            instanced.prepare(pass);
+            instanced.shader().setDefaultUniforms(VertexFormat.Mode.TRIANGLES, modelView, projection,
+                    Minecraft.getInstance().getWindow());
+            setupLights(instanced.shader());
+            boundShader = instanced.shader();
+            instancedPass = pass;
+            applyGpuShader();
+        } else {
+            if (texturesDirty) bindGpuTextures();
+            if (instancedPass != pass) {
+                instanced.alphaPass().set(pass);
+                instanced.alphaPass().upload();
+                instancedPass = pass;
+            }
+        }
+        texturesDirty = false;
+    }
+
     private void bindGpuTextures() {
         int previous = GlStateManager._getActiveTexture();
         for (int i = 0; i < 3; i++) {
@@ -110,6 +145,18 @@ final class ModelRenderState implements AutoCloseable {
         }
         RenderSystem.activeTexture(previous);
     }
+
+    private void applyGpuShader() {
+        if (collectStats) {
+            shaderBinds++;
+            if (lastGpuShader != null && lastGpuShader != boundShader) shaderSwitches++;
+            lastGpuShader = boundShader;
+        }
+        boundShader.apply();
+    }
+
+    int shaderBinds() { return shaderBinds; }
+    int shaderSwitches() { return shaderSwitches; }
 
     /** CPU fallback owns its shader binding; the next GPU segment must apply its shader again. */
     void endGpu() {

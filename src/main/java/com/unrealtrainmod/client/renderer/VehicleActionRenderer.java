@@ -22,15 +22,19 @@ import org.joml.Quaternionf;
 public final class VehicleActionRenderer {
     private VehicleActionRenderer() {}
 
+    /**
+     * @param scriptOwnsBody the body renderer took over this model instance and already drew the door objects,
+     *                       so the configured actions must not submit them a second time
+     */
     public static void submit(ModelRenderQueue queue, LoadedModel.Instance instance, TrainEntity entity,
-                              float partialTick, PoseStack pose, int light) {
+                              float partialTick, PoseStack pose, int light, boolean scriptOwnsBody) {
         var definition = instance.definition();
         if (definition.role() != VehiclePartRole.BODY) return;
         var actions = definition.actions();
         if (actions.isEmpty()) return;
         var source = instance.model();
         String model = definition.source().model().toString();
-        if (definition.source().rendererPath() != null) {
+        if (scriptOwnsBody) {
             // The script draws the whole body, including any parts that also appear in door actions.
             ScriptDiagnostics.actionIgnoredForScript(model);
             return;

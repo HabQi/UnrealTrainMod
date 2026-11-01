@@ -13,7 +13,14 @@ import net.minecraft.resources.ResourceLocation;
 
 /** Discrete operations on the latest server control state; heartbeats never write controls. */
 public record TrainControlInputPayload(UUID session, long sequence, Action action) implements CustomPacketPayload {
-    public enum Action { HEARTBEAT, HANDLE_UP, HANDLE_DOWN, REVERSER_NEXT, EMERGENCY_APPLY, EMERGENCY_RELEASE }
+    /**
+     * Door actions carry an explicit target, so a repeated request keeps the same state instead of flipping
+     * the door back on the server.
+     */
+    public enum Action {
+        HEARTBEAT, HANDLE_UP, HANDLE_DOWN, REVERSER_NEXT, EMERGENCY_APPLY, EMERGENCY_RELEASE,
+        DOOR_LEFT_OPEN, DOOR_LEFT_CLOSE, DOOR_RIGHT_OPEN, DOOR_RIGHT_CLOSE
+    }
     public static final Type<TrainControlInputPayload> TYPE = new Type<>(
             ResourceLocation.fromNamespaceAndPath(UnrealTrainMod.MODID, "train_control_input"));
     public static final StreamCodec<RegistryFriendlyByteBuf, TrainControlInputPayload> STREAM_CODEC = StreamCodec.of(

@@ -7,8 +7,12 @@ package com.unrealtrainmod.command;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.builder.RequiredArgumentBuilder;
 import com.mojang.brigadier.context.CommandContext;
+import com.mojang.brigadier.context.StringRange;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import com.mojang.brigadier.exceptions.SimpleCommandExceptionType;
+import com.mojang.brigadier.suggestion.Suggestion;
+import com.mojang.brigadier.suggestion.Suggestions;
+import com.mojang.brigadier.suggestion.SuggestionsBuilder;
 import com.unrealtrainmod.entity.TrainEntity;
 import com.unrealtrainmod.track.block.TrackBlockManager;
 import com.unrealtrainmod.train.TrainAnchor;
@@ -16,8 +20,13 @@ import com.unrealtrainmod.train.TrainCarEnd;
 import com.unrealtrainmod.train.TrainConsist;
 import com.unrealtrainmod.train.TrainManager;
 import com.unrealtrainmod.train.TrainDiagnostics;
+import com.unrealtrainmod.vehicle.VehicleCatalog;
 import com.unrealtrainmod.vehicle.VehicleDoor;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.CompletableFuture;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.SharedSuggestionProvider;
 import net.minecraft.commands.arguments.EntityArgument;
@@ -106,7 +115,51 @@ public final class TrainCommands {
     }
 
     private static RequiredArgumentBuilder<CommandSourceStack, EntitySelector> vehicleArgument(String name) {
-        return argument(name, EntityArgument.entity());
+        return argument(name, EntityArgument.entity()).suggests(TrainCommands::suggestVehicles);
+    }
+
+    /**
+     * Candidates come from the loaded vehicles of the source dimension, so completion no longer depends on the
+     * crosshair hit. Selector input keeps the vanilla parser-driven suggestions.
+     */
+    private static CompletableFuture<Suggestions> suggestVehicles(CommandContext<CommandSourceStack> context,
+                                                                  SuggestionsBuilder builder) {
+        if (builder.getRemaining().startsWith("@")) return EntityArgument.entity().listSuggestions(context, builder);
+        var source = context.getSource();
+        var origin = source.getPosition();
+        var vehicles = new ArrayList<TrainEntity>();
+        for (var entity : source.getLevel().getAllEntities()) {
+            if (entity instanceof TrainEntity vehicle) vehicles.add(vehicle);
+        }
+        vehicles.sort(Comparator.comparingDouble(vehicle -> vehicle.position().distanceToSqr(origin)));
+        var range = StringRange.between(builder.getStart(), builder.getInput().length());
+        String remaining = builder.getRemaining().toLowerCase(Locale.ROOT);
+        var candidates = new ArrayList<Suggestion>();
+        for (var vehicle : vehicles) {
+            String uuid = vehicle.getUUID().toString();
+            if (!uuid.equals(builder.getRemaining()) && SharedSuggestionProvider.matchesSubStr(remaining, uuid)) {
+                candidates.add(new Suggestion(range, uuid, vehicleName(vehicle)));
+            }
+        }
+        // SuggestionsBuilder.build() sorts text, which would discard the distance order.
+        var uuids = new Suggestions(range, List.copyOf(candidates));
+        if (!builder.getRemaining().isEmpty()) return CompletableFuture.completedFuture(uuids);
+        // An empty argument keeps the vanilla name and selector hints; the candidates follow them.
+        var selectors = EntityArgument.entity().listSuggestions(context, builder.createOffset(builder.getStart()));
+        return selectors.thenApply(hints -> concat(hints, uuids));
+    }
+
+    private static Component vehicleName(TrainEntity vehicle) {
+        var definition = VehicleCatalog.find(vehicle.getModelId());
+        return Component.literal(definition == null ? String.valueOf(vehicle.getModelId()) : definition.name());
+    }
+
+    private static Suggestions concat(Suggestions first, Suggestions second) {
+        if (first.isEmpty()) return second;
+        if (second.isEmpty()) return first;
+        var list = new ArrayList<>(first.getList());
+        list.addAll(second.getList());
+        return new Suggestions(first.getRange(), list);
     }
 
     private static TrainEntity vehicle(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {

@@ -161,8 +161,9 @@ public final class ClientRailModelManager extends SimplePreparableReloadListener
                                     definition.railName() + " (" + source.rendererPath().entry() + ")");
                         } catch (IOException | RuntimeException | ScriptException
                                  | NoSuchMethodException | LinkageError exception) {
-                            LOGGER.error("Cannot load rail script {} for {}; rendering all static parts: {}",
-                                    source.rendererPath().entry(), definition.railName(), exception.getMessage());
+                            LOGGER.error("Cannot load rail script {}!{} for {}; rendering all static parts: {}",
+                                    source.rendererPath().archive(), source.rendererPath().entry(),
+                                    definition.railName(), exception.getMessage());
                             LOGGER.debug("Rail script initialisation failure", exception);
                         }
                     }

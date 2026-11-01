@@ -35,34 +35,55 @@ final class TrackGpuMesh implements TrackRenderMesh {
     @Override public boolean isEmpty() { return data.vertexCount() == 0; }
     @Override public AABB bounds() { return bounds; }
     @Override public TrackVector origin() { return data.origin(); }
+    @Override public int source() { return TrackRenderStats.NATIVE; }
+    @Override public int drawCalls() { return 1; }
+    @Override public int drawVertices() { return data.vertexCount(); }
+    @Override public int drawTriangles() { return data.vertexCount() / 2; }
 
     @Override
-    public int upload(ClientLevel level, int budget) {
-        if (!lightDirty && lighting.refresh(level)) lightDirty = true;
+    public int upload(ClientLevel level, int budget, TrackRenderStats stats) {
+        if (!lightDirty) {
+            long start = stats == null ? 0L : System.nanoTime();
+            boolean changed = lighting.refresh(level);
+            if (stats != null) {
+                stats.lightRefresh(System.nanoTime() - start, lighting.checkedSamples(), lighting.changedSamples());
+            }
+            if (changed) lightDirty = true;
+        }
         if (!lightDirty || budget == 0) return 0;
-        upload(level);
+        upload(level, stats);
         lightDirty = false;
         return 1;
     }
 
-    private void upload(ClientLevel level) {
-        if (buffer == null) buffer = new VertexBuffer(VertexBuffer.Usage.STATIC);
-        try (var bytes = new ByteBufferBuilder(Math.multiplyExact(data.vertexCount(), DefaultVertexFormat.POSITION_COLOR_LIGHTMAP.getVertexSize()))) {
+    private void upload(ClientLevel level, TrackRenderStats stats) {
+        int vertexSize = DefaultVertexFormat.POSITION_COLOR_LIGHTMAP.getVertexSize();
+        int capacity = Math.multiplyExact(data.vertexCount(), vertexSize);
+        boolean first = buffer == null;
+        if (first) buffer = new VertexBuffer(VertexBuffer.Usage.STATIC);
+        try (var bytes = new ByteBufferBuilder(capacity)) {
             var builder = new BufferBuilder(bytes, VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_COLOR_LIGHTMAP);
-            for (int first = 0; first < data.vertexCount(); first += 4) {
-                double ax = data.x(first + 1) - data.x(first), ay = data.y(first + 1) - data.y(first), az = data.z(first + 1) - data.z(first);
-                double bx = data.x(first + 2) - data.x(first), by = data.y(first + 2) - data.y(first), bz = data.z(first + 2) - data.z(first);
+            long packStart = stats == null ? 0L : System.nanoTime();
+            for (int firstVertex = 0; firstVertex < data.vertexCount(); firstVertex += 4) {
+                double ax = data.x(firstVertex + 1) - data.x(firstVertex), ay = data.y(firstVertex + 1) - data.y(firstVertex), az = data.z(firstVertex + 1) - data.z(firstVertex);
+                double bx = data.x(firstVertex + 2) - data.x(firstVertex), by = data.y(firstVertex + 2) - data.y(firstVertex), bz = data.z(firstVertex + 2) - data.z(firstVertex);
                 double nx = ay * bz - az * by, ny = az * bx - ax * bz, nz = ax * by - ay * bx;
                 double length = Math.sqrt(nx * nx + ny * ny + nz * nz);
                 if (length > 0) { nx /= length; ny /= length; nz /= length; }
-                for (int i = first; i < first + 4; i++) {
+                for (int i = firstVertex; i < firstVertex + 4; i++) {
                     int light = lighting.sample(level, data.x(i), data.y(i), data.z(i), nx, ny, nz);
                     builder.addVertex(data.x(i), data.y(i), data.z(i)).setColor(data.color(i)).setLight(light);
                 }
             }
+            if (stats != null) stats.packed(System.nanoTime() - packStart);
+            long uploadStart = stats == null ? 0L : System.nanoTime();
             buffer.bind();
             // VertexBuffer.upload owns and closes the temporary Minecraft MeshData.
             buffer.upload(builder.buildOrThrow());
+            if (stats != null) {
+                stats.gpuUpload(System.nanoTime() - uploadStart);
+                stats.uploaded(capacity, capacity, first);
+            }
         } catch (RuntimeException | Error exception) {
             close();
             throw exception;
@@ -72,12 +93,19 @@ final class TrackGpuMesh implements TrackRenderMesh {
     }
 
     @Override
-    public void draw(Matrix4f modelView, Matrix4f projection) {
+    public void draw(Matrix4f modelView, Matrix4f projection, TrackRenderStats stats) {
         TrackRenderTypes.OPAQUE.setupRenderState();
+        if (stats != null) stats.renderTypeSetup();
         try {
             buffer.bind();
             buffer.drawWithShader(modelView, projection, RenderSystem.getShader());
+            if (stats != null) stats.legacyShaderBind();
         } finally { TrackRenderTypes.OPAQUE.clearRenderState(); }
+    }
+
+    @Override
+    public void draw(TrackRenderState state, Matrix4f modelView, Matrix4f projection) {
+        state.drawNative(buffer, modelView, projection);
     }
 
     @Override

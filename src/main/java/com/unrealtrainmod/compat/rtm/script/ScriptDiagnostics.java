@@ -4,6 +4,7 @@
  */
 package com.unrealtrainmod.compat.rtm.script;
 
+import com.unrealtrainmod.resource.PackageAsset;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import org.slf4j.Logger;
@@ -38,6 +39,25 @@ public final class ScriptDiagnostics {
         if (REPORTED.add(key)) LOGGER.info(
                 "Vehicle model {} declares door actions and a body renderer; the script owns the body and configured actions are ignored",
                 model);
+    }
+
+    /**
+     * One-time note of the legacy entry points a script declares and what this stage actually runs, so a script
+     * that loaded without error is not mistaken for a fully replayed one.
+     */
+    public static void scriptScope(String kind, PackageAsset script, String summary) {
+        String key = "scope|" + kind + "|" + script;
+        if (REPORTED.add(key)) {
+            LOGGER.info("RTM {} script {}!{}: {}", kind, script.archive(), script.entry(), summary);
+        }
+    }
+
+    /** Reports the limited built-in replacement once per owning script and resource reload. */
+    public static void builtinLibrary(PackageAsset script, String library) {
+        String key = "builtin-library|" + script + "|" + library;
+        if (REPORTED.add(key)) LOGGER.info(
+                "RTM script {}!{} uses {}: static-stage compatibility only; dynamic rail drawing is unsupported",
+                script.archive(), script.entry(), library);
     }
 
     public static void clear() { REPORTED.clear(); }
