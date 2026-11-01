@@ -98,6 +98,8 @@ public final class TrainDrivingClient {
         if (newSession) sequence = incoming.sequence();
         snapshot = incoming;
         silence = 0;
+        // A driver control session means this player is not a walking passenger; drop any stale local point.
+        TrainWalkingClient.clearLocal();
         if (incoming.feedback() != TrainControlSyncPayload.Feedback.NONE && mc.player != null) {
             mc.player.displayClientMessage(Component.translatable(PREFIX
                     + incoming.feedback().name().toLowerCase(Locale.ROOT)), true);

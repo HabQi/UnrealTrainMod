@@ -7,6 +7,7 @@ package com.unrealtrainmod;
 
 import com.unrealtrainmod.client.ClientConfig;
 import com.unrealtrainmod.client.TrainDrivingClient;
+import com.unrealtrainmod.client.TrainWalkingClient;
 import com.unrealtrainmod.client.TrainPoseClient;
 import com.unrealtrainmod.client.ClientButtonTextureManager;
 import com.unrealtrainmod.client.ClientModelManager;
@@ -92,6 +93,12 @@ public class UnrealTrainModClient {
         NeoForge.EVENT_BUS.addListener(TrainDrivingClient::unload);
         NeoForge.EVENT_BUS.addListener(TrainDrivingClient::logout);
         NeoForge.EVENT_BUS.addListener(TrainDrivingClient::clonePlayer);
+        NeoForge.EVENT_BUS.addListener(TrainWalkingClient::onState);
+        NeoForge.EVENT_BUS.addListener(TrainWalkingClient::movement);
+        NeoForge.EVENT_BUS.addListener(TrainWalkingClient::tick);
+        NeoForge.EVENT_BUS.addListener(TrainWalkingClient::unload);
+        NeoForge.EVENT_BUS.addListener(TrainWalkingClient::logout);
+        NeoForge.EVENT_BUS.addListener(TrainWalkingClient::clonePlayer);
         NeoForge.EVENT_BUS.addListener(TrainPoseClient::tick);
         NeoForge.EVENT_BUS.addListener(TrainPoseClient::onFramePre);
         NeoForge.EVENT_BUS.addListener(TrainPoseClient::unload);
@@ -131,6 +138,7 @@ public class UnrealTrainModClient {
 
     private static void onGameShuttingDown(GameShuttingDownEvent event) {
         TrainDrivingClient.clear();
+        TrainWalkingClient.clear();
         TrainPoseClient.clear();
         VehicleScriptManager.clear();
         ClientThumbnailManager.INSTANCE.close();

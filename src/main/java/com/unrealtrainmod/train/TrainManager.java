@@ -35,11 +35,13 @@ import java.util.function.Consumer;
 import java.util.function.Predicate;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.phys.AABB;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.neoforge.event.entity.EntityJoinLevelEvent;
 import net.neoforged.neoforge.event.entity.EntityLeaveLevelEvent;
+import net.neoforged.neoforge.event.entity.player.PlayerEvent;
 import net.neoforged.neoforge.event.level.LevelEvent;
 import net.neoforged.neoforge.event.server.ServerStoppedEvent;
 import net.neoforged.neoforge.event.tick.LevelTickEvent;
@@ -53,6 +55,7 @@ public final class TrainManager {
     private static final Map<ServerLevel, TrainManager> LEVELS = new IdentityHashMap<>();
     private final ServerLevel level;
     private final TrainDriverManager drivers;
+    private final TrainPassengerManager passengers;
     private final Map<UUID, TrainConsist> trains = new HashMap<>();
     private final Map<UUID, UUID> entityTrains = new HashMap<>();
     private final Set<UUID> attached = new HashSet<>();
@@ -86,9 +89,11 @@ public final class TrainManager {
     private TrainManager(ServerLevel level) {
         this.level = level;
         this.drivers = new TrainDriverManager(level, this);
+        this.passengers = new TrainPassengerManager(level, this);
     }
 
     public TrainDriverManager drivers() { return drivers; }
+    public TrainPassengerManager passengers() { return passengers; }
 
     public static TrainManager get(ServerLevel level) {
         return LEVELS.computeIfAbsent(level, TrainManager::new);
@@ -100,6 +105,9 @@ public final class TrainManager {
         bus.addListener(TrainManager::levelTicked);
         bus.addListener(TrainManager::levelUnloaded);
         bus.addListener(TrainManager::serverStopped);
+        bus.addListener(TrainManager::playerStartTracking);
+        bus.addListener(TrainManager::playerClone);
+        bus.addListener(TrainManager::playerLoggedOut);
     }
 
     private static void entityJoined(EntityJoinLevelEvent event) {
@@ -144,7 +152,25 @@ public final class TrainManager {
         LEVELS.clear();
     }
 
+    private static void playerStartTracking(PlayerEvent.StartTracking event) {
+        if (event.getEntity() instanceof ServerPlayer tracker) {
+            var manager = LEVELS.get(tracker.serverLevel());
+            if (manager != null) manager.passengers.startTracking(tracker, event.getTarget());
+        }
+    }
+
+    private static void playerClone(PlayerEvent.Clone event) {
+        UUID original = event.getOriginal().getUUID();
+        for (var manager : LEVELS.values()) manager.passengers.playerReplaced(original);
+    }
+
+    private static void playerLoggedOut(PlayerEvent.PlayerLoggedOutEvent event) {
+        UUID player = event.getEntity().getUUID();
+        for (var manager : LEVELS.values()) manager.passengers.playerReplaced(player);
+    }
+
     private void close() {
+        passengers.closeAll();
         drivers.closeAll();
         if (graph != null) {
             graph.removeSegmentListener(listener);
@@ -516,6 +542,7 @@ public final class TrainManager {
 
     private void detach(TrainEntity entity) {
         UUID entityId = entity.getUUID();
+        passengers.vehicleRemoved(entity);
         loadedVehicles.remove(entityId);
         pending.remove(entityId);
         attached.remove(entityId);
@@ -957,7 +984,9 @@ public final class TrainManager {
     public StopReason dismantleFailure(TrainEntity entity) {
         data();
         var train = trains.get(entityTrains.get(entity.getUUID()));
-        return train != null && drivers.hasDriver(train) ? StopReason.DRIVER_PRESENT : null;
+        if (train == null) return null;
+        if (drivers.hasDriver(train)) return StopReason.DRIVER_PRESENT;
+        return passengers.hasPassenger(train) ? StopReason.PASSENGER_PRESENT : null;
     }
 
     /** A manual push validates its complete sweep before committing any position or reservation. */
@@ -1304,7 +1333,9 @@ public final class TrainManager {
         for (var train : List.copyOf(trains.values())) {
             if (trains.get(train.id()) == train && train.simulationActive()) advance(train, couplingVehicles);
         }
+        passengers.tick();
         drivers.publish();
+        passengers.publish();
     }
 
     private void advance(TrainConsist train, List<TrainEntity> couplingVehicles) {

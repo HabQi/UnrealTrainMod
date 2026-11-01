@@ -53,7 +53,8 @@ public abstract class TrainCameraMixin {
         // Preserve vanilla eye-height smoothing, but place the eyes along the car's own up axis.
         var eyeOffset = getPosition().subtract(entity.getPosition(partialTick));
         var eyes = bodyRotation.transform(new Vector3f((float) eyeOffset.x, (float) eyeOffset.y, (float) eyeOffset.z));
-        setPosition(train.passengerRidingPosition(body).add(eyes.x, eyes.y, eyes.z));
+        setPosition(train.renderPassengerPosition(Minecraft.getInstance().player, body, partialTick)
+                .add(eyes.x, eyes.y, eyes.z));
 
         // Mouse angles remain cabin-relative; compose rotations so looking sideways on a slope
         // also follows the body correctly rather than merely adding world-space pitch angles.

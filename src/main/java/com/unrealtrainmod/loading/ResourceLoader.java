@@ -13,6 +13,7 @@ import com.unrealtrainmod.track.model.RailCatalog;
 import com.unrealtrainmod.track.model.RailDefinition;
 import com.unrealtrainmod.vehicle.VehicleCatalog;
 import com.unrealtrainmod.vehicle.VehicleDefinition;
+import com.unrealtrainmod.vehicle.VehicleInteriorOverrides;
 import com.unrealtrainmod.vehicle.VehicleMotionOverrides;
 import com.unrealtrainmod.vehicle.VehiclePerformanceOverrides;
 import java.io.IOException;
@@ -53,6 +54,7 @@ public final class ResourceLoader {
         }
         VehicleMotionOverrides.apply(configDirectory.resolve("unrealtrainmod/vehicle-motion.json"), vehicles);
         VehiclePerformanceOverrides.apply(configDirectory.resolve("unrealtrainmod/vehicle-performance.json"), vehicles);
+        VehicleInteriorOverrides.apply(configDirectory.resolve("unrealtrainmod/vehicle-interior.json"), vehicles);
         VehicleCatalog.register(List.copyOf(vehicles.values()));
         var railDefinitions = List.copyOf(rails.values());
         RailCatalog.register(railDefinitions);

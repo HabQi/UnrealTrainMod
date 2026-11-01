@@ -149,6 +149,16 @@ public record VehiclePose(Body body, Bogie frontBogie, Bogie rearBogie) {
         return new TrackVector(a.x() + b.x(), a.y() + b.y(), a.z() + b.z());
     }
 
+    /** Converts a vehicle-local point to world coordinates using the same body frame as rendering. */
+    public static TrackVector localToWorld(Body body, TrackVector local) {
+        return add(body.position, rotate(body.rotation(), local));
+    }
+
+    /** Converts a world point back into the vehicle body frame. */
+    public static TrackVector worldToLocal(Body body, TrackVector world) {
+        return rotate(body.rotation().conjugate(), subtract(world, body.position));
+    }
+
     static TrackVector subtract(TrackVector a, TrackVector b) {
         return new TrackVector(a.x() - b.x(), a.y() - b.y(), a.z() - b.z());
     }

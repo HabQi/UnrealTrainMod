@@ -21,6 +21,7 @@ import com.unrealtrainmod.resource.ResourceIds;
 import com.unrealtrainmod.vehicle.VehicleAction;
 import com.unrealtrainmod.vehicle.VehicleActions;
 import com.unrealtrainmod.vehicle.VehicleDefinition;
+import com.unrealtrainmod.vehicle.VehicleInteriorSpec;
 import com.unrealtrainmod.vehicle.VehicleMotionSpec;
 import com.unrealtrainmod.vehicle.VehiclePerformanceSpec;
 import com.unrealtrainmod.vehicle.VehiclePartRole;
@@ -91,7 +92,8 @@ final class RtmVehicleAdapter {
             var bounds = combined.build();
             var definition = new VehicleDefinition(id, name, config, RtmButtonTexture.read(json, archive, prefix, config),
                     GsonHelper.getAsString(json, "trainType", ""), parts, bounds,
-                    readMotionSpec(json, bounds, bogiePositions), VehiclePerformanceSpec.DEFAULT);
+                    readMotionSpec(json, bounds, bogiePositions), VehiclePerformanceSpec.DEFAULT,
+                    readInteriorSpec(json, bounds, name));
             definitions.put(id, definition);
             report.registered(LoadReport.Kind.RTM_VEHICLE);
         } catch (IOException | RuntimeException exception) {
@@ -215,7 +217,7 @@ final class RtmVehicleAdapter {
 
     private static double readFinite(JsonElement element, String trainName, String path)
             throws IOException {
-        if (!element.isJsonPrimitive() || !element.getAsJsonPrimitive().isNumber()) {
+        if (element == null || !element.isJsonPrimitive() || !element.getAsJsonPrimitive().isNumber()) {
             throw configError(trainName, path, "must be a number");
         }
         double value = element.getAsDouble();
@@ -245,6 +247,36 @@ final class RtmVehicleAdapter {
             result.add(new ModelData.Position(x, y, z));
         }
         return result;
+    }
+
+    /**
+     * Explicit {@code walkable} data wins. Without it the provisional calibration uses the authored
+     * bounds inset by {@link VehicleInteriorSpec#BOUNDS_INSET} and the RTM floor at local Y 0.
+     */
+    private static VehicleInteriorSpec readInteriorSpec(JsonObject json, ModelBounds bounds, String trainName)
+            throws IOException {
+        if (!json.has("walkable") || json.get("walkable").isJsonNull()) {
+            return VehicleInteriorSpec.fromBounds(bounds, 0);
+        }
+        var walkable = json.get("walkable");
+        if (!walkable.isJsonObject()) throw configError(trainName, "walkable", "must be an object");
+        var object = walkable.getAsJsonObject();
+        if (!GsonHelper.getAsBoolean(object, "enabled", true)) return VehicleInteriorSpec.DISABLED;
+        var centerElement = object.get("center");
+        if (centerElement == null || !centerElement.isJsonArray() || centerElement.getAsJsonArray().size() != 3) {
+            throw configError(trainName, "walkable.center", "must contain three finite XYZ values");
+        }
+        var center = centerElement.getAsJsonArray();
+        double x = readFinite(center.get(0), trainName, "walkable.center[0]");
+        double y = readFinite(center.get(1), trainName, "walkable.center[1]");
+        double z = readFinite(center.get(2), trainName, "walkable.center[2]");
+        double length = readFinite(object.get("length"), trainName, "walkable.length");
+        double width = readFinite(object.get("width"), trainName, "walkable.width");
+        try {
+            return new VehicleInteriorSpec(true, x, y, z, length, width);
+        } catch (IllegalArgumentException exception) {
+            throw new IOException(trainName + " walkable: " + exception.getMessage(), exception);
+        }
     }
 
     private static VehicleMotionSpec readMotionSpec(JsonObject json, ModelBounds bounds,

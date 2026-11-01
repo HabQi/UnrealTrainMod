@@ -17,6 +17,7 @@ import com.unrealtrainmod.resource.PackageAsset;
 import com.unrealtrainmod.resource.ResourceIds;
 import com.unrealtrainmod.vehicle.VehicleActions;
 import com.unrealtrainmod.vehicle.VehicleDefinition;
+import com.unrealtrainmod.vehicle.VehicleInteriorSpec;
 import com.unrealtrainmod.vehicle.VehicleMotionSpec;
 import com.unrealtrainmod.vehicle.VehiclePerformanceSpec;
 import com.unrealtrainmod.vehicle.VehiclePartRole;
@@ -109,7 +110,7 @@ final class IrVehicleAdapter {
                     new TrackVector(0, 0, z), builder.build(), VehicleActions.NONE));
         });
         return new VehicleDefinition(id, name, config, null, type, parts, bounds, spec,
-                VehiclePerformanceSpec.DEFAULT);
+                VehiclePerformanceSpec.DEFAULT, VehicleInteriorSpec.DISABLED);
     }
 
     private static VehicleMotionSpec readMotionSpec(JsonObject json, ModelBounds bounds, double scale) {

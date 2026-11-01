@@ -18,6 +18,7 @@ import com.unrealtrainmod.item.ModelPlacerItem;
 import com.unrealtrainmod.item.HacksawItem;
 import com.unrealtrainmod.item.CrowbarItem;
 import com.unrealtrainmod.item.KeyItem;
+import com.unrealtrainmod.item.TicketItem;
 import com.unrealtrainmod.item.VehicleMoverItem;
 import com.unrealtrainmod.item.VehicleItem;
 import com.unrealtrainmod.item.TrackBuilderItem;
@@ -101,6 +102,8 @@ public class UnrealTrainMod {
             "vehicle_mover", VehicleMoverItem::new, new Item.Properties().stacksTo(1));
     public static final DeferredItem<KeyItem> KEY = ITEMS.registerItem(
             "key", KeyItem::new, new Item.Properties().stacksTo(1));
+    public static final DeferredItem<TicketItem> TICKET = ITEMS.registerItem(
+            "ticket", TicketItem::new, new Item.Properties().stacksTo(1));
 
     public static final DeferredHolder<CreativeModeTab, CreativeModeTab> MOD_TAB = CREATIVE_MODE_TABS.register("example_tab", () -> CreativeModeTab.builder()
             .title(Component.translatable("itemGroup.unrealtrainmod"))
@@ -120,6 +123,7 @@ public class UnrealTrainMod {
                 output.accept(CROWBAR.get());
                 output.accept(VEHICLE_MOVER.get());
                 output.accept(KEY.get());
+                output.accept(TICKET.get());
                 output.accept(VEHICLE.get());
             }).build());
 

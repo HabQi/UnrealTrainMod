@@ -25,8 +25,11 @@ import com.unrealtrainmod.network.payload.TrainMapSessionPayload;
 import com.unrealtrainmod.network.payload.TrainMapUpdatePayload;
 import com.unrealtrainmod.train.map.TrainMapService;
 import com.unrealtrainmod.train.TrainDriverManager;
+import com.unrealtrainmod.train.TrainPassengerManager;
 import com.unrealtrainmod.network.payload.TrainControlInputPayload;
 import com.unrealtrainmod.network.payload.TrainControlSyncPayload;
+import com.unrealtrainmod.network.payload.TrainWalkInputPayload;
+import com.unrealtrainmod.network.payload.TrainPassengerStatePayload;
 import net.minecraft.network.protocol.PacketFlow;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
@@ -35,10 +38,14 @@ public final class ModPayloads {
     private ModPayloads() {}
 
     public static void register(RegisterPayloadHandlersEvent event) {
-        var registrar = event.registrar("22");
+        var registrar = event.registrar("23");
         registrar.playToServer(TrainControlInputPayload.TYPE, TrainControlInputPayload.STREAM_CODEC,
                 TrainDriverManager::handleInput);
+        registrar.playToServer(TrainWalkInputPayload.TYPE, TrainWalkInputPayload.STREAM_CODEC,
+                TrainPassengerManager::handleInput);
         registrar.playToClient(TrainControlSyncPayload.TYPE, TrainControlSyncPayload.STREAM_CODEC,
+                (payload, context) -> NeoForge.EVENT_BUS.post(new TrackSyncEvent(payload)));
+        registrar.playToClient(TrainPassengerStatePayload.TYPE, TrainPassengerStatePayload.STREAM_CODEC,
                 (payload, context) -> NeoForge.EVENT_BUS.post(new TrackSyncEvent(payload)));
         registrar.playBidirectional(TrainMapSessionPayload.TYPE, TrainMapSessionPayload.STREAM_CODEC,
                 (payload, context) -> {

@@ -12,8 +12,11 @@ import com.unrealtrainmod.train.TrainAnchor;
 import com.unrealtrainmod.train.TrainCarEnd;
 import com.unrealtrainmod.train.TrainDriverManager;
 import com.unrealtrainmod.train.TrainManager;
+import com.unrealtrainmod.train.TrainPassengerClientState;
+import com.unrealtrainmod.train.TrainPassengerManager;
 import com.unrealtrainmod.vehicle.VehicleCatalog;
 import com.unrealtrainmod.vehicle.VehicleDoor;
+import com.unrealtrainmod.vehicle.VehicleInteriorSpec;
 import com.unrealtrainmod.vehicle.VehiclePose;
 import com.unrealtrainmod.vehicle.VehiclePosePlayback;
 import com.unrealtrainmod.vehicle.VehiclePoseSnapshot;
@@ -233,9 +236,11 @@ public final class TrainEntity extends Entity {
     public void tick() {
         super.tick();
         if (level() instanceof ServerLevel server) {
-            // Vanilla player NBT can restore a riding relationship, but never a driver session.
+            // Vanilla player NBT can restore a riding relationship, but never a driver or passenger session.
             for (var passenger : List.copyOf(getPassengers())) {
-                if (passenger instanceof ServerPlayer player && !TrainManager.get(server).drivers().isDriver(player, this)) {
+                if (passenger instanceof ServerPlayer player
+                        && !TrainManager.get(server).drivers().isDriver(player, this)
+                        && !TrainManager.get(server).passengers().isPassenger(player, this)) {
                     player.stopRiding();
                 }
             }
@@ -469,24 +474,41 @@ public final class TrainEntity extends Entity {
             return dismantle(player) ? InteractionResult.sidedSuccess(level().isClientSide) : InteractionResult.FAIL;
         }
         if (!player.isShiftKeyDown() && hand == InteractionHand.MAIN_HAND && !player.isSpectator()) {
-            if (level().isClientSide) return player.getMainHandItem().is(UnrealTrainMod.KEY.get())
-                    ? InteractionResult.SUCCESS : InteractionResult.PASS;
-            return TrainManager.get((ServerLevel) level()).drivers().board((ServerPlayer) player, this)
+            var stack = player.getMainHandItem();
+            boolean key = stack.is(UnrealTrainMod.KEY.get());
+            boolean ticket = stack.is(UnrealTrainMod.TICKET.get());
+            if (level().isClientSide) return key || ticket ? InteractionResult.SUCCESS : InteractionResult.PASS;
+            if (key) return TrainManager.get((ServerLevel) level()).drivers().board((ServerPlayer) player, this)
                     ? InteractionResult.CONSUME : InteractionResult.FAIL;
+            if (ticket) return TrainManager.get((ServerLevel) level()).passengers().board((ServerPlayer) player, this)
+                    ? InteractionResult.CONSUME : InteractionResult.FAIL;
+            return InteractionResult.PASS;
         }
         return InteractionResult.PASS;
     }
 
     @Override
     protected boolean canAddPassenger(Entity passenger) {
-        return passenger instanceof Player && getPassengers().size() < TrainDriverManager.MAX_DRIVERS;
+        return passenger instanceof Player
+                && getPassengers().size() < TrainDriverManager.MAX_DRIVERS + TrainPassengerManager.MAX_PASSENGERS;
     }
+
+    /** Ordinary passengers and drivers stand on the car floor; riding only supplies the vehicle frame. */
+    @Override
+    public boolean shouldRiderSit() { return false; }
 
     /** Passenger ownership never gives the client authority to send vehicle position updates. */
     @Override public boolean isControlledByLocalInstance() { return !level().isClientSide; }
 
     @Override
     public Vec3 getPassengerRidingPosition(Entity passenger) {
+        var walking = walkingLocal(passenger);
+        if (walking != null) {
+            var model = VehicleCatalog.find(getModelId());
+            if (model != null && model.interiorSpec().enabled()) {
+                return localToWorld(currentBody(), model.interiorSpec(), walking.x(), walking.z());
+            }
+        }
         return passengerRidingPosition(currentBody());
     }
 
@@ -506,6 +528,32 @@ public final class TrainEntity extends Entity {
         return new Vec3(position.x() + local.x, position.y() + local.y, position.z() + local.z);
     }
 
+    /** Camera anchor with the local point interpolated across the current client tick. */
+    public Vec3 renderPassengerPosition(Player passenger, VehiclePose.Body body, float partialTick) {
+        var walking = level().isClientSide
+                ? TrainPassengerClientState.renderPoint(passenger.getUUID(), getUUID(), partialTick)
+                : walkingLocal(passenger);
+        var model = VehicleCatalog.find(getModelId());
+        if (walking != null && model != null && model.interiorSpec().enabled()) {
+            return localToWorld(body, model.interiorSpec(), walking.x(), walking.z());
+        }
+        return passengerRidingPosition(body);
+    }
+
+    private static Vec3 localToWorld(VehiclePose.Body body, VehicleInteriorSpec spec, double x, double z) {
+        var point = VehiclePose.localToWorld(body, new TrackVector(x, spec.centerY(), z));
+        return new Vec3(point.x(), point.y(), point.z());
+    }
+
+    private TrainPassengerClientState.LocalPoint walkingLocal(Entity passenger) {
+        if (!(passenger instanceof Player)) return null;
+        if (level().isClientSide) return TrainPassengerClientState.renderPoint(passenger.getUUID(), getUUID());
+        if (level() instanceof ServerLevel server) {
+            return TrainManager.get(server).passengers().localPoint(passenger, this);
+        }
+        return null;
+    }
+
     @Override
     protected void positionRider(Entity passenger, Entity.MoveFunction callback) {
         var seat = getPassengerRidingPosition(passenger);
@@ -516,6 +564,7 @@ public final class TrainEntity extends Entity {
     protected void removePassenger(Entity passenger) {
         super.removePassenger(passenger);
         if (level() instanceof ServerLevel server && passenger instanceof ServerPlayer player) {
+            TrainManager.get(server).passengers().dismounted(player, this);
             TrainManager.get(server).drivers().dismounted(player, this);
         }
     }
@@ -523,11 +572,15 @@ public final class TrainEntity extends Entity {
     @Override
     public Vec3 getDismountLocationForPassenger(LivingEntity passenger) {
         var model = VehicleCatalog.find(getModelId());
-        double width = model == null ? 1 : model.bounds().width();
+        var bounds = model == null ? ModelBounds.MISSING : model.bounds();
+        var body = currentBody();
         var seat = getPassengerRidingPosition(passenger);
-        var side = VehiclePose.Body.rotation(getYRot(), 0).transform(new Vector3f((float)(width / 2 + 1), 0, 0));
-        for (int sign : new int[] {1, -1}) {
-            var target = seat.add(sign * side.x, 0, sign * side.z);
+        var local = VehiclePose.worldToLocal(body, new TrackVector(seat.x, seat.y, seat.z));
+        int nearerSide = local.x() >= bounds.centerX() ? 1 : -1;
+        for (int sign : new int[] {nearerSide, -nearerSide}) {
+            double x = sign > 0 ? bounds.maxX() + 1 : bounds.minX() - 1;
+            var point = VehiclePose.localToWorld(body, new TrackVector(x, local.y(), local.z()));
+            var target = new Vec3(point.x(), point.y(), point.z());
             var area = passenger.getBoundingBox().move(target.subtract(passenger.position()));
             if (level().hasChunkAt(BlockPos.containing(target)) && level().noCollision(passenger, area)) return target;
         }

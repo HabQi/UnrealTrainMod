@@ -14,7 +14,7 @@ import net.minecraft.resources.ResourceLocation;
 
 public record VehicleDefinition(ResourceLocation id, String name, PackageAsset config, PackageAsset buttonTexture, String trainType,
                                 List<Instance> parts, ModelBounds bounds, VehicleMotionSpec motionSpec,
-                                VehiclePerformanceSpec performanceSpec) {
+                                VehiclePerformanceSpec performanceSpec, VehicleInteriorSpec interiorSpec) {
     public VehicleDefinition { parts = List.copyOf(parts); }
     /**
      * Bounds and pivot are source-local; offset retains the original static assembly. Door actions belong to
@@ -40,11 +40,18 @@ public record VehicleDefinition(ResourceLocation id, String name, PackageAsset c
             return new Instance(part.source(), part.offset(), part.role(),
                     new TrackVector(0, 0, z), part.bounds(), part.actions());
         }).toList();
-        return new VehicleDefinition(id, name, config, buttonTexture, trainType, calibrated, bounds, spec, performanceSpec);
+        return new VehicleDefinition(id, name, config, buttonTexture, trainType, calibrated, bounds, spec, performanceSpec,
+                interiorSpec);
     }
 
     public VehicleDefinition withPerformanceSpec(VehiclePerformanceSpec spec) {
-        return new VehicleDefinition(id, name, config, buttonTexture, trainType, parts, bounds, motionSpec, spec);
+        return new VehicleDefinition(id, name, config, buttonTexture, trainType, parts, bounds, motionSpec, spec,
+                interiorSpec);
+    }
+
+    public VehicleDefinition withInteriorSpec(VehicleInteriorSpec spec) {
+        return new VehicleDefinition(id, name, config, buttonTexture, trainType, parts, bounds, motionSpec,
+                performanceSpec, spec);
     }
 
     public String packName() { return config.archive().getFileName().toString(); }
