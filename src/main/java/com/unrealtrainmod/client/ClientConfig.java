@@ -34,30 +34,47 @@ public final class ClientConfig {
             .define("useVehicleInstancing", false);
 
     public static final ModConfigSpec.BooleanValue LOG_VEHICLE_INSTANCING_STATS = BUILDER
-            .comment("Log lightweight vehicle render statistics every few seconds (world and preview separately).",
-                    "Reports request counts, instanced draw calls, normal GPU draws, CPU fallback draws,",
-                    "instance upload bytes, shader binds/switches, and CPU time for the complete opaque pass,",
-                    "grouping, packing and uploading. Disabling skips per-draw counters and timing.",
-                    "CPU timings are not GPU frame times. Enabled only for comparison; no per-instance logs.")
+            .comment("Log five-second vehicle render windows for world and preview queues separately.",
+                    "Reports per-frame draw and instance counts, triangles multiplied by instance count, model counts,",
+                    "instance bytes, and CPU entity/pose/submission/script/enqueue/opaque/translucent timings.",
+                    "CPU scopes overlap: entity includes submission; submission includes scripts and enqueueing.",
+                    "Separately samples opaque and translucent GPU timeline spans every 16 pass calls without waiting.",
+                    "GPU spans include instance uploads and possible idle gaps; they are not full-frame GPU times.",
+                    "Disabling skips counters/timing and releases queries at the next vehicle queue frame.")
             .translation("unrealtrainmod.configuration.logVehicleInstancingStats")
             .define("logVehicleInstancingStats", false);
 
     public static final ModConfigSpec.BooleanValue USE_TRACK_RENDER_STATE_CACHE = BUILDER
             .comment("Reuse render type, shader program, samplers and direction lights across consecutive track draws.",
                     "Disabled by default to compare against the original per-mesh draw path on identical cached geometry.",
-                    "Neither path rebuilds geometry, changes the build/upload budgets nor re-lays tracks.",
+                    "All paths reuse cached geometry and keep the same build/upload budgets without re-laying tracks.",
+                    "When groupTrackDrawsByMaterial is enabled, visible batches are grouped across meshes.",
                     "Affects world tracks from the next frame; rail preview and thumbnails always use their own",
                     "short-lived state scope.")
             .translation("unrealtrainmod.configuration.useTrackRenderStateCache")
             .define("useTrackRenderStateCache", false);
+
+    public static final ModConfigSpec.BooleanValue GROUP_TRACK_DRAWS_BY_MATERIAL = BUILDER
+            .comment("Group visible world track batches by render type across meshes before drawing.",
+                    "Enabled by default, but only active while useTrackRenderStateCache is enabled.",
+                    "Reduces repeated material setup and shader apply calls, without merging draw calls or geometry.",
+                    "Changes submission order between materials; coplanar overlays may be covered differently.",
+                    "Takes effect on the next frame without rebuilding meshes; previews and thumbnails are unchanged.")
+            .translation("unrealtrainmod.configuration.groupTrackDrawsByMaterial")
+            .define("groupTrackDrawsByMaterial", true);
 
     public static final ModConfigSpec.BooleanValue LOG_TRACK_RENDER_STATS = BUILDER
             .comment("Log lightweight track render statistics in roughly five-second windows.",
                     "Reports per-frame chunk visits, candidate/visible/empty/pending meshes, draw calls split by",
                     "native or rail-model geometry and by segment or assembly, submitted vertices and triangles,",
                     "builds, VBO uploads and bytes, render type setups, shader binds, program switches, sampled",
-                    "light positions, and CPU time for the whole track stage and its sub-phases.",
-                    "CPU times are submission costs, not GPU frame times. Disabling skips counters and timing.")
+                    "light positions, and CPU time for the whole track stage and its sub-phases, including grouping.",
+                    "Also reports stored vertex records, explicit index upload bytes, and ordinary rail chunk/material",
+                    "batch duplication in the materialGroups path. Duplication is potential merge space, not saved draws.",
+                    "Also samples the track GPU timeline span every 16 frames using nonblocking timestamps,",
+                    "excluding frames with builds, uploads or no track draws. Requires timer-query support.",
+                    "CPU times are submission costs; GPU spans are not full-frame times or pure shader activity.",
+                    "Disabling skips counters and timing and releases the GPU queries on the next track pass.")
             .translation("unrealtrainmod.configuration.logTrackRenderStats")
             .define("logTrackRenderStats", false);
 

@@ -124,6 +124,7 @@ public final class ClientModelManager extends SimplePreparableReloadListener<Pre
             return;
         }
         TrainModelRenderer.clearWorld();
+        TrainModelRenderer.resetStatistics();
         VehicleScriptManager.clear();
         RtmScriptSource.clearCache();
         ScriptDiagnostics.clear();

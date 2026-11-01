@@ -24,8 +24,13 @@ public final class TrainEntityRenderer extends EntityRenderer<TrainEntity> {
     @Override
     public void render(TrainEntity entity, float yaw, float partialTick, PoseStack pose,
                        MultiBufferSource buffers, int light) {
+        var stats = TrainModelRenderer.worldStatistics();
+        if (stats != null) stats.vehicle(entity.getModelId());
+        long entityStart = stats == null ? 0L : System.nanoTime();
         var model = ClientModelManager.INSTANCE.model(entity.getModelId());
+        long poseStart = stats == null ? 0L : System.nanoTime();
         var vehiclePose = entity.renderPose(partialTick);
+        if (stats != null) stats.addPose(System.nanoTime() - poseStart);
         pose.pushPose();
         try {
             if (vehiclePose != null) {
@@ -61,6 +66,7 @@ public final class TrainEntityRenderer extends EntityRenderer<TrainEntity> {
             }
         } finally {
             pose.popPose();
+            if (stats != null) stats.addEntity(System.nanoTime() - entityStart);
         }
         super.render(entity, yaw, partialTick, pose, buffers, light);
     }

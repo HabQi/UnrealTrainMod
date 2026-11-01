@@ -52,7 +52,7 @@ public final class ModelRenderQueue implements AutoCloseable {
     private int[] sortScratch = new int[0], gpuOffset = new int[0];
     private float[] depth = new float[0];
     private int triangles;
-    private boolean started, customShader, collectStats;
+    private boolean started, customShader, collectStats, statsFrameStarted;
     private ByteBufferBuilder fallbackBuffer;
 
     public ModelRenderQueue() { this("world", false); }
@@ -64,6 +64,19 @@ public final class ModelRenderQueue implements AutoCloseable {
         this.scene = scene;
         this.frontLighting = frontLighting;
     }
+
+    /** Latch the diagnostic switch before submission so pose, script and enqueue scopes share one frame. */
+    public InstancingStats statistics() {
+        if (!statsFrameStarted) {
+            statsFrameStarted = true;
+            collectStats = ClientConfig.LOG_VEHICLE_INSTANCING_STATS.getAsBoolean();
+            if (collectStats) stats.beginFrame();
+            else stats.close();
+        }
+        return collectStats ? stats : null;
+    }
+
+    public void resetStatistics() { stats.close(); statsFrameStarted = collectStats = false; }
 
     public void submit(LoadedModel model, PoseStack pose, int light) {
         for (var instance : model.instances()) submit(instance, instance.visibleParts(), pose, light);
@@ -91,6 +104,8 @@ public final class ModelRenderQueue implements AutoCloseable {
     /** Records an already captured pose so script commands can be discarded until the script succeeds. */
     public void submitGeometry(LoadedModel.Source source, PartSelection selection, PoseStack.Pose pose, int light) {
         RenderSystem.assertOnRenderThread();
+        var frameStats = statistics();
+        long enqueueStart = frameStats == null ? 0L : System.nanoTime();
         if (!started) {
             modelView.set(RenderSystem.getModelViewMatrix());
             projection.set(RenderSystem.getProjectionMatrix());
@@ -102,31 +117,32 @@ public final class ModelRenderQueue implements AutoCloseable {
         for (var batch : selection.batches()) {
             draws.add(new Draw(batch, customShader && gpu != null ? gpu.part(batch) : null, snapshot, light));
         }
+        if (frameStats != null) frameStats.addEnqueue(System.nanoTime() - enqueueStart);
     }
 
     public void drawOpaque() {
         RenderSystem.assertOnRenderThread();
-        boolean previousCollectStats = collectStats;
-        collectStats = ClientConfig.LOG_VEHICLE_INSTANCING_STATS.getAsBoolean();
-        if (collectStats) {
-            // The previous completed frame is logged before this frame resets its counters.
-            if (previousCollectStats) stats.logIfDue(scene);
-            stats.resetFrame();
-        }
+        var frameStats = statistics();
         if (draws.isEmpty()) return;
+        if (frameStats != null) frameStats.beginGpu(true);
         long opaqueStart = collectStats ? System.nanoTime() : 0L;
+        boolean completed = false;
         try (var state = new ModelRenderState(frontLighting, collectStats)) {
             boolean instancing = instancingEnabled();
-            if (collectStats) stats.setInstancing(instancing);
             if (instancing) drawOpaqueInstanced(state);
             else drawOpaqueDirect(state);
             if (collectStats) stats.addShaderCounts(state.shaderBinds(), state.shaderSwitches());
+            completed = true;
         } catch (RuntimeException | Error e) {
+            completed = false;
             clear();
             throw e;
         } finally {
             // Includes state capture, GL submission, instance-reference cleanup and caller-state restoration.
-            if (collectStats) stats.addOpaque(System.nanoTime() - opaqueStart);
+            if (frameStats != null) {
+                frameStats.addOpaque(System.nanoTime() - opaqueStart);
+                frameStats.endGpu(true, completed);
+            }
         }
     }
 
@@ -147,14 +163,14 @@ public final class ModelRenderQueue implements AutoCloseable {
         state.use(ModelRenderTypes.get(batch.texture(), batch.doubleSided(), false,
                 alphaPass == StaticModelShader.FORCE_OPAQUE), false, batch.doubleSided());
         if (draw.gpu() != null) {
-            if (collectStats) stats.gpuDraw();
             var part = draw.gpu();
             state.prepareGpu(draw.pose(), draw.light(), alphaPass, modelView, projection);
             part.mesh().draw(false, part.firstIndex(), batch.indexCount());
+            if (collectStats) stats.gpuDraw(batch.indexCount());
         } else {
-            if (collectStats) stats.fallbackDraw();
             state.endGpu();
             drawFallback(state, draw, alphaPass, 0, batch.indexCount() / 3, false);
+            if (collectStats) stats.fallbackDraw(batch.indexCount());
         }
     }
 
@@ -237,7 +253,7 @@ public final class ModelRenderQueue implements AutoCloseable {
         instancedMeshes.put(part.mesh(), Boolean.TRUE);
         part.mesh().drawInstanced(part.firstIndex(), batch.indexCount(), instanceBuffer.handle(),
                 instanceBuffer.offsetOf(group.startInstance), group.draws.size(), attributes);
-        if (collectStats) stats.instancedDraw(group.draws.size());
+        if (collectStats) stats.instancedDraw(group.draws.size(), batch.indexCount());
     }
 
     private static InstanceBatchKey instanceKey(Draw draw) {
@@ -263,36 +279,51 @@ public final class ModelRenderQueue implements AutoCloseable {
 
     public void drawTranslucent() {
         RenderSystem.assertOnRenderThread();
+        var frameStats = statistics();
+        if (frameStats != null) frameStats.beginGpu(false);
+        long start = frameStats == null ? 0L : System.nanoTime();
+        boolean completed = false;
         try {
-            if (ClientConfig.USE_STATIC_TRANSLUCENT_BATCHES.getAsBoolean()) {
-                drawStaticTranslucent();
-                return;
-            }
-            collectTriangles();
-            if (triangles == 0) return;
-            if (ClientConfig.SORT_TRANSLUCENT_TRIANGLES.getAsBoolean()) sortTriangles();
-            try (var state = new ModelRenderState(frontLighting)) {
-                prepareGpuIndices();
-                for (int start = 0; start < triangles;) {
-                    int drawIndex = triangleDraw[order[start]];
-                    var draw = draws.get(drawIndex);
-                    int end = start + 1;
-                    while (end < triangles && canMerge(draw, draws.get(triangleDraw[order[end]]))) end++;
-                    int alphaPass = draw.batch().alphaPass(true);
-                    state.use(ModelRenderTypes.get(draw.batch().texture(), draw.batch().doubleSided(), true, false), true, draw.batch().doubleSided());
-                    if (draw.gpu() != null) {
-                        state.prepareGpu(draw.pose(), draw.light(), alphaPass, modelView, projection);
-                        draw.gpu().mesh().draw(true, gpuOffset[start], (end - start) * 3);
-                    } else {
-                        state.endGpu();
-                        drawFallback(state, draw, alphaPass, start, end, true);
-                    }
-                    if (collectStats) stats.translucentDraw();
-                    start = end;
-                }
-            }
+            drawTranslucentPass();
+            completed = true;
         } finally {
-            clear();
+            try {
+                if (frameStats != null) {
+                    frameStats.addTranslucent(System.nanoTime() - start);
+                    frameStats.endGpu(false, completed);
+                    if (completed) frameStats.endFrame(scene);
+                }
+            } finally { clear(); }
+        }
+    }
+
+    private void drawTranslucentPass() {
+        if (ClientConfig.USE_STATIC_TRANSLUCENT_BATCHES.getAsBoolean()) {
+            drawStaticTranslucent();
+            return;
+        }
+        collectTriangles();
+        if (triangles == 0) return;
+        if (ClientConfig.SORT_TRANSLUCENT_TRIANGLES.getAsBoolean()) sortTriangles();
+        try (var state = new ModelRenderState(frontLighting)) {
+            prepareGpuIndices();
+            for (int start = 0; start < triangles;) {
+                int drawIndex = triangleDraw[order[start]];
+                var draw = draws.get(drawIndex);
+                int end = start + 1;
+                while (end < triangles && canMerge(draw, draws.get(triangleDraw[order[end]]))) end++;
+                int alphaPass = draw.batch().alphaPass(true);
+                state.use(ModelRenderTypes.get(draw.batch().texture(), draw.batch().doubleSided(), true, false), true, draw.batch().doubleSided());
+                if (draw.gpu() != null) {
+                    state.prepareGpu(draw.pose(), draw.light(), alphaPass, modelView, projection);
+                    draw.gpu().mesh().draw(true, gpuOffset[start], (end - start) * 3);
+                } else {
+                    state.endGpu();
+                    drawFallback(state, draw, alphaPass, start, end, true);
+                }
+                if (collectStats) stats.translucentDraw(end - start);
+                start = end;
+            }
         }
     }
 
@@ -329,7 +360,7 @@ public final class ModelRenderQueue implements AutoCloseable {
                     state.endGpu();
                     drawFallback(state, draw, alphaPass, 0, count / 3, false);
                 }
-                if (collectStats) stats.translucentDraw();
+                if (collectStats) stats.translucentDraw(count / 3);
                 start = end;
             }
         }
@@ -457,11 +488,13 @@ public final class ModelRenderQueue implements AutoCloseable {
         sortedMeshes.clear();
         triangles = 0;
         started = false;
+        statsFrameStarted = collectStats = false;
     }
 
     @Override
     public void close() {
         clear();
+        stats.close();
         instanceBuffer.close();
         if (fallbackBuffer != null) {
             fallbackBuffer.close();

@@ -39,6 +39,7 @@ final class TrackGpuMesh implements TrackRenderMesh {
     @Override public int drawCalls() { return 1; }
     @Override public int drawVertices() { return data.vertexCount(); }
     @Override public int drawTriangles() { return data.vertexCount() / 2; }
+    @Override public int storedVertices() { return data.vertexCount(); }
 
     @Override
     public int upload(ClientLevel level, int budget, TrackRenderStats stats) {
@@ -82,7 +83,7 @@ final class TrackGpuMesh implements TrackRenderMesh {
             buffer.upload(builder.buildOrThrow());
             if (stats != null) {
                 stats.gpuUpload(System.nanoTime() - uploadStart);
-                stats.uploaded(capacity, capacity, first);
+                stats.uploaded(capacity, 0, capacity, first);
             }
         } catch (RuntimeException | Error exception) {
             close();
@@ -106,6 +107,11 @@ final class TrackGpuMesh implements TrackRenderMesh {
     @Override
     public void draw(TrackRenderState state, Matrix4f modelView, Matrix4f projection) {
         state.drawNative(buffer, modelView, projection);
+    }
+
+    @Override
+    public void enqueue(TrackDrawQueue queue, Matrix4f modelView, int structure) {
+        queue.addNative(buffer, modelView, structure, data.vertexCount());
     }
 
     @Override

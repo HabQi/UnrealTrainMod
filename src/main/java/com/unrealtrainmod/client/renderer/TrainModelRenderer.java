@@ -7,18 +7,25 @@ package com.unrealtrainmod.client.renderer;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.math.Axis;
 import com.unrealtrainmod.client.model.LoadedModel;
+import com.unrealtrainmod.client.renderer.instancing.InstancingStats;
 import com.unrealtrainmod.compat.rtm.script.VehicleScriptManager;
 import com.unrealtrainmod.entity.TrainEntity;
 import com.unrealtrainmod.vehicle.VehiclePose;
 import net.minecraft.client.renderer.MultiBufferSource;
+import net.minecraft.client.multiplayer.ClientLevel;
+import net.neoforged.neoforge.client.event.ClientPlayerNetworkEvent;
 import net.neoforged.neoforge.client.event.RenderFrameEvent;
 import net.neoforged.neoforge.client.event.RenderLevelStageEvent;
+import net.neoforged.neoforge.event.level.LevelEvent;
 
 /** World submissions are deferred so all visible trains share the same opaque and translucent stages. */
 public final class TrainModelRenderer {
     private static final ModelRenderQueue WORLD = new ModelRenderQueue();
 
     private TrainModelRenderer() {}
+
+    public static InstancingStats worldStatistics() { return WORLD.statistics(); }
+    public static void resetStatistics() { WORLD.resetStatistics(); }
 
     /** Running or placed world vehicle: each source owns its part transform, then a script or the static geometry. */
     public static void render(LoadedModel model, VehiclePose vehiclePose, TrainEntity entity, float partialTick,
@@ -38,30 +45,45 @@ public final class TrainModelRenderer {
 
     private static void submit(ModelRenderQueue queue, LoadedModel model, VehiclePose vehiclePose,
                                TrainEntity entity, float partialTick, PoseStack pose, int light) {
-        for (var instance : model.instances()) {
-            pose.pushPose();
-            try {
-                if (vehiclePose != null) {
-                    var transform = vehiclePose.partTransform(instance.definition());
-                    var p = transform.position();
-                    pose.translate(p.x(), p.y(), p.z());
-                    pose.mulPose(transform.rotation());
-                } else {
-                    var offset = instance.offset();
-                    pose.translate(offset.x(), offset.y(), offset.z());
-                    if (instance.definition().reversedBogie()) pose.mulPose(Axis.YP.rotationDegrees(180));
+        var stats = queue.statistics();
+        long submitStart = stats == null ? 0L : System.nanoTime();
+        try {
+            for (var instance : model.instances()) {
+                long poseStart = stats == null ? 0L : System.nanoTime();
+                pose.pushPose();
+                try {
+                    if (vehiclePose != null) {
+                        var transform = vehiclePose.partTransform(instance.definition());
+                        var p = transform.position();
+                        pose.translate(p.x(), p.y(), p.z());
+                        pose.mulPose(transform.rotation());
+                    } else {
+                        var offset = instance.offset();
+                        pose.translate(offset.x(), offset.y(), offset.z());
+                        if (instance.definition().reversedBogie()) pose.mulPose(Axis.YP.rotationDegrees(180));
+                    }
+                    if (stats != null) stats.addPose(System.nanoTime() - poseStart);
+                    long scriptStart = stats != null && instance.definition().source().rendererPath() != null ? System.nanoTime() : 0L;
+                    boolean scripted;
+                    try {
+                        scripted = VehicleScriptManager.render(queue, entity, vehiclePose, instance, pose, light, partialTick);
+                    } finally {
+                        if (scriptStart != 0L) stats.addScript(System.nanoTime() - scriptStart);
+                    }
+                    if (!scripted) {
+                        // The caller already applied the instance offset, so submit source-local geometry directly.
+                        queue.submitGeometry(instance.model(), instance.visibleParts(), pose, light);
+                        VehicleActionRenderer.submit(queue, instance, entity, partialTick, pose, light, false);
+                    } else {
+                        // A working body script owns every body part, including any part named by a door action.
+                        VehicleActionRenderer.submit(queue, instance, entity, partialTick, pose, light, true);
+                    }
+                } finally {
+                    pose.popPose();
                 }
-                if (!VehicleScriptManager.render(queue, entity, vehiclePose, instance, pose, light, partialTick)) {
-                    // The caller already applied the instance offset, so submit source-local geometry directly.
-                    queue.submitGeometry(instance.model(), instance.visibleParts(), pose, light);
-                    VehicleActionRenderer.submit(queue, instance, entity, partialTick, pose, light, false);
-                } else {
-                    // A working body script owns every body part, including any part named by a door action.
-                    VehicleActionRenderer.submit(queue, instance, entity, partialTick, pose, light, true);
-                }
-            } finally {
-                pose.popPose();
             }
+        } finally {
+            if (stats != null) stats.addSubmission(System.nanoTime() - submitStart);
         }
     }
 
@@ -96,4 +118,10 @@ public final class TrainModelRenderer {
 
     public static void clearWorld() { WORLD.clear(); }
     public static void closeWorld() { WORLD.close(); }
+
+    public static void onLevelUnload(LevelEvent.Unload event) {
+        if (event.getLevel() instanceof ClientLevel) closeWorld();
+    }
+
+    public static void onLogout(ClientPlayerNetworkEvent.LoggingOut event) { closeWorld(); }
 }

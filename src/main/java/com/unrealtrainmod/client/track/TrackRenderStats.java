@@ -4,19 +4,23 @@
  */
 package com.unrealtrainmod.client.track;
 
+import com.mojang.blaze3d.systems.RenderSystem;
 import com.unrealtrainmod.client.ClientConfig;
+import java.util.HashSet;
 import java.util.Locale;
+import java.util.Set;
 import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.client.renderer.RenderType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Per-frame track counters and CPU stage timings, reported in roughly five-second windows.
+ * Per-frame track counters, CPU timings and sampled GPU spans, reported in roughly five-second windows.
  *
  * <p>Counts are taken where the work happens. Draw calls are counted per actual GL submission, split into
  * four separate buckets by geometry source (native quads or an authored rail model) and structure
- * (ordinary segment or assembly/turnout); each draw belongs to exactly one bucket. Timings are CPU
- * submission costs only.
+ * (ordinary segment or assembly/turnout); each draw belongs to exactly one bucket. CPU submission
+ * costs and asynchronous GPU timestamp spans are reported separately.
  */
 final class TrackRenderStats {
     private static final Logger LOGGER = LoggerFactory.getLogger("UnrealTrainMod/Track");
@@ -32,6 +36,7 @@ final class TrackRenderStats {
     static final int STRUCTURE_TRACK = 0;
     static final int STRUCTURE_ASSEMBLY = 1;
     private static final int SLOTS = 4;
+    private record ChunkMaterial(long chunk, RenderType type) {}
 
     private ClientLevel level;
     private String scene = "";
@@ -39,13 +44,18 @@ final class TrackRenderStats {
     private long windowStart = System.nanoTime();
     private long lastFrame = windowStart;
     private int windowFrames;
-    private long windowStage, windowMaxStage, windowBuild, windowLight, windowPack, windowVbo, windowDraw;
+    private long windowId;
+    private TrackGpuTimer gpuTimer;
+    private long windowGpu, windowMaxGpu;
+    private int windowGpuSamples;
+    private long windowStage, windowMaxStage, windowBuild, windowLight, windowPack, windowVbo, windowGroup, windowDraw;
     private long windowChunks, windowCandidates, windowVisible, windowEmpty, windowPending;
     private final long[] windowDraws = new long[SLOTS];
     private final long[] windowVertices = new long[SLOTS];
     private final long[] windowTriangles = new long[SLOTS];
     private long windowBuilds, windowUploads, windowFirstUploads, windowRefreshUploads;
-    private long windowVboBytes, windowStagingBytes, windowLightChecked, windowLightChanged;
+    private long windowVboBytes, windowIboBytes, windowStagingBytes, windowLightChecked, windowLightChanged;
+    private long windowStoredVertices, windowRailChunkBatches, windowRailChunkMaterials;
     private long windowRenderTypeSetups, windowShaderBinds, windowProgramSwitches;
 
     private int chunks, candidates, visible, empty, pending;
@@ -53,16 +63,21 @@ final class TrackRenderStats {
     private final int[] vertices = new int[SLOTS];
     private final int[] triangles = new int[SLOTS];
     private int builds, uploads, firstUploads, refreshUploads;
-    private long vboBytes, stagingBytes;
+    private long vboBytes, iboBytes, stagingBytes;
+    private int storedVertices, railChunkBatches;
+    private final Set<ChunkMaterial> railChunkMaterials = new HashSet<>();
     private long lightChecked, lightChanged;
     private int renderTypeSetups, shaderBinds, programSwitches;
-    private long stageNanos, buildNanos, lightNanos, packNanos, vboNanos, drawNanos;
+    private long stageNanos, buildNanos, lightNanos, packNanos, vboNanos, groupNanos, drawNanos;
 
     private TrackRenderStats() {}
 
     /** Returns the shared collector for this frame, or null when statistics are disabled. */
     static TrackRenderStats begin(ClientLevel level, String scene, String path) {
-        if (!ClientConfig.LOG_TRACK_RENDER_STATS.getAsBoolean()) return null;
+        if (!ClientConfig.LOG_TRACK_RENDER_STATS.getAsBoolean()) {
+            INSTANCE.closeGpuTimer();
+            return null;
+        }
         return INSTANCE.start(level, scene, path);
     }
 
@@ -73,6 +88,7 @@ final class TrackRenderStats {
     /** Drops the current window and its level reference when a world closes. */
     static void reset() {
         long now = System.nanoTime();
+        INSTANCE.closeGpuTimer();
         INSTANCE.level = null;
         INSTANCE.lastFrame = now;
         INSTANCE.resetWindow(now);
@@ -80,7 +96,7 @@ final class TrackRenderStats {
 
     private TrackRenderStats start(ClientLevel level, String scene, String path) {
         long now = System.nanoTime();
-        if (this.level != level || !scene.equals(this.scene) || !path.equals(this.path)
+        if (gpuTimer == null || this.level != level || !scene.equals(this.scene) || !path.equals(this.path)
                 || now - lastFrame > IDLE_RESET_NANOS) {
             this.level = level;
             this.scene = scene;
@@ -88,19 +104,34 @@ final class TrackRenderStats {
             resetWindow(now);
         }
         resetFrame();
+        if (gpuTimer == null) gpuTimer = new TrackGpuTimer();
+        gpuTimer.beginFrame(windowId, this);
         return this;
     }
 
+    private void closeGpuTimer() {
+        var timer = gpuTimer;
+        if (timer == null) return;
+        gpuTimer = null;
+        if (RenderSystem.isOnRenderThread()) timer.close();
+        else RenderSystem.recordRenderCall(timer::close);
+    }
+
     private void resetWindow(long now) {
+        windowId++;
+        windowGpu = windowMaxGpu = 0L;
+        windowGpuSamples = 0;
         windowStart = now;
         windowFrames = 0;
-        windowStage = windowMaxStage = windowBuild = windowLight = windowPack = windowVbo = windowDraw = 0L;
+        windowStage = windowMaxStage = windowBuild = windowLight = windowPack = windowVbo = windowGroup = windowDraw = 0L;
         windowChunks = windowCandidates = windowVisible = windowEmpty = windowPending = 0L;
         for (int i = 0; i < SLOTS; i++) {
             windowDraws[i] = windowVertices[i] = windowTriangles[i] = 0L;
         }
         windowBuilds = windowUploads = windowFirstUploads = windowRefreshUploads = 0L;
-        windowVboBytes = windowStagingBytes = windowLightChecked = windowLightChanged = 0L;
+        windowVboBytes = windowIboBytes = windowStagingBytes = windowLightChecked = windowLightChanged = 0L;
+        windowStoredVertices = windowRailChunkBatches = windowRailChunkMaterials = 0L;
+        railChunkMaterials.clear();
         windowRenderTypeSetups = windowShaderBinds = windowProgramSwitches = 0L;
     }
 
@@ -110,10 +141,12 @@ final class TrackRenderStats {
             draws[i] = vertices[i] = triangles[i] = 0;
         }
         builds = uploads = firstUploads = refreshUploads = 0;
-        vboBytes = stagingBytes = 0L;
+        vboBytes = iboBytes = stagingBytes = 0L;
+        storedVertices = railChunkBatches = 0;
+        railChunkMaterials.clear();
         lightChecked = lightChanged = 0L;
         renderTypeSetups = shaderBinds = programSwitches = 0;
-        stageNanos = buildNanos = lightNanos = packNanos = vboNanos = drawNanos = 0L;
+        stageNanos = buildNanos = lightNanos = packNanos = vboNanos = groupNanos = drawNanos = 0L;
     }
 
     /** One visited chunk entry; the plain-segment and assembly loops both count their visits. */
@@ -129,9 +162,10 @@ final class TrackRenderStats {
     }
 
     /** One successful VBO upload; non-first uploads are light refreshes because geometry is static. */
-    void uploaded(int byteCount, int stagingCapacity, boolean first) {
+    void uploaded(int vertexBytes, int indexBytes, int stagingCapacity, boolean first) {
         uploads++;
-        vboBytes += byteCount;
+        vboBytes += vertexBytes;
+        iboBytes += indexBytes;
         stagingBytes += stagingCapacity;
         if (first) firstUploads++;
         else refreshUploads++;
@@ -140,6 +174,12 @@ final class TrackRenderStats {
     void packed(long nanos) { packNanos += nanos; }
 
     void gpuUpload(long nanos) { vboNanos += nanos; }
+
+    /** Matrix snapshots and insertion into the frame-local material groups, excluding actual draws. */
+    void grouped(long nanos) { groupNanos += nanos; }
+
+    /** Complete grouped submission; its individual draw counts are recorded with zero per-draw time. */
+    void submitted(long nanos) { drawNanos += nanos; }
 
     void lightRefresh(long nanos, int checked, int changed) {
         lightNanos += nanos;
@@ -164,12 +204,19 @@ final class TrackRenderStats {
         if (shaderBinds > 1) programSwitches++;
     }
 
-    void drawn(int source, int structure, int drawCalls, int vertexCount, int triangleCount, long nanos) {
+    void drawn(int source, int structure, int drawCalls, int vertexCount, int triangleCount, int storedVertexCount, long nanos) {
         int index = slot(source, structure);
         draws[index] += drawCalls;
         vertices[index] += vertexCount;
         triangles[index] += triangleCount;
+        storedVertices += storedVertexCount;
         drawNanos += nanos;
+    }
+
+    /** Actual ordinary authored-rail draws only; assemblies and native turnouts are not merge candidates. */
+    void railChunkBatch(long chunk, RenderType type) {
+        railChunkBatches++;
+        railChunkMaterials.add(new ChunkMaterial(chunk, type));
     }
 
     /** Draw-scope cleanup after the last track mesh, counted into the draw submission stage. */
@@ -178,11 +225,22 @@ final class TrackRenderStats {
     /** Whole track stage including state backup, failure flushing, traversal, build, upload, draw and restore. */
     void stage(long nanos) { stageNanos = nanos; }
 
+    /** Elapsed GPU timeline span of a sampled frame with draws and no builds or uploads. */
+    void gpuSpan(long nanos) {
+        windowGpu += nanos;
+        windowMaxGpu = Math.max(windowMaxGpu, nanos);
+        windowGpuSamples++;
+    }
+
     void endFrame() {
+        int drawCount = 0;
+        for (int value : draws) drawCount += value;
+        gpuTimer.endFrame(drawCount > 0 && builds == 0 && uploads == 0);
         windowFrames++;
         windowStage += stageNanos;
         if (stageNanos > windowMaxStage) windowMaxStage = stageNanos;
         windowDraw += drawNanos;
+        windowGroup += groupNanos;
         windowBuild += buildNanos;
         windowLight += lightNanos;
         windowPack += packNanos;
@@ -202,6 +260,10 @@ final class TrackRenderStats {
         windowFirstUploads += firstUploads;
         windowRefreshUploads += refreshUploads;
         windowVboBytes += vboBytes;
+        windowIboBytes += iboBytes;
+        windowStoredVertices += storedVertices;
+        windowRailChunkBatches += railChunkBatches;
+        windowRailChunkMaterials += railChunkMaterials.size();
         windowStagingBytes += stagingBytes;
         windowLightChecked += lightChecked;
         windowLightChanged += lightChanged;
@@ -225,33 +287,41 @@ final class TrackRenderStats {
         // Traversal and culling are the remainder: no nested timing is added back into the stage total.
         // It also contains staging-buffer allocation, upload VAO binding and draw-scope state backup.
         // Draw-scope cleanup is already included in windowDraw.
-        long traverse = Math.max(0L, windowStage - windowBuild - windowLight - windowPack - windowVbo - windowDraw);
+        long traverse = Math.max(0L, windowStage - windowBuild - windowLight - windowPack - windowVbo - windowGroup - windowDraw);
         LOGGER.info("Track [{}] path={} frames={} stage avg={}ms max={}ms "
-                        + "(traverse={} build={} light={} pack={} vbo={} draw={} ms/frame) "
+                        + "(traverse={} build={} light={} pack={} vbo={} group={} draw={} ms/frame) "
                         + "| perFrame chunks={} candidates={} visible={} empty={} pending={} "
                         + "draws={} [nativeTrack={} railTrack={} nativeAssembly={} railAssembly={}] "
-                        + "verts={} tris={} builds={} uploads={} (first={} refresh={}) "
-                        + "vboBytes={} stagingBytes={} rtSetups={} shaderBinds={} programSwitches={} "
+                        + "verts={} tris={} storedVerts={} builds={} uploads={} (first={} refresh={}) "
+                        + "vboBytes={} iboBytes={} stagingBytes={} rtSetups={} shaderBinds={} programSwitches={} "
                         + "lightChecked={} lightChanged={} "
-                        + "| window draws={} verts={} tris={} builds={} uploads={} vboBytes={}",
+                        + "| window draws={} verts={} tris={} builds={} uploads={} vboBytes={} iboBytes={} "
+                        + "| chunkMerge={} railBatches={} chunkMaterials={} extraBatches={} "
+                        + "| gpuTrack={} samples={} avg={}ms max={}ms",
                 scene, path, frames,
                 ms(windowStage / frames), ms(windowMaxStage),
                 ms(traverse / frames), ms(windowBuild / frames), ms(windowLight / frames),
-                ms(windowPack / frames), ms(windowVbo / frames), ms(windowDraw / frames),
+                ms(windowPack / frames), ms(windowVbo / frames), ms(windowGroup / frames), ms(windowDraw / frames),
                 avg(windowChunks, frames), avg(windowCandidates, frames), avg(windowVisible, frames),
                 avg(windowEmpty, frames), avg(windowPending, frames),
                 avg(drawSlots, frames), avg(windowDraws[slot(NATIVE, STRUCTURE_TRACK)], frames),
                 avg(windowDraws[slot(RAIL_MODEL, STRUCTURE_TRACK)], frames),
                 avg(windowDraws[slot(NATIVE, STRUCTURE_ASSEMBLY)], frames),
                 avg(windowDraws[slot(RAIL_MODEL, STRUCTURE_ASSEMBLY)], frames),
-                avg(vertexSlots, frames), avg(triangleSlots, frames),
+                avg(vertexSlots, frames), avg(triangleSlots, frames), avg(windowStoredVertices, frames),
                 avg(windowBuilds, frames), avg(windowUploads, frames),
                 avg(windowFirstUploads, frames), avg(windowRefreshUploads, frames),
-                windowVboBytes / frames, windowStagingBytes / frames,
+                windowVboBytes / frames, windowIboBytes / frames, windowStagingBytes / frames,
                 avg(windowRenderTypeSetups, frames), avg(windowShaderBinds, frames),
                 avg(windowProgramSwitches, frames), avg(windowLightChecked, frames),
                 avg(windowLightChanged, frames),
-                drawSlots, vertexSlots, triangleSlots, windowBuilds, windowUploads, windowVboBytes);
+                drawSlots, vertexSlots, triangleSlots, windowBuilds, windowUploads, windowVboBytes, windowIboBytes,
+                path.equals("materialGroups") ? "counted" : "notGrouped",
+                avg(windowRailChunkBatches, frames), avg(windowRailChunkMaterials, frames),
+                avg(windowRailChunkBatches - windowRailChunkMaterials, frames),
+                !gpuTimer.supported() ? "unsupported" : windowGpuSamples == 0 ? "noSamples" : "sampled",
+                windowGpuSamples, windowGpuSamples == 0 ? "n/a" : ms(windowGpu / windowGpuSamples),
+                windowGpuSamples == 0 ? "n/a" : ms(windowMaxGpu));
         resetWindow(now);
     }
 

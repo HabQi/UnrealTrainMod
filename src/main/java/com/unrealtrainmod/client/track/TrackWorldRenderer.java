@@ -39,10 +39,13 @@ public final class TrackWorldRenderer {
         var level = Minecraft.getInstance().level;
         if (level == null || cache.world() != level || (cache.entries.isEmpty() && cache.assemblies.isEmpty())) return;
         RenderSystem.assertOnRenderThread();
-        // The two paths share cached geometry, build and upload budgets; only the material state differs.
+        // All three paths share cached geometry, visibility decisions, build and upload budgets.
         boolean stateCache = ClientConfig.USE_TRACK_RENDER_STATE_CACHE.getAsBoolean();
-        TrackRenderStats stats = TrackRenderStats.begin(level, "world", stateCache ? "stateCache" : "legacy");
+        boolean groupMaterials = stateCache && ClientConfig.GROUP_TRACK_DRAWS_BY_MATERIAL.getAsBoolean();
+        TrackRenderStats stats = TrackRenderStats.begin(level, "world",
+                groupMaterials ? "materialGroups" : stateCache ? "stateCache" : "legacy");
         long stageStart = stats == null ? 0L : System.nanoTime();
+        TrackDrawQueue queue = groupMaterials ? new TrackDrawQueue() : null;
         var previousShader = stateCache ? null : RenderSystem.getShader();
         float[] previousColor = stateCache ? null : RenderSystem.getShaderColor().clone();
         int builds = BUILDS_PER_FRAME, uploads = UPLOADS_PER_FRAME;
@@ -71,7 +74,7 @@ public final class TrackWorldRenderer {
                         builds--;
                         if (stats != null) stats.built(System.nanoTime() - buildStart);
                     }
-                    uploads = draw(stats, state, event, level, camera, modelView, uploads, mesh,
+                    uploads = draw(stats, state, queue, event, level, camera, modelView, uploads, mesh,
                             TrackRenderStats.STRUCTURE_TRACK);
                 }
             }
@@ -104,7 +107,7 @@ public final class TrackWorldRenderer {
                                 group = List.of(mesh); meshes.put(chunk, group); builds--;
                                 if (stats != null) stats.built(System.nanoTime() - buildStart);
                             }
-                            uploads = drawAll(stats, state, event, level, camera, modelView, uploads, group);
+                            uploads = drawAll(stats, state, queue, event, level, camera, modelView, uploads, group);
                         }
                     } else {
                         var group = entry.meshes.get(chunk);
@@ -126,10 +129,12 @@ public final class TrackWorldRenderer {
                             builds--;
                             if (stats != null) stats.built(System.nanoTime() - buildStart);
                         }
-                        uploads = drawAll(stats, state, event, level, camera, modelView, uploads, group);
+                        uploads = drawAll(stats, state, queue, event, level, camera, modelView, uploads, group);
                     }
                 }
             }
+            // Uploads may change GL bindings. Begin grouped submission only after all uploads are done.
+            if (queue != null) queue.draw(state, event.getProjectionMatrix(), stats);
         } finally {
             if (!stateCache) {
                 VertexBuffer.unbind();
@@ -144,17 +149,17 @@ public final class TrackWorldRenderer {
         if (stats != null) stats.logIfDue();
     }
 
-    private static int drawAll(TrackRenderStats stats, TrackRenderState state, RenderLevelStageEvent event,
+    private static int drawAll(TrackRenderStats stats, TrackRenderState state, TrackDrawQueue queue, RenderLevelStageEvent event,
                                ClientLevel level, Vec3 camera, Matrix4f modelView, int uploads,
                                List<TrackRenderMesh> group) {
         for (var mesh : group) {
-            uploads = draw(stats, state, event, level, camera, modelView, uploads, mesh,
+            uploads = draw(stats, state, queue, event, level, camera, modelView, uploads, mesh,
                     TrackRenderStats.STRUCTURE_ASSEMBLY);
         }
         return uploads;
     }
 
-    private static int draw(TrackRenderStats stats, TrackRenderState state, RenderLevelStageEvent event,
+    private static int draw(TrackRenderStats stats, TrackRenderState state, TrackDrawQueue queue, RenderLevelStageEvent event,
                             ClientLevel level, Vec3 camera, Matrix4f modelView, int uploads,
                             TrackRenderMesh mesh, int structure) {
         if (stats != null) stats.candidate();
@@ -174,11 +179,16 @@ public final class TrackWorldRenderer {
         modelView.set(event.getModelViewMatrix()).translate((float)(origin.x() - camera.x),
                 (float)(origin.y() - camera.y), (float)(origin.z() - camera.z));
         long drawStart = stats == null ? 0L : System.nanoTime();
+        if (queue != null) {
+            mesh.enqueue(queue, new Matrix4f(modelView), structure);
+            if (stats != null) stats.grouped(System.nanoTime() - drawStart);
+            return uploads;
+        }
         if (state != null) mesh.draw(state, modelView, event.getProjectionMatrix());
         else mesh.draw(modelView, event.getProjectionMatrix(), stats);
         if (stats != null) {
             stats.drawn(mesh.source(), structure, mesh.drawCalls(), mesh.drawVertices(), mesh.drawTriangles(),
-                    System.nanoTime() - drawStart);
+                    mesh.storedVertices(), System.nanoTime() - drawStart);
         }
         return uploads;
     }
