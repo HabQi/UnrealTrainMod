@@ -18,6 +18,7 @@ import com.unrealtrainmod.train.TrainConsist.StopReason;
 import com.unrealtrainmod.train.map.TrainMapData;
 import com.unrealtrainmod.vehicle.VehicleCatalog;
 import com.unrealtrainmod.vehicle.VehicleDefinition;
+import com.unrealtrainmod.vehicle.VehicleMotionSpec;
 import com.unrealtrainmod.vehicle.VehiclePose;
 import com.unrealtrainmod.vehicle.VehiclePoseSolver;
 import java.util.ArrayList;
@@ -1198,17 +1199,19 @@ public final class TrainManager {
         }
     }
 
-    /** Shared by item interaction and automatic coupling; these are actual body-local coupler positions. */
-    private static TrackVector coupler(TrainEntity entity, double offset) {
-        var local = VehiclePose.Body.rotation(entity.getYRot(), entity.getXRot()).transform(new Vector3f(0, 0, (float) offset));
+    /** Rail-relative coupling reference shared by item interaction and manual/automatic coupling. */
+    private static TrackVector coupler(TrainEntity entity, VehicleMotionSpec spec, TrainCarEnd end) {
+        // Undo the solver's model-origin lift in body space, including its rotation on slopes.
+        var local = VehiclePose.Body.rotation(entity.getYRot(), entity.getXRot())
+                .transform(new Vector3f(0, (float) -spec.trackDatum(), (float) end.offset(spec)));
         return new TrackVector(entity.getX() + local.x, entity.getY() + local.y, entity.getZ() + local.z);
     }
 
     public static TrainCarEnd nearestCoupler(TrainEntity entity, net.minecraft.world.phys.Vec3 position) {
         var model = VehicleCatalog.find(entity.getModelId());
         if (model == null) throw new StateException(StopReason.MISSING_MODEL);
-        var front = coupler(entity, TrainCarEnd.FRONT.offset(model.motionSpec()));
-        var rear = coupler(entity, TrainCarEnd.REAR.offset(model.motionSpec()));
+        var front = coupler(entity, model.motionSpec(), TrainCarEnd.FRONT);
+        var rear = coupler(entity, model.motionSpec(), TrainCarEnd.REAR);
         return distanceSquared(front, position.x, position.y, position.z) <= distanceSquared(rear, position.x, position.y, position.z)
                 ? TrainCarEnd.FRONT : TrainCarEnd.REAR;
     }
@@ -1225,11 +1228,11 @@ public final class TrainManager {
         var pairs = new ArrayList<CouplerPair>(4);
         for (var a : new TrainCarEnd[]{TrainCarEnd.REAR, TrainCarEnd.FRONT}) {
             if (first.peer(reference.getUUID(), a) != null) continue;
-            var point = coupler(reference, a.offset(firstSpec));
+            var point = coupler(reference, firstSpec, a);
             for (var b : new TrainCarEnd[]{TrainCarEnd.REAR, TrainCarEnd.FRONT}) {
                 if (second.peer(other.getUUID(), b) != null
                         || automatic && !reference.isCouplingEnabled(a) && !other.isCouplingEnabled(b)) continue;
-                var peer = coupler(other, b.offset(secondSpec));
+                var peer = coupler(other, secondSpec, b);
                 pairs.add(new CouplerPair(a, b, distanceSquared(point, peer.x(), peer.y(), peer.z())));
             }
         }
