@@ -7,6 +7,7 @@ package com.unrealtrainmod;
 
 import com.unrealtrainmod.client.ClientConfig;
 import com.unrealtrainmod.client.TrainDrivingClient;
+import com.unrealtrainmod.client.TrainPassengerPoseClient;
 import com.unrealtrainmod.client.TrainWalkingClient;
 import com.unrealtrainmod.client.TrainPoseClient;
 import com.unrealtrainmod.client.ClientButtonTextureManager;
@@ -50,6 +51,9 @@ import net.neoforged.neoforge.client.event.RegisterKeyMappingsEvent;
 public class UnrealTrainModClient {
     @SubscribeEvent
     static void registerDrivingKeys(RegisterKeyMappingsEvent event) { TrainDrivingClient.registerKeys(event); }
+
+    @SubscribeEvent
+    static void registerPassengerKeys(RegisterKeyMappingsEvent event) { TrainPassengerPoseClient.registerKeys(event); }
 
     @SubscribeEvent
     static void registerShaders(RegisterShadersEvent event) {
@@ -99,6 +103,11 @@ public class UnrealTrainModClient {
         NeoForge.EVENT_BUS.addListener(TrainWalkingClient::unload);
         NeoForge.EVENT_BUS.addListener(TrainWalkingClient::logout);
         NeoForge.EVENT_BUS.addListener(TrainWalkingClient::clonePlayer);
+        NeoForge.EVENT_BUS.addListener(TrainPassengerPoseClient::tick);
+        NeoForge.EVENT_BUS.addListener(TrainPassengerPoseClient::unload);
+        NeoForge.EVENT_BUS.addListener(TrainPassengerPoseClient::logout);
+        NeoForge.EVENT_BUS.addListener(TrainPassengerPoseClient::clonePlayer);
+        NeoForge.EVENT_BUS.addListener(TrainPassengerPoseClient::render);
         NeoForge.EVENT_BUS.addListener(TrainPoseClient::tick);
         NeoForge.EVENT_BUS.addListener(TrainPoseClient::onFramePre);
         NeoForge.EVENT_BUS.addListener(TrainPoseClient::unload);

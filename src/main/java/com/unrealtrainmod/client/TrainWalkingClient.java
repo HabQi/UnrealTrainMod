@@ -8,6 +8,7 @@ import com.unrealtrainmod.entity.TrainEntity;
 import com.unrealtrainmod.network.TrackSyncEvent;
 import com.unrealtrainmod.network.payload.TrainPassengerStatePayload;
 import com.unrealtrainmod.network.payload.TrainWalkInputPayload;
+import com.unrealtrainmod.train.PassengerPose;
 import com.unrealtrainmod.train.TrainPassengerClientState;
 import com.unrealtrainmod.train.TrainWalkStep;
 import com.unrealtrainmod.vehicle.VehicleCatalog;
@@ -47,7 +48,8 @@ public final class TrainWalkingClient {
         var mc = Minecraft.getInstance();
         if (mc.level == null || !mc.level.dimension().location().equals(incoming.dimension())) return;
         var entry = TrainPassengerClientState.accept(incoming.player(), incoming.vehicle(), incoming.session(),
-                incoming.sequence(), incoming.tick(), incoming.localX(), incoming.localZ(), incoming.present());
+                incoming.sequence(), incoming.tick(), incoming.localX(), incoming.localZ(),
+                incoming.pose(), incoming.heightStep(), incoming.present());
         if (!incoming.present()) {
             if (mc.player != null && mc.player.getUUID().equals(incoming.player())
                     && snapshot != null && snapshot.session().equals(incoming.session())) {
@@ -203,8 +205,10 @@ public final class TrainWalkingClient {
         TrainPassengerClientState.setLocal(mc.player.getUUID(), train.getUUID(), snapshot.session(),
                 predictedX, predictedZ, renderX, renderZ);
         train.positionRider(mc.player);
-        double moved = snapped ? 0 : Math.hypot(renderX - lastRenderX, renderZ - lastRenderZ);
-        mc.player.walkAnimation.update((float) Math.min(moved * 4, 1), 1.0f);
+        if (snapshot.pose() != PassengerPose.LYING) {
+            double moved = snapped ? 0 : Math.hypot(renderX - lastRenderX, renderZ - lastRenderZ);
+            mc.player.walkAnimation.update((float) Math.min(moved * 4, 1), 1.0f);
+        }
         lastRenderX = renderX;
         lastRenderZ = renderZ;
         inputX = inputZ = 0;
@@ -245,8 +249,10 @@ public final class TrainWalkingClient {
             }
             if (player.getVehicle() instanceof TrainEntity train && train.getUUID().equals(entry.vehicle)) {
                 train.positionRider(player);
-                double moved = Math.hypot(entry.renderX - oldX, entry.renderZ - oldZ);
-                player.walkAnimation.update((float) Math.min(moved * 4, 1), 1.0f);
+                if (entry.pose != PassengerPose.LYING) {
+                    double moved = Math.hypot(entry.renderX - oldX, entry.renderZ - oldZ);
+                    player.walkAnimation.update((float) Math.min(moved * 4, 1), 1.0f);
+                }
             }
         }
     }
@@ -254,6 +260,11 @@ public final class TrainWalkingClient {
     private static boolean riding(Minecraft mc) {
         return mc.player != null && mc.player.getVehicle() instanceof TrainEntity train
                 && train.getUUID().equals(snapshot.vehicle());
+    }
+
+    /** Latest synced passenger snapshot, exposed so posture requests stay tied to this session. */
+    static TrainPassengerStatePayload snapshot() {
+        return snapshot;
     }
 
     private static TrainEntity train() {

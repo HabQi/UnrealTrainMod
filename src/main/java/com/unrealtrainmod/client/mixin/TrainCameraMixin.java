@@ -5,6 +5,8 @@
 package com.unrealtrainmod.client.mixin;
 
 import com.unrealtrainmod.entity.TrainEntity;
+import com.unrealtrainmod.train.PassengerPose;
+import com.unrealtrainmod.train.TrainPassengerClientState;
 import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
 import net.minecraft.util.Mth;
@@ -31,6 +33,8 @@ public abstract class TrainCameraMixin {
 
     @Unique private TrainEntity unrealtrainmod$vehicle;
     @Unique private float unrealtrainmod$mountYaw;
+    /** Eye height drop of a lying body along the car's up axis, in blocks. */
+    @Unique private static final float LYING_CAMERA_DROP = 1.4F;
 
     @Inject(method = "setup", at = @At(value = "INVOKE",
             target = "Lnet/minecraft/client/Camera;setPosition(DDD)V", shift = At.Shift.AFTER))
@@ -52,7 +56,13 @@ public abstract class TrainCameraMixin {
         var bodyRotation = body.rotation();
         // Preserve vanilla eye-height smoothing, but place the eyes along the car's own up axis.
         var eyeOffset = getPosition().subtract(entity.getPosition(partialTick));
-        var eyes = bodyRotation.transform(new Vector3f((float) eyeOffset.x, (float) eyeOffset.y, (float) eyeOffset.z));
+        var eyes = new Vector3f((float) eyeOffset.x, (float) eyeOffset.y, (float) eyeOffset.z);
+        // A lying passenger's eyes drop with the body; the render offset itself belongs to the renderer.
+        var state = TrainPassengerClientState.entry(entity.getUUID());
+        if (state != null && state.pose == PassengerPose.LYING && train.getUUID().equals(state.vehicle)) {
+            eyes.y += -LYING_CAMERA_DROP + state.heightStep * PassengerPose.STEP_HEIGHT;
+        }
+        bodyRotation.transform(eyes);
         setPosition(train.renderPassengerPosition(Minecraft.getInstance().player, body, partialTick)
                 .add(eyes.x, eyes.y, eyes.z));
 

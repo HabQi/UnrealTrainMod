@@ -6,6 +6,7 @@ package com.unrealtrainmod.train;
 
 import com.unrealtrainmod.UnrealTrainMod;
 import com.unrealtrainmod.entity.TrainEntity;
+import com.unrealtrainmod.network.payload.TrainPassengerPosePayload;
 import com.unrealtrainmod.network.payload.TrainPassengerStatePayload;
 import com.unrealtrainmod.network.payload.TrainWalkInputPayload;
 import com.unrealtrainmod.track.geometry.TrackVector;
@@ -21,6 +22,7 @@ import java.util.UUID;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.util.Mth;
 import net.minecraft.world.entity.Entity;
 import net.neoforged.neoforge.network.PacketDistributor;
 import net.neoforged.neoforge.network.handling.IPayloadContext;
@@ -108,6 +110,29 @@ public final class TrainPassengerManager {
     public static void handleInput(TrainWalkInputPayload payload, IPayloadContext context) {
         if (context.player() instanceof ServerPlayer player) {
             TrainManager.get(player.serverLevel()).passengers().input(player, payload);
+        }
+    }
+
+    public static void handlePose(TrainPassengerPosePayload payload, IPayloadContext context) {
+        if (context.player() instanceof ServerPlayer player) {
+            TrainManager.get(player.serverLevel()).passengers().pose(player, payload);
+        }
+    }
+
+    /** Posture is session state; a height change only ever applies one bounded step while lying. */
+    private void pose(ServerPlayer player, TrainPassengerPosePayload payload) {
+        if (payload.heightStepDelta() < -1 || payload.heightStepDelta() > 1) return;
+        var session = sessions.get(player.getUUID());
+        if (session == null || session.player != player || !session.session.equals(payload.session())
+                || !valid(session)) return;
+        if (payload.heightStepDelta() == 0) {
+            session.pose = payload.pose();
+            if (session.pose == PassengerPose.LYING) {
+                session.heightStep = Math.max(session.heightStep, PassengerPose.LYING_MIN_HEIGHT_STEP);
+            }
+        } else if (session.pose == PassengerPose.LYING && payload.pose() == PassengerPose.LYING) {
+            session.heightStep = Mth.clamp(session.heightStep + payload.heightStepDelta(),
+                    PassengerPose.LYING_MIN_HEIGHT_STEP, PassengerPose.MAX_HEIGHT_STEP);
         }
     }
 
@@ -230,7 +255,7 @@ public final class TrainPassengerManager {
     private TrainPassengerStatePayload payload(TrainPassengerSession session, boolean present) {
         return new TrainPassengerStatePayload(session.player.getUUID(), session.vehicle, level.dimension().location(),
                 session.session, present, session.appliedSequence, level.getGameTime(),
-                session.localX, session.localZ);
+                session.localX, session.localZ, session.pose, session.heightStep);
     }
 
     private List<TrainPassengerSession> sessionsFor(TrainEntity entity) {

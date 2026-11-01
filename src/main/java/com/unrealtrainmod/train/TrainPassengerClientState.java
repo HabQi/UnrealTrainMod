@@ -30,8 +30,11 @@ public final class TrainPassengerClientState {
         public double renderX;
         public double renderZ;
         public int idle;
+        public PassengerPose pose = PassengerPose.STANDING;
+        public int heightStep;
 
-        private Entry(UUID player, UUID vehicle, UUID session, long sequence, long tick, double x, double z) {
+        private Entry(UUID player, UUID vehicle, UUID session, long sequence, long tick, double x, double z,
+                      PassengerPose pose, int heightStep) {
             this.player = player;
             this.vehicle = vehicle;
             this.session = session;
@@ -41,6 +44,8 @@ public final class TrainPassengerClientState {
             this.targetZ = z;
             this.prevRenderX = this.renderX = x;
             this.prevRenderZ = this.renderZ = z;
+            this.pose = pose;
+            this.heightStep = heightStep;
         }
     }
 
@@ -48,7 +53,7 @@ public final class TrainPassengerClientState {
 
     /** Returns the accepted entry, or null when the snapshot is stale or marks a removal. */
     public static Entry accept(UUID player, UUID vehicle, UUID session, long sequence, long tick,
-                               double x, double z, boolean present) {
+                               double x, double z, PassengerPose pose, int heightStep, boolean present) {
         var current = ENTRIES.get(player);
         if (!present) {
             if (current != null && current.vehicle.equals(vehicle) && current.session.equals(session)) {
@@ -64,7 +69,7 @@ public final class TrainPassengerClientState {
             }
         }
         if (current == null || !current.session.equals(session)) {
-            current = new Entry(player, vehicle, session, sequence, tick, x, z);
+            current = new Entry(player, vehicle, session, sequence, tick, x, z, pose, heightStep);
             ENTRIES.put(player, current);
             return current;
         }
@@ -72,6 +77,8 @@ public final class TrainPassengerClientState {
         current.tick = tick;
         current.targetX = x;
         current.targetZ = z;
+        current.pose = pose;
+        current.heightStep = heightStep;
         if (Math.hypot(x - current.renderX, z - current.renderZ) > 1.5) {
             current.renderX = x;
             current.renderZ = z;
@@ -121,6 +128,7 @@ public final class TrainPassengerClientState {
 
     public static Collection<Entry> entries() { return ENTRIES.values(); }
 
+    public static Entry entry(UUID player) { return ENTRIES.get(player); }
     public static void remove(UUID player) { ENTRIES.remove(player); }
     public static void clear() { ENTRIES.clear(); }
 }

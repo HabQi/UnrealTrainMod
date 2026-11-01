@@ -19,6 +19,8 @@ final class TrainPassengerSession {
     int inputAge = Integer.MAX_VALUE;
     float inputX;
     float inputZ;
+    PassengerPose pose = PassengerPose.STANDING;
+    int heightStep;
     /** Set while vanilla is still choosing the dismount position, so the personal local point remains readable. */
     boolean exiting;
 
