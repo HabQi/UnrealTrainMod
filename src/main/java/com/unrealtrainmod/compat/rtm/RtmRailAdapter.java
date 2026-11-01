@@ -13,6 +13,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonPrimitive;
 import com.unrealtrainmod.UnrealTrainMod;
 import com.unrealtrainmod.model.ModelData;
+import com.unrealtrainmod.model.MqoModelInput;
 import com.unrealtrainmod.model.importer.ModelImporter;
 import com.unrealtrainmod.resource.LoadReport;
 import com.unrealtrainmod.resource.PackageArchive;
@@ -27,7 +28,6 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.util.GsonHelper;
@@ -62,8 +62,8 @@ final class RtmRailAdapter {
             }
             JsonObject model = object(json.get("model"), "model");
             String modelFile = string(model.get("modelFile"), "model.modelFile");
-            if (!modelFile.toLowerCase(Locale.ROOT).endsWith(".mqo")) {
-                throw new IOException("model.modelFile: only text MQO models are supported: " + modelFile);
+            if (!MqoModelInput.isSupported(modelFile)) {
+                throw new IOException("model.modelFile: only text MQO or MQOZ models are supported: " + modelFile);
             }
             PackageAsset asset = asset(archive, prefix, "minecraft:models/" + modelFile, "model.modelFile");
             Map<String, RailDefinition.Texture> textures = textures(model, archive, prefix);
@@ -94,7 +94,7 @@ final class RtmRailAdapter {
         if (data != null) return data;
         IOException previous = failedModels.get(asset);
         if (previous != null) throw new IOException("model.modelFile: previous MQO parsing failed for " + asset.entry(), previous);
-        try (var input = archive.open(asset.entry())) {
+        try (var input = MqoModelInput.open(archive.open(asset.entry()), asset.entry())) {
             data = ModelImporter.parseMqo(input);
         } catch (IOException | RuntimeException exception) {
             var failure = new IOException("model.modelFile " + asset.entry() + ": " + exception.getMessage(), exception);

@@ -12,6 +12,7 @@ import com.unrealtrainmod.model.ModelTexture;
 import com.unrealtrainmod.compat.ir.IrModelLoader;
 import com.unrealtrainmod.model.ModelData;
 import com.unrealtrainmod.model.ModelMesh;
+import com.unrealtrainmod.model.MqoModelInput;
 import com.unrealtrainmod.model.MqoParser;
 import java.io.IOException;
 import java.io.InputStream;
@@ -39,7 +40,7 @@ public final class ModelImporter {
             model = imported.model();
             bindings = imported.textures();
         } else {
-            try (var input = source.model().open()) {
+            try (var input = MqoModelInput.open(source.model().open(), source.model().entry())) {
                 model = parseMqo(input);
             }
             bindings = source.textures();

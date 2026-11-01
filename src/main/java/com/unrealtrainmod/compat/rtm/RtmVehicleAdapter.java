@@ -12,6 +12,7 @@ import com.unrealtrainmod.model.ModelBounds;
 import com.unrealtrainmod.model.ModelData;
 import com.unrealtrainmod.model.ModelSource;
 import com.unrealtrainmod.model.ModelTexture;
+import com.unrealtrainmod.model.MqoModelInput;
 import com.unrealtrainmod.model.MqoParser;
 import com.unrealtrainmod.resource.LoadReport;
 import com.unrealtrainmod.resource.PackageArchive;
@@ -30,7 +31,6 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.util.GsonHelper;
@@ -105,7 +105,7 @@ final class RtmVehicleAdapter {
         var asset = source.model();
         var bounds = boundsCache.get(asset);
         if (bounds == null) {
-            try (var input = archive.open(asset.entry())) {
+            try (var input = MqoModelInput.open(archive.open(asset.entry()), asset.entry())) {
                 bounds = MqoParser.scanBounds(input, StandardCharsets.UTF_8, ModelSource.MQO_SCALE);
             }
             boundsCache.put(asset, bounds);
@@ -267,7 +267,9 @@ final class RtmVehicleAdapter {
                                                   boolean smoothing, boolean cullFaces) throws IOException {
         if (json == null) throw new IOException("Missing model source");
         String model = GsonHelper.getAsString(json, "modelFile");
-        if (!model.toLowerCase(Locale.ROOT).endsWith(".mqo")) throw new IOException("Only text MQO models are supported: " + model);
+        if (!MqoModelInput.isSupported(model)) {
+            throw new IOException("Only text MQO or MQOZ models are supported: " + model);
+        }
         var asset = archive.resolve(prefix, "minecraft:models/" + model);
         PackageAsset renderer = null;
         if (json.has("rendererPath")) {
