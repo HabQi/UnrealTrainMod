@@ -22,7 +22,7 @@ import org.joml.Quaternionf;
  * static fallback. Commands are only submitted after the script returns successfully.
  */
 final class ScriptDrawContext {
-    private record Command(PartSelection selection, PoseStack.Pose pose) {}
+    private record Command(PartSelection selection, PoseStack.Pose pose, int light, boolean directionalLighting) {}
 
     private final ModelRenderQueue queue;
     private final LoadedModel.Source source;
@@ -34,12 +34,15 @@ final class ScriptDrawContext {
     private final List<Command> commands = new ArrayList<>();
     private final Map<String, PartSelection> resolved = new HashMap<>();
     private int depth;
+    private int light;
+    private boolean directionalLighting = true;
 
-    ScriptDrawContext(ModelRenderQueue queue, LoadedModel.Source source, PoseStack pose, String modelLabel) {
+    ScriptDrawContext(ModelRenderQueue queue, LoadedModel.Source source, PoseStack pose, int light, String modelLabel) {
         this.queue = queue;
         this.source = source;
         this.pose = pose;
         this.modelLabel = modelLabel;
+        this.light = light;
         entryPose = new Matrix4f(pose.last().pose());
         entryNormal = new Matrix3f(pose.last().normal());
     }
@@ -69,13 +72,17 @@ final class ScriptDrawContext {
 
     void scale(float x, float y, float z) { pose.scale(x, y, z); }
 
+    void brightness(int value) { light = value; }
+
+    void directionalLighting(boolean value) { directionalLighting = value; }
+
     void draw(List<String> names) {
         PoseStack.Pose snapshot = null;
         for (String name : names) {
             var selection = selection(name);
             if (selection == null) continue;
             if (snapshot == null) snapshot = pose.last().copy();
-            commands.add(new Command(selection, snapshot));
+            commands.add(new Command(selection, snapshot, light, directionalLighting));
         }
     }
 
@@ -100,8 +107,10 @@ final class ScriptDrawContext {
         return selection;
     }
 
-    void submit(int light) {
-        for (var command : commands) queue.submitGeometry(source, command.selection(), command.pose(), light);
+    void submit() {
+        for (var command : commands) {
+            queue.submitGeometry(source, command.selection(), command.pose(), command.light(), command.directionalLighting());
+        }
     }
 
     /**

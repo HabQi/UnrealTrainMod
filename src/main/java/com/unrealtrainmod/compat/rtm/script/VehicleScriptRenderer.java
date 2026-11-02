@@ -29,6 +29,20 @@ public final class VehicleScriptRenderer extends RtmPartsRenderer {
 
     public float getWheelRotationR(Object entity) { return wheelRotation; }
 
+    public int getTick(RtmVehicleView entity) { return entity == null ? 0 : entity.tick(); }
+
+    public void rotate(float angle, char axis, float x, float y, float z) {
+        if (context == null) throw new IllegalStateException("renderer.rotate outside a vehicle script render");
+        context.translate(x, y, z);
+        switch (axis) {
+            case 'X' -> context.rotate(angle, 1, 0, 0);
+            case 'Y' -> context.rotate(angle, 0, 1, 0);
+            case 'Z' -> context.rotate(angle, 0, 0, 1);
+            default -> { }
+        }
+        context.translate(-x, -y, -z);
+    }
+
     public float getWheelRotationL(Object entity) { return wheelRotation; }
 
     /** Raw RTM progress in {@code 0.0..1.0}; the configuration renderer applies its own easing. */

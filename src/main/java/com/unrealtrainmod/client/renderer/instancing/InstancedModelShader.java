@@ -35,13 +35,14 @@ public final class InstancedModelShader {
             event.registerShader(new ShaderInstance(event.getResourceProvider(),
                     ClientModelManager.id("instanced_model"), StaticModelShader.FORMAT), loaded -> {
                 Uniform overlay = loaded.getUniform("OverlayUV"), alphaPass = loaded.getUniform("AlphaPass");
+                Uniform directional = loaded.getUniform("DirectionalLighting");
                 int[] attributes = attributeLocations(loaded);
-                if (overlay == null || alphaPass == null || attributes == null) {
+                if (overlay == null || alphaPass == null || directional == null || attributes == null) {
                     LOGGER.error("Instanced model shader is missing required uniforms or instance attributes; "
                             + "using normal vehicle rendering");
                 } else {
                     // Minecraft owns and closes the shader program; keep only the registered callback's instance.
-                    state = new State(loaded, overlay, alphaPass, attributes);
+                    state = new State(loaded, overlay, alphaPass, directional, attributes);
                 }
             });
         } catch (IOException e) {
@@ -80,11 +81,13 @@ public final class InstancedModelShader {
         return locations;
     }
 
-    public record State(ShaderInstance shader, Uniform overlay, Uniform alphaPass, int[] attributes) {
+    public record State(ShaderInstance shader, Uniform overlay, Uniform alphaPass,
+                        Uniform directionalLighting, int[] attributes) {
         /** Batch-level values; matrices and light come from the instance attributes. */
-        public void prepare(int pass) {
+        public void prepare(int pass, boolean directional) {
             overlay.set(OverlayTexture.NO_OVERLAY & 0xffff, OverlayTexture.NO_OVERLAY >>> 16 & 0xffff);
             alphaPass.set(pass);
+            directionalLighting.set(directional ? 1 : 0);
         }
     }
 }

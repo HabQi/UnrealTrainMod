@@ -21,6 +21,13 @@ public final class ScriptDiagnostics {
         if (REPORTED.add(api)) LOGGER.warn("RTM script API {} is not replayed; {}", api, fallback);
     }
 
+    public static void temporaryAnnouncement(PackageAsset script) {
+        if (REPORTED.add("announcement|" + script)) LOGGER.warn(
+                "RTM script {}!{} reads State_Announcement (9): using temporary value 1; "
+                        + "vehicle state control, synchronisation and persistence are not implemented",
+                script.archive(), script.entry());
+    }
+
     /** A registered name that matches no prepared model part. Reported once per model and name. */
     public static void missingPart(String model, String name) {
         String key = "part|" + model + "|" + name;

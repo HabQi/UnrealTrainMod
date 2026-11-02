@@ -33,13 +33,22 @@ public final class RtmScript {
             "var __UTM_GL11 = Java.type('com.unrealtrainmod.compat.rtm.script.GL11');",
             "var GL11 = __UTM_GL11;",
             "var __UTM_RailDir = Java.type('com.unrealtrainmod.compat.rtm.script.RailDir');",
-            "var RailDir = __UTM_RailDir;");
+            "var RailDir = __UTM_RailDir;",
+            "var __UTM_GLHelper = Java.type('com.unrealtrainmod.compat.rtm.script.GLHelper');",
+            "var GLHelper = __UTM_GLHelper;",
+            "var __UTM_TrainState = Java.type('com.unrealtrainmod.compat.rtm.script.RtmTrainState');",
+            "var TrainState = __UTM_TrainState;",
+            "var __UTM_RTMCore = Java.type('com.unrealtrainmod.compat.rtm.script.RtmCore');",
+            "var RTMCore = __UTM_RTMCore;");
 
     /** Fully qualified legacy type and the pre-injected alias that implements the same subset. */
     private static final String[][] REWRITES = {
             {"org.lwjgl.opengl.GL11", "__UTM_GL11"},
             {"jp.ngt.rtm.render.Parts", "__UTM_Parts"},
             {"jp.ngt.rtm.rail.util.RailDir", "__UTM_RailDir"},
+            {"jp.ngt.ngtlib.renderer.GLHelper", "__UTM_GLHelper"},
+            {"jp.ngt.rtm.entity.train.util.TrainState", "__UTM_TrainState"},
+            {"jp.ngt.rtm.RTMCore", "__UTM_RTMCore"},
     };
     private static final String PACKAGES = "Packages.";
 

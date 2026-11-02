@@ -17,9 +17,9 @@ public final class GL11 {
 
     static void detach() { CURRENT.remove(); }
 
-    private static ScriptDrawContext current() {
+    static ScriptDrawContext current() {
         var context = CURRENT.get();
-        if (context == null) throw new IllegalStateException("GL11 matrix call outside a script render context");
+        if (context == null) throw new IllegalStateException("RTM GL call outside a script render context");
         return context;
     }
 

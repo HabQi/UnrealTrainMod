@@ -18,7 +18,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.regex.Pattern;
 
-/** Minimal text MQO importer. Unsupported geometry modifiers fail explicitly. */
+/** Minimal text MQO importer. Editor visibility is ignored; unsupported geometry modifiers fail explicitly. */
 public final class MqoParser {
     private static final Pattern CODE_PAGE = Pattern.compile("(?im)^[ \\t]*CodePage[ \\t]+([\\w-]+)");
     private static final int MAX_COUNT = 2_000_000;
@@ -35,7 +35,7 @@ public final class MqoParser {
         return parse(openReader(input, fallback));
     }
 
-    /** Scans visible vertices without retaining faces or constructing rendering geometry. */
+    /** Scans all object vertices without retaining faces or constructing rendering geometry. */
     public static ModelBounds scanBounds(InputStream input, Charset fallback, float scale) throws IOException {
         if (!Float.isFinite(scale) || scale <= 0) throw new IOException("Model scale must be positive");
         var parser = new MqoParser(openReader(input, fallback));
@@ -44,7 +44,7 @@ public final class MqoParser {
         try {
             parser.readModel();
             var bounds = parser.scannedBounds.build();
-            if (bounds == null) throw parser.error("MQO contains no visible vertices");
+            if (bounds == null) throw parser.error("MQO contains no vertices");
             return bounds;
         } catch (IllegalArgumentException | IndexOutOfBoundsException e) {
             throw parser.error("Invalid number or incomplete record: " + e.getMessage());
@@ -146,7 +146,7 @@ public final class MqoParser {
     private ModelData.Part readPart(List<String> header) throws IOException {
         requireBlock(header);
         String name = value(header.get(1));
-        boolean visible = true, smooth = false;
+        boolean smooth = false;
         float facet = 59.5f;
         List<ModelData.Position> vertices = new ArrayList<>();
         List<ModelData.Face> faces = new ArrayList<>();
@@ -158,13 +158,14 @@ public final class MqoParser {
                     for (var face : faces) for (int index : face.indices()) {
                         if (index < 0 || index >= vertices.size()) throw error("Vertex index out of range in " + name);
                     }
-                    if (scannedBounds != null && visible) {
+                    if (scannedBounds != null) {
                         var bounds = partBounds.build();
                         if (bounds != null) scannedBounds.include(bounds);
                     }
-                    return new ModelData.Part(name, visible, smooth, facet, vertices, faces);
+                    return new ModelData.Part(name, true, smooth, facet, vertices, faces);
                 }
-                case "visible" -> visible = !line.get(1).equals("0");
+                // RTM models may hide required geometry in the editor; load every object by default.
+                case "visible" -> { }
                 case "shading" -> smooth = !line.get(1).equals("0");
                 case "facet" -> facet = number(line.get(1));
                 case "scale", "rotation", "translation" -> {

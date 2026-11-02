@@ -69,8 +69,34 @@ final class RtmVehicleAdapter {
             parts.add(readPart(readSource(json.getAsJsonObject("trainModel2"), archive,
                     prefix, smoothing, cullFaces), new ModelData.Position(0, 0, 0), VehiclePartRole.BODY, archive,
                     actions));
-            var bogiePositions = readBogiePositions(json);
-            if (json.has("bogieModel2")) {
+            List<ModelData.Position> bogiePositions;
+            try {
+                bogiePositions = readBogiePositions(json);
+            } catch (IOException | RuntimeException exception) {
+                throw new IOException(name + " bogiePos: " + exception.getMessage(), exception);
+            }
+            if (json.has("bogieModel3")) {
+                var configured = json.get("bogieModel3");
+                if (!configured.isJsonArray() || configured.getAsJsonArray().size() != 2) {
+                    throw configError(name, "bogieModel3", "must contain two model objects");
+                }
+                if (bogiePositions.isEmpty()) throw configError(name, "bogieModel3", "requires bogiePos");
+                var bogies = configured.getAsJsonArray();
+                float frontZ = Math.max(bogiePositions.get(0).z(), bogiePositions.get(1).z());
+                for (int i = 0; i < bogies.size(); i++) {
+                    String field = "bogieModel3[" + i + "]";
+                    if (!bogies.get(i).isJsonObject()) throw configError(name, field, "must be a model object");
+                    var position = bogiePositions.get(i);
+                    try {
+                        var bogie = readSource(bogies.get(i).getAsJsonObject(), archive, prefix, smoothing, cullFaces);
+                        parts.add(readPart(bogie, position, position.z() == frontZ
+                                ? VehiclePartRole.FRONT_BOGIE : VehiclePartRole.REAR_BOGIE, archive,
+                                VehicleActions.NONE));
+                    } catch (IOException | RuntimeException exception) {
+                        throw new IOException(name + " " + field + ": " + exception.getMessage(), exception);
+                    }
+                }
+            } else if (json.has("bogieModel2")) {
                 var bogie = readSource(json.getAsJsonObject("bogieModel2"), archive, prefix, smoothing, cullFaces);
                 if (bogiePositions.isEmpty()) throw new IOException("bogieModel2 requires bogiePos");
                 float frontZ = Math.max(bogiePositions.get(0).z(), bogiePositions.get(1).z());

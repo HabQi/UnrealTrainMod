@@ -34,7 +34,8 @@ import org.joml.Vector3f;
 
 /** One world view or one preview. No per-triangle objects and no vertex uploads on the normal GPU path. */
 public final class ModelRenderQueue implements AutoCloseable {
-    private record Draw(RenderBatch batch, GpuModel.Part gpu, PoseStack.Pose pose, int light) {}
+    private record Draw(RenderBatch batch, GpuModel.Part gpu, PoseStack.Pose pose, int light,
+                        boolean directionalLighting) {}
     private static final class InstanceGroup {
         private final List<Draw> draws = new ArrayList<>();
         private int startInstance;
@@ -103,6 +104,12 @@ public final class ModelRenderQueue implements AutoCloseable {
 
     /** Records an already captured pose so script commands can be discarded until the script succeeds. */
     public void submitGeometry(LoadedModel.Source source, PartSelection selection, PoseStack.Pose pose, int light) {
+        submitGeometry(source, selection, pose, light, true);
+    }
+
+    /** Script lighting is captured per draw; existing geometry submissions keep directional lighting. */
+    public void submitGeometry(LoadedModel.Source source, PartSelection selection, PoseStack.Pose pose, int light,
+                               boolean directionalLighting) {
         RenderSystem.assertOnRenderThread();
         var frameStats = statistics();
         long enqueueStart = frameStats == null ? 0L : System.nanoTime();
@@ -115,7 +122,8 @@ public final class ModelRenderQueue implements AutoCloseable {
         var snapshot = pose.copy();
         var gpu = source.gpu();
         for (var batch : selection.batches()) {
-            draws.add(new Draw(batch, customShader && gpu != null ? gpu.part(batch) : null, snapshot, light));
+            draws.add(new Draw(batch, customShader && gpu != null ? gpu.part(batch) : null, snapshot, light,
+                    directionalLighting));
         }
         if (frameStats != null) frameStats.addEnqueue(System.nanoTime() - enqueueStart);
     }
@@ -164,7 +172,7 @@ public final class ModelRenderQueue implements AutoCloseable {
                 alphaPass == StaticModelShader.FORCE_OPAQUE), false, batch.doubleSided());
         if (draw.gpu() != null) {
             var part = draw.gpu();
-            state.prepareGpu(draw.pose(), draw.light(), alphaPass, modelView, projection);
+            state.prepareGpu(draw.pose(), draw.light(), alphaPass, draw.directionalLighting(), modelView, projection);
             part.mesh().draw(false, part.firstIndex(), batch.indexCount());
             if (collectStats) stats.gpuDraw(batch.indexCount());
         } else {
@@ -248,7 +256,7 @@ public final class ModelRenderQueue implements AutoCloseable {
         int alphaPass = batch.alphaPass(false);
         state.use(ModelRenderTypes.get(batch.texture(), batch.doubleSided(), false,
                 alphaPass == StaticModelShader.FORCE_OPAQUE), false, batch.doubleSided());
-        state.prepareInstanced(alphaPass, modelView, projection);
+        state.prepareInstanced(alphaPass, first.directionalLighting(), modelView, projection);
         var part = first.gpu();
         instancedMeshes.put(part.mesh(), Boolean.TRUE);
         part.mesh().drawInstanced(part.firstIndex(), batch.indexCount(), instanceBuffer.handle(),
@@ -260,7 +268,7 @@ public final class ModelRenderQueue implements AutoCloseable {
         var part = draw.gpu();
         var batch = draw.batch();
         return new InstanceBatchKey(part.mesh(), part.firstIndex(), batch.indexCount(), batch.texture(),
-                batch.doubleSided(), batch.alphaPass(false));
+                batch.doubleSided(), batch.alphaPass(false), draw.directionalLighting());
     }
 
     private boolean drawsOpaque(Draw draw) {
@@ -315,7 +323,7 @@ public final class ModelRenderQueue implements AutoCloseable {
                 int alphaPass = draw.batch().alphaPass(true);
                 state.use(ModelRenderTypes.get(draw.batch().texture(), draw.batch().doubleSided(), true, false), true, draw.batch().doubleSided());
                 if (draw.gpu() != null) {
-                    state.prepareGpu(draw.pose(), draw.light(), alphaPass, modelView, projection);
+                    state.prepareGpu(draw.pose(), draw.light(), alphaPass, draw.directionalLighting(), modelView, projection);
                     draw.gpu().mesh().draw(true, gpuOffset[start], (end - start) * 3);
                 } else {
                     state.endGpu();
@@ -354,7 +362,7 @@ public final class ModelRenderQueue implements AutoCloseable {
                 state.use(ModelRenderTypes.get(draw.batch().texture(), draw.batch().doubleSided(), true, false),
                         true, draw.batch().doubleSided());
                 if (draw.gpu() != null) {
-                    state.prepareGpu(draw.pose(), draw.light(), alphaPass, modelView, projection);
+                    state.prepareGpu(draw.pose(), draw.light(), alphaPass, draw.directionalLighting(), modelView, projection);
                     draw.gpu().mesh().draw(false, draw.gpu().firstIndex(), count);
                 } else {
                     state.endGpu();
@@ -371,6 +379,7 @@ public final class ModelRenderQueue implements AutoCloseable {
         if (first == next) return true;
         return first.gpu() != null && next.gpu() != null && first.gpu().mesh() == next.gpu().mesh()
                 && first.pose() == next.pose() && first.light() == next.light()
+                && first.directionalLighting() == next.directionalLighting()
                 && first.batch().alphaPass(true) == next.batch().alphaPass(true)
                 && first.batch().doubleSided() == next.batch().doubleSided()
                 && first.batch().texture().equals(next.batch().texture());
@@ -459,8 +468,12 @@ public final class ModelRenderQueue implements AutoCloseable {
                     float py = matrix.m01() * x + matrix.m11() * y + matrix.m21() * z + matrix.m31();
                     z = matrix.m02() * x + matrix.m12() * y + matrix.m22() * z + matrix.m32();
                     x = px; y = py;
-                    draw.pose().transformNormal(nx, ny, nz, normal);
-                    nx = normal.x; ny = normal.y; nz = normal.z;
+                    if (draw.directionalLighting()) {
+                        draw.pose().transformNormal(nx, ny, nz, normal);
+                        nx = normal.x; ny = normal.y; nz = normal.z;
+                    } else {
+                        nx = 0; ny = 0; nz = 1;
+                    }
                 }
                 builder.addVertex(x, y, z, colors[v], vertices[i + 3], vertices[i + 4],
                         OverlayTexture.NO_OVERLAY, draw.light(), nx, ny, nz);
@@ -469,17 +482,20 @@ public final class ModelRenderQueue implements AutoCloseable {
         var shader = RenderSystem.getShader();
         if (customShader) {
             var custom = StaticModelShader.state();
-            custom.prepare(draw.pose(), draw.light(), alphaPass);
+            custom.prepare(draw.pose(), draw.light(), alphaPass, draw.directionalLighting());
             shader = custom.shader();
         }
         shader.setDefaultUniforms(VertexFormat.Mode.TRIANGLES, modelView, projection, Minecraft.getInstance().getWindow());
-        state.setupLights(shader);
         try {
+            state.setupLights(shader, customShader || draw.directionalLighting());
             shader.apply();
             BufferUploader.draw(builder.buildOrThrow());
         } finally {
-            shader.clear();
-            state.restoreLights(shader);
+            try {
+                shader.clear();
+            } finally {
+                state.restoreLights(shader, customShader || draw.directionalLighting());
+            }
         }
     }
 

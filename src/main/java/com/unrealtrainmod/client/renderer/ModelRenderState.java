@@ -43,6 +43,7 @@ final class ModelRenderState implements AutoCloseable {
     private PoseStack.Pose gpuPose;
     private int gpuLight, gpuPass;
     private int instancedPass = -1;
+    private boolean gpuDirectionalLighting, instancedDirectionalLighting;
     private ShaderInstance lastGpuShader;
     private int shaderBinds, shaderSwitches;
     private boolean texturesDirty;
@@ -79,11 +80,12 @@ final class ModelRenderState implements AutoCloseable {
     }
 
     /** RenderTypes select engine shaders but do not bind a GL program; keep our shader across texture changes. */
-    void prepareGpu(PoseStack.Pose pose, int light, int pass, Matrix4f modelView, Matrix4f projection) {
+    void prepareGpu(PoseStack.Pose pose, int light, int pass, boolean directionalLighting,
+                    Matrix4f modelView, Matrix4f projection) {
         if (boundShader != custom.shader()) {
             // A previous instanced segment owns a different program; rebind this shader's common state.
             endGpu();
-            custom.prepare(pose, light, pass);
+            custom.prepare(pose, light, pass, directionalLighting);
             custom.shader().setDefaultUniforms(VertexFormat.Mode.TRIANGLES, modelView, projection,
                     Minecraft.getInstance().getWindow());
             setupLights(custom.shader());
@@ -106,18 +108,23 @@ final class ModelRenderState implements AutoCloseable {
                 custom.alphaPass().set(pass);
                 custom.alphaPass().upload();
             }
+            if (gpuDirectionalLighting != directionalLighting) {
+                custom.directionalLighting().set(directionalLighting ? 1 : 0);
+                custom.directionalLighting().upload();
+            }
         }
         gpuPose = pose;
         gpuLight = light;
         gpuPass = pass;
+        gpuDirectionalLighting = directionalLighting;
         texturesDirty = false;
     }
 
-    /** Instance matrices and light come from the instance buffer; only the alpha pass changes per batch. */
-    void prepareInstanced(int pass, Matrix4f modelView, Matrix4f projection) {
+    /** Instance matrices and light come from the buffer; alpha and directional lighting belong to the batch. */
+    void prepareInstanced(int pass, boolean directionalLighting, Matrix4f modelView, Matrix4f projection) {
         if (boundShader != instanced.shader()) {
             endGpu();
-            instanced.prepare(pass);
+            instanced.prepare(pass, directionalLighting);
             instanced.shader().setDefaultUniforms(VertexFormat.Mode.TRIANGLES, modelView, projection,
                     Minecraft.getInstance().getWindow());
             setupLights(instanced.shader());
@@ -131,7 +138,12 @@ final class ModelRenderState implements AutoCloseable {
                 instanced.alphaPass().upload();
                 instancedPass = pass;
             }
+            if (instancedDirectionalLighting != directionalLighting) {
+                instanced.directionalLighting().set(directionalLighting ? 1 : 0);
+                instanced.directionalLighting().upload();
+            }
         }
+        instancedDirectionalLighting = directionalLighting;
         texturesDirty = false;
     }
 
@@ -168,13 +180,22 @@ final class ModelRenderState implements AutoCloseable {
     }
 
     void setupLights(ShaderInstance shader) {
-        if (!frontLighting) return;
+        setupLights(shader, true);
+    }
+
+    /** Fixed +Z normals in the vanilla fallback pair with these lights to remove directional shading. */
+    void setupLights(ShaderInstance shader, boolean directionalLighting) {
+        if (!frontLighting && directionalLighting) return;
         if (shader.LIGHT0_DIRECTION != null) shader.LIGHT0_DIRECTION.set(FRONT_LIGHT);
         if (shader.LIGHT1_DIRECTION != null) shader.LIGHT1_DIRECTION.set(FRONT_LIGHT);
     }
 
     void restoreLights(ShaderInstance shader) {
-        if (frontLighting) RenderSystem.setupShaderLights(shader);
+        restoreLights(shader, true);
+    }
+
+    void restoreLights(ShaderInstance shader, boolean directionalLighting) {
+        if (frontLighting || !directionalLighting) RenderSystem.setupShaderLights(shader);
     }
 
     @Override

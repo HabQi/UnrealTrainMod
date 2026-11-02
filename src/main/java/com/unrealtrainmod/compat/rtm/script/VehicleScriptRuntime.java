@@ -35,6 +35,7 @@ public final class VehicleScriptRuntime implements AutoCloseable {
     private final VehiclePartRole role;
     private final RtmScriptSource.Prepared prepared;
     private final String label;
+    private final RtmVehicleView vehicleView;
     private boolean failed;
     private boolean hasPosition;
     private double lastX, lastY, lastZ, distance;
@@ -43,13 +44,14 @@ public final class VehicleScriptRuntime implements AutoCloseable {
     private float lastPartialTick = -1.0f;
 
     private VehicleScriptRuntime(ScriptEngine engine, VehicleScriptRenderer renderer, LoadedModel.Source source,
-                                 VehiclePartRole role, RtmScriptSource.Prepared prepared, String label) {
+                                 VehiclePartRole role, RtmScriptSource.Prepared prepared, PackageAsset script, String label) {
         this.engine = engine;
         this.renderer = renderer;
         this.source = source;
         this.role = role;
         this.prepared = prepared;
         this.label = label;
+        this.vehicleView = new RtmVehicleView(script);
     }
 
     public static VehicleScriptRuntime create(PackageAsset script, LoadedModel.Source source,
@@ -79,8 +81,8 @@ public final class VehicleScriptRuntime implements AutoCloseable {
         }
         if (!RtmScript.hasFunction(engine, "render")) throw new IOException("Script has no render(entity, pass, partialTick)");
         ScriptDiagnostics.scriptScope("vehicle", script, renderClass
-                + "; render(entity, pass=0, partialTick) replays part draws and GL11 matrix calls only");
-        return new VehicleScriptRuntime(engine, renderer, source, role, prepared, label);
+                + "; render(entity, pass=0, partialTick) uses a vehicle view, part draws, matrix and per-draw lighting state");
+        return new VehicleScriptRuntime(engine, renderer, source, role, prepared, script, label);
     }
 
     /** Returns true when the script took over this model instance, even if it chose to draw nothing. */
@@ -88,7 +90,8 @@ public final class VehicleScriptRuntime implements AutoCloseable {
                           float partialTick, PoseStack pose, int light) {
         if (failed) return false;
         updateWheel(entity, vehiclePose, partialTick);
-        var context = new ScriptDrawContext(queue, source, pose, prepared.primaryFile() + " [" + role + "]");
+        var context = new ScriptDrawContext(queue, source, pose, light, prepared.primaryFile() + " [" + role + "]");
+        vehicleView.update(entity instanceof TrainEntity train ? train.tickCount : 0, light);
         renderer.context(context);
         renderer.wheelRotation(wheelDegrees());
         float doorLeft = 0.0f, doorRight = 0.0f;
@@ -99,8 +102,8 @@ public final class VehicleScriptRuntime implements AutoCloseable {
         renderer.doorMovement(doorLeft, doorRight);
         GL11.attach(context);
         try {
-            RtmScript.invoke(engine, "render", entity, 0, partialTick);
-            context.submit(light);
+            RtmScript.invoke(engine, "render", entity == null ? null : vehicleView, 0, partialTick);
+            context.submit();
             return true;
         } catch (Exception exception) {
             failed = true;

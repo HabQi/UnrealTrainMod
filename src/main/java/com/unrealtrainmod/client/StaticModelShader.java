@@ -42,12 +42,13 @@ public final class StaticModelShader {
                     loaded -> {
                         Uniform model = loaded.getUniform("ModelMat"), normal = loaded.getUniform("NormalMat");
                         Uniform light = loaded.getUniform("LightUV"), overlay = loaded.getUniform("OverlayUV");
-                        Uniform alphaPass = loaded.getUniform("AlphaPass");
-                        if (model == null || normal == null || light == null || overlay == null || alphaPass == null) {
+                        Uniform alphaPass = loaded.getUniform("AlphaPass"), directional = loaded.getUniform("DirectionalLighting");
+                        if (model == null || normal == null || light == null || overlay == null || alphaPass == null
+                                || directional == null) {
                             LOGGER.error("Static model shader is missing required uniforms; using buffered rendering");
                         } else {
                             // Minecraft owns and closes the shader; retain only the registered callback's instance.
-                            state = new State(loaded, model, normal, light, overlay, alphaPass);
+                            state = new State(loaded, model, normal, light, overlay, alphaPass, directional);
                         }
                     });
         } catch (IOException e) {
@@ -66,14 +67,15 @@ public final class StaticModelShader {
     }
 
     public record State(ShaderInstance shader, Uniform modelMatrix, Uniform normalMatrix,
-                        Uniform light, Uniform overlay, Uniform alphaPass) {
+                        Uniform light, Uniform overlay, Uniform alphaPass, Uniform directionalLighting) {
         /** Uses the AlphaPass constants above for both GPU and buffered rendering. */
-        public void prepare(PoseStack.Pose pose, int packedLight, int pass) {
+        public void prepare(PoseStack.Pose pose, int packedLight, int pass, boolean directional) {
             modelMatrix.set(pose.pose());
             normalMatrix.set(pose.normal());
             light.set(packedLight & 0xffff, packedLight >>> 16 & 0xffff);
             overlay.set(OverlayTexture.NO_OVERLAY & 0xffff, OverlayTexture.NO_OVERLAY >>> 16 & 0xffff);
             alphaPass.set(pass);
+            directionalLighting.set(directional ? 1 : 0);
         }
     }
 }

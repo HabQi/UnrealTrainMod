@@ -9,4 +9,4 @@ import net.minecraft.resources.ResourceLocation;
 
 /** Requests share one draw only when GPU mesh, canonical index range and material state match. */
 public record InstanceBatchKey(GpuModel.Mesh mesh, int firstIndex, int indexCount, ResourceLocation texture,
-                               boolean doubleSided, int alphaPass) {}
+                               boolean doubleSided, int alphaPass, boolean directionalLighting) {}
