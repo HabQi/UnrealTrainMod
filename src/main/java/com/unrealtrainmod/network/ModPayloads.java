@@ -39,7 +39,7 @@ public final class ModPayloads {
     private ModPayloads() {}
 
     public static void register(RegisterPayloadHandlersEvent event) {
-        var registrar = event.registrar("24");
+        var registrar = event.registrar("25");
         registrar.playToServer(TrainControlInputPayload.TYPE, TrainControlInputPayload.STREAM_CODEC,
                 TrainDriverManager::handleInput);
         registrar.playToServer(TrainWalkInputPayload.TYPE, TrainWalkInputPayload.STREAM_CODEC,

@@ -8,6 +8,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.unrealtrainmod.compat.rtm.script.RailScriptRuntime;
+import com.unrealtrainmod.compat.rtm.script.RtmScriptCache;
 import com.unrealtrainmod.resource.PackageAsset;
 import com.unrealtrainmod.track.model.RailDefinition;
 import com.unrealtrainmod.track.model.RailCatalog;
@@ -27,7 +28,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
-import javax.script.ScriptException;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.texture.DynamicTexture;
 import net.minecraft.resources.ResourceLocation;
@@ -90,6 +90,7 @@ public final class ClientRailModelManager extends SimplePreparableReloadListener
     @Override
     protected Prepared prepare(ResourceManager resources, ProfilerFiller profiler) {
         var models = new HashMap<ResourceLocation, Model>();
+        var scripts = new RtmScriptCache();
         var images = new HashMap<PackageAsset, NativeImage>();
         var meshes = new HashMap<MeshKey, ModelMesh>();
         var sources = new HashMap<RailDefinition.Source, Model>();
@@ -157,10 +158,9 @@ public final class ClientRailModelManager extends SimplePreparableReloadListener
                     RailScriptRuntime script = null;
                     if (source.rendererPath() != null) {
                         try {
-                            script = RailScriptRuntime.create(source.rendererPath(), definition.railName(),
+                            script = RailScriptRuntime.create(scripts, source.rendererPath(), definition.railName(),
                                     definition.railName() + " (" + source.rendererPath().entry() + ")");
-                        } catch (IOException | RuntimeException | ScriptException
-                                 | NoSuchMethodException | LinkageError exception) {
+                        } catch (IOException | RuntimeException | LinkageError exception) {
                             LOGGER.error("Cannot load rail script {}!{} for {}; rendering all static parts: {}",
                                     source.rendererPath().archive(), source.rendererPath().entry(),
                                     definition.railName(), exception.getMessage());

@@ -7,9 +7,6 @@ package com.unrealtrainmod.compat.rtm.script;
 import com.unrealtrainmod.resource.PackageAsset;
 import java.io.IOException;
 import java.util.ArrayList;
-import javax.script.ScriptContext;
-import javax.script.ScriptEngine;
-import javax.script.ScriptException;
 import net.minecraft.core.BlockPos;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -18,57 +15,61 @@ import org.slf4j.LoggerFactory;
 public final class RailScriptRuntime implements AutoCloseable {
     private static final Logger LOGGER = LoggerFactory.getLogger("UnrealTrainMod RTM scripts");
 
-    private final ScriptEngine engine;
+    private final RtmScriptInstance instance;
+    private final RailScriptRenderer renderer;
     private final RtmScriptSource.Prepared prepared;
     private final RailScriptTile tile;
     private final boolean hasShouldRenderObject;
     private final String label;
     private boolean failed;
 
-    private RailScriptRuntime(ScriptEngine engine, RtmScriptSource.Prepared prepared, RailScriptTile tile,
+    private RailScriptRuntime(RtmScriptInstance instance, RailScriptRenderer renderer,
+                              RtmScriptSource.Prepared prepared, RailScriptTile tile,
                               boolean hasShouldRenderObject, String label) {
-        this.engine = engine;
+        this.instance = instance;
+        this.renderer = renderer;
         this.prepared = prepared;
         this.tile = tile;
         this.hasShouldRenderObject = hasShouldRenderObject;
         this.label = label;
     }
 
-    public static RailScriptRuntime create(PackageAsset script, String railName, String label)
-            throws IOException, ScriptException, NoSuchMethodException {
-        var prepared = RtmScriptSource.load(script);
-        ScriptEngine engine = RtmScript.createEngine();
+    public static RailScriptRuntime create(RtmScriptCache cache, PackageAsset script, String railName, String label)
+            throws IOException {
+        var program = cache.program(script);
         var renderer = new RailScriptRenderer();
-        engine.put("renderer", renderer);
         var tile = new RailScriptTile(railName);
-        engine.put("tileEntity", tile);
+        RtmScriptInstance instance = null;
+        boolean transferred = false;
         try {
-            RtmScript.eval(engine, prepared);
-        } catch (ScriptException exception) {
-            throw new IOException("Script error at " + RtmScript.describe(prepared, exception)
-                    + ": " + exception.getMessage(), exception);
+            instance = new RtmScriptInstance(program);
+            instance.put("renderer", renderer);
+            instance.put("tileEntity", tile);
+            instance.eval();
+            String renderClass = instance.renderClass();
+            if (!RtmScript.RAIL_RENDERER.equals(renderClass)) {
+                throw new IOException("Script entry check failed: renderClass '" + renderClass
+                        + "'; expected " + RtmScript.RAIL_RENDERER);
+            }
+            if (!instance.hasFunction("init")) throw new IOException("Script entry check failed: missing init(par1, par2)");
+            instance.init();
+            boolean hasShouldRenderObject = instance.hasFunction("shouldRenderObject");
+            var notExecuted = new ArrayList<String>(2);
+            if (instance.hasFunction("renderRailStatic")) notExecuted.add("renderRailStatic");
+            if (instance.hasFunction("renderRailDynamic")) notExecuted.add("renderRailDynamic");
+            ScriptDiagnostics.scriptScope("rail", script, renderClass
+                    + (hasShouldRenderObject
+                            ? "; shouldRenderObject selects the static parts" : "; no shouldRenderObject, every static part is kept")
+                    + (notExecuted.isEmpty() ? "" : "; not executed in this stage: " + String.join(", ", notExecuted)));
+            var runtime = new RailScriptRuntime(instance, renderer, program.prepared, tile, hasShouldRenderObject, label);
+            transferred = true;
+            return runtime;
+        } finally {
+            if (!transferred) {
+                if (instance != null) instance.close();
+                renderer.release();
+            }
         }
-        String renderClass = RtmScript.renderClass(engine);
-        if (renderClass.isEmpty()) throw new IOException("Script has no renderClass");
-        if (!RtmScript.RAIL_RENDERER.equals(renderClass)) {
-            throw new IOException("Unsupported renderClass '" + renderClass + "'; expected " + RtmScript.RAIL_RENDERER);
-        }
-        if (!RtmScript.hasFunction(engine, "init")) throw new IOException("Script has no init(par1, par2)");
-        try {
-            RtmScript.invoke(engine, "init", null, null);
-        } catch (ScriptException exception) {
-            throw new IOException("init failed at " + RtmScript.describe(prepared, exception)
-                    + ": " + exception.getMessage(), exception);
-        }
-        boolean hasShouldRenderObject = RtmScript.hasFunction(engine, "shouldRenderObject");
-        var notExecuted = new ArrayList<String>(2);
-        if (RtmScript.hasFunction(engine, "renderRailStatic")) notExecuted.add("renderRailStatic");
-        if (RtmScript.hasFunction(engine, "renderRailDynamic")) notExecuted.add("renderRailDynamic");
-        ScriptDiagnostics.scriptScope("rail", script, renderClass
-                + (hasShouldRenderObject
-                        ? "; shouldRenderObject selects the static parts" : "; no shouldRenderObject, every static part is kept")
-                + (notExecuted.isEmpty() ? "" : "; not executed in this stage: " + String.join(", ", notExecuted)));
-        return new RailScriptRuntime(engine, prepared, tile, hasShouldRenderObject, label);
     }
 
     /** A failed instance stays disabled; the caller must discard its current filtered build. */
@@ -77,26 +78,29 @@ public final class RailScriptRuntime implements AutoCloseable {
     /** Each invocation restores its segment context on the tile also exposed as global tileEntity. */
     public boolean shouldRender(String partName, long index, long count, BlockPos startPoint) {
         if (failed || !hasShouldRenderObject) return true;
+        boolean completed = false;
         try {
             tile.setStartPoint(startPoint);
-            Object result = RtmScript.invoke(engine, "shouldRenderObject", tile, partName, (double)count, (double)index);
+            Object result = instance.invoke("shouldRenderObject", tile, partName, (double)count, (double)index);
+            completed = true;
             if (result instanceof Boolean value) return value;
             // Missing/undefined results follow the legacy renderer: keep the object.
             return true;
-        } catch (Exception exception) {
-            failed = true;
-            String location = exception instanceof ScriptException script
-                    ? RtmScript.describe(prepared, script) : prepared.primaryFile();
-            LOGGER.warn("Rail script {} failed at {}; rendering all static parts instead: {}",
+        } catch (Exception | LinkageError exception) {
+            String location = RtmScript.describe(prepared, exception);
+            LOGGER.warn("Rail script {} shouldRenderObject failed at {}; rendering all static parts instead: {}",
                     label, location, exception.getMessage());
             LOGGER.debug("Rail script shouldRenderObject failure", exception);
             return true;
+        } finally {
+            if (!completed) close();
         }
     }
 
     @Override
     public void close() {
         failed = true;
-        engine.getBindings(ScriptContext.ENGINE_SCOPE).clear();
+        instance.close();
+        renderer.release();
     }
 }

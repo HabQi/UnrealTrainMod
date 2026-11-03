@@ -14,9 +14,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Pattern;
 import java.util.zip.ZipFile;
 
@@ -32,7 +30,6 @@ public final class RtmScriptSource {
     private static final String LEGACY_RAIL_LIBRARY = "assets/minecraft/scripts/LibRenderRail.js";
     private static final String RAIL_LIBRARY_RESOURCE = "assets/unrealtrainmod/compat/rtm/scripts/LibRenderRail.js";
     private static final String BUILTIN_RAIL_LIBRARY = "builtin:" + RAIL_LIBRARY_RESOURCE;
-    private static final Map<PackageAsset, Prepared> CACHE = new ConcurrentHashMap<>();
 
     /**
      * One contiguous run of output lines copied from an archived file. {@code fileLine} is the 1-based line in
@@ -64,8 +61,6 @@ public final class RtmScriptSource {
     private RtmScriptSource() {}
 
     public static Prepared load(PackageAsset asset) throws IOException {
-        var cached = CACHE.get(asset);
-        if (cached != null) return cached;
         var output = new ArrayList<String>();
         var segments = new ArrayList<Segment>();
         try (var zip = new ZipFile(asset.archive().toFile())) {
@@ -74,12 +69,8 @@ public final class RtmScriptSource {
             read.finish();
         }
         if (output.isEmpty()) throw new IOException("Script is empty: " + asset);
-        var prepared = new Prepared(asset.entry(), String.join("\n", output), segments);
-        CACHE.put(asset, prepared);
-        return prepared;
+        return new Prepared(asset.entry(), String.join("\n", output), segments);
     }
-
-    public static void clearCache() { CACHE.clear(); }
 
     private static final class ReadState {
         private final List<String> output;

@@ -42,10 +42,10 @@ public final class TrainDrivingClient {
         @Override public boolean isActive() { return Minecraft.getInstance().screen == null && riding(); }
         @Override public boolean conflicts(IKeyConflictContext other) { return other == this || other == KeyConflictContext.IN_GAME; }
     };
-    private static final KeyMapping POWER = key("power", GLFW.GLFW_KEY_W);
-    private static final KeyMapping BRAKE = key("brake", GLFW.GLFW_KEY_S);
+    private static final KeyMapping POWER = key("power", GLFW.GLFW_KEY_S);
+    private static final KeyMapping BRAKE = key("brake", GLFW.GLFW_KEY_W);
     private static final KeyMapping REVERSER = key("reverser", GLFW.GLFW_KEY_R);
-    private static final KeyMapping EMERGENCY = key("emergency", GLFW.GLFW_KEY_SPACE);
+    private static final KeyMapping EMERGENCY = key("emergency", GLFW.GLFW_KEY_F);
     private static final KeyMapping DOOR_LEFT = key("door_left", GLFW.GLFW_KEY_J);
     private static final KeyMapping DOOR_RIGHT = key("door_right", GLFW.GLFW_KEY_K);
     private static TrainControlSyncPayload snapshot;

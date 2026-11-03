@@ -9,18 +9,14 @@ import com.unrealtrainmod.client.model.LoadedModel;
 import com.unrealtrainmod.client.renderer.ModelRenderQueue;
 import com.unrealtrainmod.entity.TrainEntity;
 import com.unrealtrainmod.resource.PackageAsset;
-import com.unrealtrainmod.vehicle.VehicleDoor;
 import com.unrealtrainmod.vehicle.VehiclePartRole;
 import com.unrealtrainmod.vehicle.VehiclePose;
 import java.io.IOException;
-import javax.script.ScriptContext;
-import javax.script.ScriptEngine;
-import javax.script.ScriptException;
 import org.joml.Vector3f;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-/** One script engine and its mutable script state for a single vehicle body/bogie slot. */
+/** One isolated script instance for a single vehicle body/bogie slot; compiled code is shared. */
 public final class VehicleScriptRuntime implements AutoCloseable {
     private static final Logger LOGGER = LoggerFactory.getLogger("UnrealTrainMod RTM scripts");
     /** RTM wheel animation is distance based; the sample packs use roughly a 0.86 m wheel. */
@@ -29,13 +25,13 @@ public final class VehicleScriptRuntime implements AutoCloseable {
     /** Ignores sub-micrometre interpolation noise so parked vehicles keep a stable wheel angle. */
     private static final double MIN_FRAME_TRAVEL = 1e-7;
 
-    private final ScriptEngine engine;
+    private final RtmScriptInstance instance;
     private final VehicleScriptRenderer renderer;
     private final LoadedModel.Source source;
     private final VehiclePartRole role;
     private final RtmScriptSource.Prepared prepared;
     private final String label;
-    private final RtmVehicleView vehicleView;
+    private final RtmVehicleAdapter adapter;
     private boolean failed;
     private boolean hasPosition;
     private double lastX, lastY, lastZ, distance;
@@ -43,73 +39,69 @@ public final class VehicleScriptRuntime implements AutoCloseable {
     private long lastPoseRevision = Long.MIN_VALUE;
     private float lastPartialTick = -1.0f;
 
-    private VehicleScriptRuntime(ScriptEngine engine, VehicleScriptRenderer renderer, LoadedModel.Source source,
+    private VehicleScriptRuntime(RtmScriptInstance instance, VehicleScriptRenderer renderer, LoadedModel.Source source,
                                  VehiclePartRole role, RtmScriptSource.Prepared prepared, PackageAsset script, String label) {
-        this.engine = engine;
+        this.instance = instance;
         this.renderer = renderer;
         this.source = source;
         this.role = role;
         this.prepared = prepared;
         this.label = label;
-        this.vehicleView = new RtmVehicleView(script);
+        this.adapter = new RtmVehicleAdapter(script, role);
     }
 
-    public static VehicleScriptRuntime create(PackageAsset script, LoadedModel.Source source,
+    public static VehicleScriptRuntime create(RtmScriptCache cache, PackageAsset script, PackageAsset model, LoadedModel.Source source,
                                               VehiclePartRole role, String label)
-            throws IOException, ScriptException, NoSuchMethodException {
-        var prepared = RtmScriptSource.load(script);
-        ScriptEngine engine = RtmScript.createEngine();
-        var renderer = new VehicleScriptRenderer();
-        engine.put("renderer", renderer);
+            throws IOException {
+        var program = cache.program(script);
+        var renderer = new VehicleScriptRenderer(source, script + " model " + model);
+        RtmScriptInstance instance = null;
+        boolean transferred = false;
         try {
-            RtmScript.eval(engine, prepared);
-        } catch (ScriptException exception) {
-            throw new IOException("Script error at " + RtmScript.describe(prepared, exception)
-                    + ": " + exception.getMessage(), exception);
+            instance = new RtmScriptInstance(program);
+            instance.put("renderer", renderer);
+            instance.eval();
+            String renderClass = instance.renderClass();
+            if (!RtmScript.VEHICLE_RENDERER.equals(renderClass)) {
+                throw new IOException("Script entry check failed: renderClass '" + renderClass
+                        + "'; expected " + RtmScript.VEHICLE_RENDERER);
+            }
+            if (!instance.hasFunction("init")) throw new IOException("Script entry check failed: missing init(par1, par2)");
+            instance.init();
+            if (!instance.hasFunction("render")) {
+                throw new IOException("Script entry check failed: missing render(entity, pass, partialTick)");
+            }
+            ScriptDiagnostics.scriptScope("vehicle", script, renderClass
+                    + "; render(entity, pass=0, partialTick) uses an isolated global, vehicle view, part draws, matrix and per-draw lighting state");
+            var runtime = new VehicleScriptRuntime(instance, renderer, source, role, program.prepared, script, label);
+            transferred = true;
+            return runtime;
+        } finally {
+            if (!transferred) {
+                if (instance != null) instance.close();
+                renderer.release();
+            }
         }
-        String renderClass = RtmScript.renderClass(engine);
-        if (renderClass.isEmpty()) throw new IOException("Script has no renderClass");
-        if (!RtmScript.VEHICLE_RENDERER.equals(renderClass)) {
-            throw new IOException("Unsupported renderClass '" + renderClass + "'; expected " + RtmScript.VEHICLE_RENDERER);
-        }
-        if (!RtmScript.hasFunction(engine, "init")) throw new IOException("Script has no init(par1, par2)");
-        try {
-            RtmScript.invoke(engine, "init", null, null);
-        } catch (ScriptException exception) {
-            throw new IOException("init failed at " + RtmScript.describe(prepared, exception)
-                    + ": " + exception.getMessage(), exception);
-        }
-        if (!RtmScript.hasFunction(engine, "render")) throw new IOException("Script has no render(entity, pass, partialTick)");
-        ScriptDiagnostics.scriptScope("vehicle", script, renderClass
-                + "; render(entity, pass=0, partialTick) uses a vehicle view, part draws, matrix and per-draw lighting state");
-        return new VehicleScriptRuntime(engine, renderer, source, role, prepared, script, label);
     }
 
     /** Returns true when the script took over this model instance, even if it chose to draw nothing. */
-    public boolean render(ModelRenderQueue queue, Object entity, VehiclePose vehiclePose,
+    public boolean render(ModelRenderQueue queue, TrainEntity entity, VehiclePose vehiclePose,
                           float partialTick, PoseStack pose, int light) {
         if (failed) return false;
         updateWheel(entity, vehiclePose, partialTick);
-        var context = new ScriptDrawContext(queue, source, pose, light, prepared.primaryFile() + " [" + role + "]");
-        vehicleView.update(entity instanceof TrainEntity train ? train.tickCount : 0, light);
+        var context = new ScriptDrawContext(queue, source, renderer.parts(), pose, light);
+        var vehicleView = adapter.sample(entity, partialTick, wheelDegrees(), light);
         renderer.context(context);
-        renderer.wheelRotation(wheelDegrees());
-        float doorLeft = 0.0f, doorRight = 0.0f;
-        if (role == VehiclePartRole.BODY && entity instanceof TrainEntity train) {
-            doorLeft = train.doorMovement(VehicleDoor.LEFT, partialTick);
-            doorRight = train.doorMovement(VehicleDoor.RIGHT, partialTick);
-        }
-        renderer.doorMovement(doorLeft, doorRight);
         GL11.attach(context);
+        boolean completed = false;
         try {
-            RtmScript.invoke(engine, "render", entity == null ? null : vehicleView, 0, partialTick);
+            instance.invoke("render", vehicleView, 0, partialTick);
             context.submit();
+            completed = true;
             return true;
-        } catch (Exception exception) {
-            failed = true;
-            String location = exception instanceof ScriptException script
-                    ? RtmScript.describe(prepared, script) : prepared.primaryFile();
-            LOGGER.warn("Vehicle script {} failed at {}; using the static model instead: {}",
+        } catch (Exception | LinkageError exception) {
+            String location = RtmScript.describe(prepared, exception);
+            LOGGER.warn("Vehicle script {} render failed at {}; using the static model instead: {}",
                     label, location, exception.getMessage());
             LOGGER.debug("Vehicle script render failure", exception);
             return false;
@@ -117,8 +109,7 @@ public final class VehicleScriptRuntime implements AutoCloseable {
             GL11.detach();
             context.restore();
             renderer.context(null);
-            renderer.wheelRotation(0.0f);
-            renderer.doorMovement(0.0f, 0.0f);
+            if (!completed) close();
         }
     }
 
@@ -167,6 +158,7 @@ public final class VehicleScriptRuntime implements AutoCloseable {
     @Override
     public void close() {
         failed = true;
-        engine.getBindings(ScriptContext.ENGINE_SCOPE).clear();
+        instance.close();
+        renderer.release();
     }
 }

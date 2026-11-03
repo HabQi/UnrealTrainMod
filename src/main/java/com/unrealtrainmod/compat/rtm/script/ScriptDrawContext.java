@@ -9,9 +9,8 @@ import com.unrealtrainmod.client.model.LoadedModel;
 import com.unrealtrainmod.client.model.PartSelection;
 import com.unrealtrainmod.client.renderer.ModelRenderQueue;
 import java.util.ArrayList;
-import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
 import org.joml.Matrix3f;
 import org.joml.Matrix4f;
 import org.joml.Quaternionf;
@@ -27,21 +26,20 @@ final class ScriptDrawContext {
     private final ModelRenderQueue queue;
     private final LoadedModel.Source source;
     private final PoseStack pose;
-    private final String modelLabel;
+    private final ScriptPartResolver parts;
     /** Independent baseline of the caller matrix; the script never owns this level of the stack. */
     private final Matrix4f entryPose;
     private final Matrix3f entryNormal;
     private final List<Command> commands = new ArrayList<>();
-    private final Map<String, PartSelection> resolved = new HashMap<>();
     private int depth;
     private int light;
     private boolean directionalLighting = true;
 
-    ScriptDrawContext(ModelRenderQueue queue, LoadedModel.Source source, PoseStack pose, int light, String modelLabel) {
+    ScriptDrawContext(ModelRenderQueue queue, LoadedModel.Source source, ScriptPartResolver parts, PoseStack pose, int light) {
         this.queue = queue;
         this.source = source;
         this.pose = pose;
-        this.modelLabel = modelLabel;
+        this.parts = parts;
         this.light = light;
         entryPose = new Matrix4f(pose.last().pose());
         entryNormal = new Matrix3f(pose.last().normal());
@@ -78,33 +76,14 @@ final class ScriptDrawContext {
 
     void draw(List<String> names) {
         PoseStack.Pose snapshot = null;
+        // Aliases within one group may resolve to the same objects; separate calls still draw independently.
+        var drawn = new HashSet<PartSelection>();
         for (String name : names) {
-            var selection = selection(name);
-            if (selection == null) continue;
+            var selection = parts.selection(name);
+            if (selection == null || !drawn.add(selection)) continue;
             if (snapshot == null) snapshot = pose.last().copy();
             commands.add(new Command(selection, snapshot, light, directionalLighting));
         }
-    }
-
-    private PartSelection selection(String name) {
-        var cached = resolved.get(name);
-        if (cached != null) return cached;
-        var selection = source.partsByName().get(name);
-        if (selection == null) {
-            // MQO group names are case-sensitive on disk but packs are inconsistent about case.
-            for (var entry : source.partsByName().entrySet()) {
-                if (entry.getKey().trim().equalsIgnoreCase(name.trim())) {
-                    selection = entry.getValue();
-                    break;
-                }
-            }
-        }
-        if (selection == null) {
-            ScriptDiagnostics.missingPart(modelLabel, name);
-            return null;
-        }
-        resolved.put(name, selection);
-        return selection;
     }
 
     void submit() {

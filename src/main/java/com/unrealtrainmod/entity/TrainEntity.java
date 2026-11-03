@@ -20,6 +20,7 @@ import com.unrealtrainmod.vehicle.VehicleInteriorSpec;
 import com.unrealtrainmod.vehicle.VehiclePose;
 import com.unrealtrainmod.vehicle.VehiclePosePlayback;
 import com.unrealtrainmod.vehicle.VehiclePoseSnapshot;
+import com.unrealtrainmod.vehicle.VehicleRuntimeState;
 import com.unrealtrainmod.track.geometry.TrackVector;
 import java.util.UUID;
 import java.util.Locale;
@@ -60,6 +61,8 @@ public final class TrainEntity extends Entity {
             SynchedEntityData.defineId(TrainEntity.class, EntityDataSerializers.COMPOUND_TAG);
     private static final EntityDataAccessor<CompoundTag> DOOR_STATE =
             SynchedEntityData.defineId(TrainEntity.class, EntityDataSerializers.COMPOUND_TAG);
+    private static final EntityDataAccessor<CompoundTag> RUNTIME_STATE =
+            SynchedEntityData.defineId(TrainEntity.class, EntityDataSerializers.COMPOUND_TAG);
     /** Legacy RTM advances a door by one unit per tick for {@code MAX_DOOR_MOVE = 60} ticks. */
     private static final int DOOR_MOVE_TICKS = 60;
     private TrainAnchor railAnchor;
@@ -76,6 +79,7 @@ public final class TrainEntity extends Entity {
     /** Server-side transition bookkeeping shared by the synced state and late observers. */
     private final DoorState leftDoor = new DoorState(), rightDoor = new DoorState();
     private boolean doorStateLoaded;
+    private VehicleRuntimeState runtimeState = VehicleRuntimeState.IDLE;
 
     public TrainEntity(EntityType<? extends TrainEntity> type, Level level) {
         super(type, level);
@@ -88,6 +92,7 @@ public final class TrainEntity extends Entity {
         builder.define(MODEL_ID, "");
         builder.define(RAIL_POSE, new CompoundTag());
         builder.define(DOOR_STATE, new CompoundTag());
+        builder.define(RUNTIME_STATE, new CompoundTag());
     }
 
     public ResourceLocation getModelId() {
@@ -106,7 +111,18 @@ public final class TrainEntity extends Entity {
     public void setTrainId(UUID id) {
         trainId = id;
         invalidTrainId = null;
+        if (id == null) setRuntimeState(VehicleRuntimeState.IDLE);
     }
+
+    public VehicleRuntimeState runtimeState() { return runtimeState; }
+
+    /** Server publication and lifecycle reset; equal values do not dirty tracking data. Never persisted in NBT. */
+    public void setRuntimeState(VehicleRuntimeState state) {
+        if (runtimeState.equals(state)) return;
+        runtimeState = state;
+        entityData.set(RUNTIME_STATE, state.save());
+    }
+
     public VehiclePose getRailPose() { return railPose; }
     /** Monotonic pose reset marker used by render-time animations to ignore position jumps. */
     public long poseRevision() { return poseRevision; }
@@ -299,6 +315,7 @@ public final class TrainEntity extends Entity {
         lerpSteps = 0;
         poseRevision++;
         doorStateLoaded = false;
+        setRuntimeState(VehicleRuntimeState.IDLE);
         setOldPosAndRot();
     }
 
@@ -321,6 +338,9 @@ public final class TrainEntity extends Entity {
             }
         }
         if (DOOR_STATE.equals(key) && level().isClientSide) applyDoorState(entityData.get(DOOR_STATE));
+        if (RUNTIME_STATE.equals(key) && level().isClientSide) {
+            runtimeState = VehicleRuntimeState.load(entityData.get(RUNTIME_STATE));
+        }
     }
 
     /** Applied once this frame's simulation ticks have finished, before camera and entity rendering. */
@@ -348,6 +368,7 @@ public final class TrainEntity extends Entity {
         playback = null;
         lerpSteps = 0;
         entityData.set(RAIL_POSE, new CompoundTag());
+        setRuntimeState(VehicleRuntimeState.IDLE);
         railAnchor = null;
         invalidAnchor = false;
         trainId = null;

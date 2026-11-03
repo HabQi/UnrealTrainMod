@@ -21,6 +21,7 @@ import com.unrealtrainmod.vehicle.VehicleDefinition;
 import com.unrealtrainmod.vehicle.VehicleMotionSpec;
 import com.unrealtrainmod.vehicle.VehiclePose;
 import com.unrealtrainmod.vehicle.VehiclePoseSolver;
+import com.unrealtrainmod.vehicle.VehicleRuntimeState;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -543,6 +544,7 @@ public final class TrainManager {
 
     private void detach(TrainEntity entity) {
         UUID entityId = entity.getUUID();
+        entity.setRuntimeState(VehicleRuntimeState.IDLE);
         passengers.vehicleRemoved(entity);
         loadedVehicles.remove(entityId);
         pending.remove(entityId);
@@ -897,6 +899,7 @@ public final class TrainManager {
                 loadedVehicles.remove(entity.getUUID());
                 return StopReason.INVALID_POSITION;
             }
+            if (spawn) train.setControl(TrainControlProfile.control(0, train.control().reverser(), false));
             put(train);
             saveCandidate(train, candidate, intervals);
             attached.add(entity.getUUID());
@@ -1329,7 +1332,10 @@ public final class TrainManager {
                 }
             }
         }
-        if (!level.tickRateManager().runsNormally()) return;
+        if (!level.tickRateManager().runsNormally()) {
+            publishRuntimeStates();
+            return;
+        }
         drivers.tick();
         var couplingVehicles = autoCouplingVehicles();
         for (var train : List.copyOf(trains.values())) tryAutoCouple(train, couplingVehicles);
@@ -1339,6 +1345,25 @@ public final class TrainManager {
         passengers.tick();
         drivers.publish();
         passengers.publish();
+        publishRuntimeStates();
+    }
+
+    /** Publish the final complete-tick controls, including stationary and command-driven consists. */
+    private void publishRuntimeStates() {
+        for (UUID id : loadedVehicles) {
+            if (!(level.getEntity(id) instanceof TrainEntity entity) || entity.isRemoved()) continue;
+            var train = trains.get(entityTrains.get(id));
+            var car = train == null ? null : train.member(id);
+            if (train == null || !attached.contains(id) || entity.getRailAnchor() == null
+                    || !matches(entity, train, car)) {
+                entity.setRuntimeState(VehicleRuntimeState.IDLE);
+                continue;
+            }
+            int direction = car.direction();
+            var control = train.control();
+            entity.setRuntimeState(new VehicleRuntimeState(direction * train.actualSpeed(), control.throttle(),
+                    control.trainBrake(), control.emergencyBrake(), direction * control.reverser().direction()));
+        }
     }
 
     private void advance(TrainConsist train, List<TrainEntity> couplingVehicles) {

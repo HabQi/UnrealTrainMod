@@ -18,6 +18,7 @@ import com.unrealtrainmod.client.RenderCategory;
 import com.unrealtrainmod.client.StaticModelShader;
 import com.unrealtrainmod.client.model.LoadedModel;
 import com.unrealtrainmod.client.model.PartSelection;
+import com.unrealtrainmod.compat.rtm.script.VehicleScriptManager;
 import com.unrealtrainmod.client.renderer.instancing.InstanceBatchKey;
 import com.unrealtrainmod.client.renderer.instancing.InstanceBuffer;
 import com.unrealtrainmod.client.renderer.instancing.InstancedModelShader;
@@ -509,6 +510,7 @@ public final class ModelRenderQueue implements AutoCloseable {
 
     @Override
     public void close() {
+        VehicleScriptManager.releasePreview(this);
         clear();
         stats.close();
         instanceBuffer.close();

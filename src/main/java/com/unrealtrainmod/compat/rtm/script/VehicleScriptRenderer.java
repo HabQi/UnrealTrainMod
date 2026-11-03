@@ -4,22 +4,31 @@
  */
 package com.unrealtrainmod.compat.rtm.script;
 
+import com.unrealtrainmod.client.model.LoadedModel;
 import java.util.List;
 
 /** Legacy {@code VehiclePartsRenderer} subset used by the first vehicle script chain. */
 public final class VehicleScriptRenderer extends RtmPartsRenderer {
     private ScriptDrawContext context;
-    private float wheelRotation;
-    private float doorMovementLeft, doorMovementRight;
+    private final ScriptPartResolver parts;
+
+    VehicleScriptRenderer(LoadedModel.Source source, String modelLabel) {
+        parts = new ScriptPartResolver(source, modelLabel);
+    }
 
     void context(ScriptDrawContext value) { context = value; }
 
-    void wheelRotation(float value) { wheelRotation = value; }
+    ScriptPartResolver parts() { return parts; }
 
-    void doorMovement(float left, float right) {
-        doorMovementLeft = left;
-        doorMovementRight = right;
+    @Override
+    void release() {
+        context = null;
+        parts.clear();
+        super.release();
     }
+
+    @Override
+    protected void registered(Parts group) { group.names().forEach(parts::selection); }
 
     @Override
     protected void draw(List<String> names) {
@@ -27,9 +36,11 @@ public final class VehicleScriptRenderer extends RtmPartsRenderer {
         context.draw(names);
     }
 
-    public float getWheelRotationR(Object entity) { return wheelRotation; }
+    public float getWheelRotationR(Object entity) {
+        return entity instanceof RtmVehicleView view ? view.wheelRotation() : 0;
+    }
 
-    public int getTick(RtmVehicleView entity) { return entity == null ? 0 : entity.tick(); }
+    public int getTick(Object entity) { return entity instanceof RtmVehicleView view ? view.tick() : 0; }
 
     public void rotate(float angle, char axis, float x, float y, float z) {
         if (context == null) throw new IllegalStateException("renderer.rotate outside a vehicle script render");
@@ -43,12 +54,16 @@ public final class VehicleScriptRenderer extends RtmPartsRenderer {
         context.translate(-x, -y, -z);
     }
 
-    public float getWheelRotationL(Object entity) { return wheelRotation; }
+    public float getWheelRotationL(Object entity) { return getWheelRotationR(entity); }
 
     /** Raw RTM progress in {@code 0.0..1.0}; the configuration renderer applies its own easing. */
-    public float getDoorMovementR(Object entity) { return doorMovementRight; }
+    public float getDoorMovementR(Object entity) {
+        return entity instanceof RtmVehicleView view ? view.doorRight() : 0;
+    }
 
-    public float getDoorMovementL(Object entity) { return doorMovementLeft; }
+    public float getDoorMovementL(Object entity) {
+        return entity instanceof RtmVehicleView view ? view.doorLeft() : 0;
+    }
 
     public float getPantographMovementFront(Object entity) { return 0.0f; }
 

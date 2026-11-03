@@ -4,18 +4,20 @@
  */
 package com.unrealtrainmod.compat.rtm.script;
 
-/** Only the legacy state type used by the current vehicle-body sample. */
+/** Readable legacy state types; unsupported ids fail instead of masquerading as another state. */
 public final class RtmTrainState {
     private RtmTrainState() {}
 
     public enum TrainStateType {
-        State_Announcement;
+        State_TrainDir(0), State_Notch(1), State_Door(4), State_Announcement(9);
 
-        public final int id = 9;
+        public final int id;
+
+        TrainStateType(int id) { this.id = id; }
     }
 
     public static TrainStateType getStateType(int id) {
-        if (id == 9) return TrainStateType.State_Announcement;
+        for (var type : TrainStateType.values()) if (type.id == id) return type;
         throw new UnsupportedOperationException("Unsupported RTM vehicle state type " + id);
     }
 }

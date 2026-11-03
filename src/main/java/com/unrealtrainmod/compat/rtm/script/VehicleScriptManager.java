@@ -15,8 +15,8 @@ import java.io.IOException;
 import java.util.EnumMap;
 import java.util.IdentityHashMap;
 import java.util.Map;
-import java.util.WeakHashMap;
-import javax.script.ScriptException;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.world.level.Level;
 import net.neoforged.neoforge.client.event.ClientPlayerNetworkEvent;
 import net.neoforged.neoforge.client.event.RenderFrameEvent;
@@ -25,15 +25,16 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Owns script engines per vehicle slot and per preview source. Geometry stays shared; only script globals
- * and wheel state are isolated.
+ * Owns isolated globals per vehicle slot and per preview queue/source/slot, with one vehicle compilation cache.
  */
 public final class VehicleScriptManager {
     private static final Logger LOGGER = LoggerFactory.getLogger(VehicleScriptManager.class);
     private record Handle(LoadedModel.Source source, VehicleScriptRuntime runtime) {}
 
-    private static final Map<TrainEntity, EnumMap<VehiclePartRole, Handle>> ENTITIES = new WeakHashMap<>();
-    private static final Map<LoadedModel.Source, EnumMap<VehiclePartRole, Handle>> PREVIEWS = new IdentityHashMap<>();
+    private static final RtmScriptCache PROGRAMS = new RtmScriptCache();
+    private static final Map<TrainEntity, EnumMap<VehiclePartRole, Handle>> ENTITIES = new IdentityHashMap<>();
+    private static final Map<ModelRenderQueue, Map<LoadedModel.Source, EnumMap<VehiclePartRole, Handle>>> PREVIEWS =
+            new IdentityHashMap<>();
     private static Level world;
 
     private VehicleScriptManager() {}
@@ -45,41 +46,45 @@ public final class VehicleScriptManager {
         if (script == null) return false;
         var source = instance.model();
         var role = definition.role();
+        var model = definition.source().model();
         Handle handle = entity == null
-                ? preview(source, role, script)
-                : entityHandle(entity, source, role, script);
-        if (handle == null || handle.runtime() == null) return false;
+                ? preview(queue, source, role, script, model)
+                : entityHandle(entity, source, role, script, model);
+        if (handle.runtime() == null) return false;
         return handle.runtime().render(queue, entity, vehiclePose, partialTick, pose, light);
     }
 
-    private static Handle preview(LoadedModel.Source source, VehiclePartRole role, PackageAsset script) {
-        var handles = PREVIEWS.computeIfAbsent(source, ignored -> new EnumMap<>(VehiclePartRole.class));
+    private static Handle preview(ModelRenderQueue queue, LoadedModel.Source source, VehiclePartRole role,
+                                   PackageAsset script, PackageAsset model) {
+        var scene = PREVIEWS.computeIfAbsent(queue, ignored -> new IdentityHashMap<>());
+        var handles = scene.computeIfAbsent(source, ignored -> new EnumMap<>(VehiclePartRole.class));
         var handle = handles.get(role);
-        if (handle != null && handle.source() == source) return handle;
-        close(handle);
-        var created = create(source, role, script, "preview " + script.entry());
+        if (handle != null) return handle;
+        var created = create(source, role, script, model, "preview " + script.entry());
         handles.put(role, created);
         return created;
     }
 
-    private static Handle entityHandle(TrainEntity entity, LoadedModel.Source source, VehiclePartRole role, PackageAsset script) {
+    private static Handle entityHandle(TrainEntity entity, LoadedModel.Source source, VehiclePartRole role,
+                                       PackageAsset script, PackageAsset model) {
         if (world != entity.level()) {
-            clear();
+            clearInstances();
             world = entity.level();
         }
         var handles = ENTITIES.computeIfAbsent(entity, ignored -> new EnumMap<>(VehiclePartRole.class));
         var handle = handles.get(role);
         if (handle != null && handle.source() == source) return handle;
         close(handle);
-        var created = create(source, role, script, entity.getUUID() + " " + role);
+        var created = create(source, role, script, model, entity.getUUID() + " " + role);
         handles.put(role, created);
         return created;
     }
 
-    private static Handle create(LoadedModel.Source source, VehiclePartRole role, PackageAsset script, String label) {
+    private static Handle create(LoadedModel.Source source, VehiclePartRole role, PackageAsset script,
+                                 PackageAsset model, String label) {
         try {
-            return new Handle(source, VehicleScriptRuntime.create(script, source, role, label));
-        } catch (IOException | ScriptException | NoSuchMethodException | RuntimeException | LinkageError exception) {
+            return new Handle(source, VehicleScriptRuntime.create(PROGRAMS, script, model, source, role, label));
+        } catch (IOException | RuntimeException | LinkageError exception) {
             LOGGER.warn("Cannot initialise vehicle script {}!{} for {}: {}", script.archive(), script.entry(), label,
                     exception.getMessage());
             LOGGER.debug("Vehicle script initialisation failure", exception);
@@ -97,20 +102,43 @@ public final class VehicleScriptManager {
         }
     }
 
-    public static void onFramePre(RenderFrameEvent.Pre event) { sweep(); }
-
-    public static void onLevelUnload(LevelEvent.Unload event) {
-        if (world == null || event.getLevel() == world) clear();
+    public static void onFramePre(RenderFrameEvent.Pre event) {
+        var current = Minecraft.getInstance().level;
+        if (world != current) {
+            clearInstances();
+            world = current;
+        }
+        sweep();
     }
 
-    public static void onLogout(ClientPlayerNetworkEvent.LoggingOut event) { clear(); }
+    public static void onLevelUnload(LevelEvent.Unload event) {
+        if (event.getLevel() instanceof ClientLevel && (world == null || event.getLevel() == world)) clearInstances();
+    }
 
+    public static void onLogout(ClientPlayerNetworkEvent.LoggingOut event) { clearInstances(); }
+
+    /** Model reload or game shutdown: discard instances and the complete vehicle compilation generation. */
     public static void clear() {
+        clearInstances();
+        PROGRAMS.clear();
+    }
+
+    private static void clearInstances() {
         ENTITIES.values().forEach(handles -> handles.values().forEach(VehicleScriptManager::close));
         ENTITIES.clear();
-        PREVIEWS.values().forEach(handles -> handles.values().forEach(VehicleScriptManager::close));
+        PREVIEWS.values().forEach(VehicleScriptManager::closeScene);
         PREVIEWS.clear();
         world = null;
+    }
+
+    /** Queue clear is per-frame; only queue close releases its persistent preview state. */
+    public static void releasePreview(ModelRenderQueue queue) {
+        var scene = PREVIEWS.remove(queue);
+        if (scene != null) closeScene(scene);
+    }
+
+    private static void closeScene(Map<LoadedModel.Source, EnumMap<VehiclePartRole, Handle>> scene) {
+        scene.values().forEach(handles -> handles.values().forEach(VehicleScriptManager::close));
     }
 
     private static void close(Handle handle) {

@@ -22,6 +22,10 @@ public final class Parts {
 
     public List<String> names() { return names; }
 
+    public String[] getNames() { return names.toArray(String[]::new); }
+
+    public String[] getObjNames() { return getNames(); }
+
     /** RTM scripts compare authored object names, usually without relying on case. */
     public boolean containsName(String name) {
         if (name == null) return false;
