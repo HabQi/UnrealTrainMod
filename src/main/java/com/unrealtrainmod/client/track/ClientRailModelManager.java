@@ -12,6 +12,7 @@ import com.unrealtrainmod.compat.rtm.script.RtmScriptCache;
 import com.unrealtrainmod.resource.PackageAsset;
 import com.unrealtrainmod.track.model.RailDefinition;
 import com.unrealtrainmod.track.model.RailCatalog;
+import com.unrealtrainmod.track.mesh.RailTrackMeshBuilder;
 import com.mojang.blaze3d.platform.NativeImage;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.unrealtrainmod.UnrealTrainMod;
@@ -52,7 +53,7 @@ public final class ClientRailModelManager extends SimplePreparableReloadListener
      * source-level material merge; parts retain the authored grouping for scripts.
      */
     public record Model(List<Batch> batches, List<Part> parts, double padding, ModelBounds bounds,
-                        RailDefinition.Format format, double period, RailScriptRuntime script) implements AutoCloseable {
+                        RailDefinition.Format format, double period, boolean scripted, RailScriptRuntime script) implements AutoCloseable {
         public Model {
             batches = List.copyOf(batches);
             parts = List.copyOf(parts);
@@ -158,8 +159,15 @@ public final class ClientRailModelManager extends SimplePreparableReloadListener
                     RailScriptRuntime script = null;
                     if (source.rendererPath() != null) {
                         try {
+                            var scriptSources = new ArrayList<RailTrackMeshBuilder.Source>();
+                            for (var part : parts) {
+                                for (var batch : part.batches()) {
+                                    scriptSources.add(new RailTrackMeshBuilder.Source(part.name(), batch.texture(),
+                                            batch.doubleSided(), batch.mesh()));
+                                }
+                            }
                             script = RailScriptRuntime.create(scripts, source.rendererPath(), definition.railName(),
-                                    definition.railName() + " (" + source.rendererPath().entry() + ")");
+                                    definition.railName() + " (" + source.model() + "; " + source.rendererPath() + ")", scriptSources);
                         } catch (IOException | RuntimeException | LinkageError exception) {
                             LOGGER.error("Cannot load rail script {}!{} for {}; rendering all static parts: {}",
                                     source.rendererPath().archive(), source.rendererPath().entry(),
@@ -168,7 +176,7 @@ public final class ClientRailModelManager extends SimplePreparableReloadListener
                         }
                     }
                     preparedSource = new Model(flatBatches, parts, padding + source.period(), bounds.build(),
-                            source.format(), source.period(), script);
+                            source.format(), source.period(), scripted, script);
                     if (source.rendererPath() == null) sources.put(source, preparedSource);
                     models.put(definition.id(), preparedSource);
                 } catch (IOException | RuntimeException exception) {

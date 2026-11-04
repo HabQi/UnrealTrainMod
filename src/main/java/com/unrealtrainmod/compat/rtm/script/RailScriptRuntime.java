@@ -5,40 +5,76 @@
 package com.unrealtrainmod.compat.rtm.script;
 
 import com.unrealtrainmod.resource.PackageAsset;
+import com.unrealtrainmod.track.geometry.TrackGeometry;
+import com.unrealtrainmod.track.assembly.SwitchPosition;
+import com.unrealtrainmod.track.assembly.TrackAssemblyInstance;
+import com.unrealtrainmod.track.mesh.RailTrackMeshBuilder;
+import com.unrealtrainmod.track.mesh.RailTrackMeshData;
 import java.io.IOException;
-import java.util.ArrayList;
+import java.util.List;
 import net.minecraft.core.BlockPos;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-/** One legacy rail script used to select static parts for a rail model variant. */
+/** Isolated legacy rail script generating cached normal-track or custom-turnout geometry. */
 public final class RailScriptRuntime implements AutoCloseable {
     private static final Logger LOGGER = LoggerFactory.getLogger("UnrealTrainMod RTM scripts");
 
     private final RtmScriptInstance instance;
+    private final RtmScriptProgram program;
+    private final String railName;
+    private final List<RailTrackMeshBuilder.Source> sources;
     private final RailScriptRenderer renderer;
     private final RtmScriptSource.Prepared prepared;
     private final RailScriptTile tile;
     private final boolean hasShouldRenderObject;
+    private final boolean hasRenderRailStatic;
+    private final boolean hasRenderRailDynamic;
     private final String label;
     private boolean failed;
+    private String phase;
+    private Throwable filterFailure;
 
     private RailScriptRuntime(RtmScriptInstance instance, RailScriptRenderer renderer,
-                              RtmScriptSource.Prepared prepared, RailScriptTile tile,
-                              boolean hasShouldRenderObject, String label) {
+                              RtmScriptProgram program, RailScriptTile tile,
+                              boolean hasShouldRenderObject, boolean hasRenderRailStatic, boolean hasRenderRailDynamic,
+                              String railName, String label, List<RailTrackMeshBuilder.Source> sources) {
         this.instance = instance;
+        this.program = program;
+        this.railName = railName;
+        this.sources = List.copyOf(sources);
         this.renderer = renderer;
-        this.prepared = prepared;
+        this.prepared = program.prepared;
         this.tile = tile;
         this.hasShouldRenderObject = hasShouldRenderObject;
+        this.hasRenderRailStatic = hasRenderRailStatic;
+        this.hasRenderRailDynamic = hasRenderRailDynamic;
         this.label = label;
     }
 
-    public static RailScriptRuntime create(RtmScriptCache cache, PackageAsset script, String railName, String label)
+    public static RailScriptRuntime create(RtmScriptCache cache, PackageAsset script, String railName, String label,
+                                            List<RailTrackMeshBuilder.Source> sources)
             throws IOException {
-        var program = cache.program(script);
-        var renderer = new RailScriptRenderer();
+        var runtime = create(cache.program(script), railName, label, sources, null);
+        ScriptDiagnostics.scriptScope("rail", script, RtmScript.RAIL_RENDERER
+                + (runtime.hasRenderRailStatic ? "; renderRailStatic builds cached geometry at Pass 0"
+                        : "; no renderRailStatic, default static repetition is used")
+                + (runtime.hasShouldRenderObject ? "; shouldRenderObject filters renderStaticParts" : "; no object filter")
+                + (runtime.hasRenderRailDynamic ? "; renderRailDynamic is cached for custom turnouts only" : ""));
+        return runtime;
+    }
+
+    /** Shares compiled code, never the tile, global variables, lists or failure state. */
+    public RailScriptRuntime newAssembly(TrackAssemblyInstance assembly) throws IOException {
+        return create(program, railName, label + " [turnout " + assembly.id() + "]", sources, assembly);
+    }
+
+    private static RailScriptRuntime create(RtmScriptProgram program, String railName, String label,
+                                             List<RailTrackMeshBuilder.Source> sources, TrackAssemblyInstance assembly)
+            throws IOException {
+        var renderer = new RailScriptRenderer(sources, label);
         var tile = new RailScriptTile(railName);
+        if (assembly != null) tile.assembly(assembly);
         RtmScriptInstance instance = null;
         boolean transferred = false;
         try {
@@ -54,20 +90,17 @@ public final class RailScriptRuntime implements AutoCloseable {
             if (!instance.hasFunction("init")) throw new IOException("Script entry check failed: missing init(par1, par2)");
             instance.init();
             boolean hasShouldRenderObject = instance.hasFunction("shouldRenderObject");
-            var notExecuted = new ArrayList<String>(2);
-            if (instance.hasFunction("renderRailStatic")) notExecuted.add("renderRailStatic");
-            if (instance.hasFunction("renderRailDynamic")) notExecuted.add("renderRailDynamic");
-            ScriptDiagnostics.scriptScope("rail", script, renderClass
-                    + (hasShouldRenderObject
-                            ? "; shouldRenderObject selects the static parts" : "; no shouldRenderObject, every static part is kept")
-                    + (notExecuted.isEmpty() ? "" : "; not executed in this stage: " + String.join(", ", notExecuted)));
-            var runtime = new RailScriptRuntime(instance, renderer, program.prepared, tile, hasShouldRenderObject, label);
+            boolean hasRenderRailStatic = instance.hasFunction("renderRailStatic");
+            boolean hasRenderRailDynamic = instance.hasFunction("renderRailDynamic");
+            var runtime = new RailScriptRuntime(instance, renderer, program, tile,
+                    hasShouldRenderObject, hasRenderRailStatic, hasRenderRailDynamic, railName, label, sources);
             transferred = true;
             return runtime;
         } finally {
             if (!transferred) {
                 if (instance != null) instance.close();
                 renderer.release();
+                tile.close();
             }
         }
     }
@@ -75,25 +108,103 @@ public final class RailScriptRuntime implements AutoCloseable {
     /** A failed instance stays disabled; the caller must discard its current filtered build. */
     public boolean failed() { return failed; }
 
-    /** Each invocation restores its segment context on the tile also exposed as global tileEntity. */
-    public boolean shouldRender(String partName, long index, long count, BlockPos startPoint) {
-        if (failed || !hasShouldRenderObject) return true;
+    /** Static and dynamic script entries form one transactional, state-specific assembly mesh. */
+    public RailTrackMeshData buildAssembly(SwitchPosition position, int chunkX, int chunkZ, double scale, double period) {
+        if (failed) return null;
+        var maps = tile.getAllRailMaps();
+        var start = tile.getStartPoint();
+        var startPoint = new BlockPos(start[0], start[1], start[2]);
+        var context = new RailScriptDrawContext(maps[0].geometry(), startPoint, chunkX, chunkZ,
+                scale, period, false, this::shouldRender);
         boolean completed = false;
         try {
-            tile.setStartPoint(startPoint);
-            Object result = instance.invoke("shouldRenderObject", tile, partName, (double)count, (double)index);
+            tile.position(position);
+            renderer.context(context);
+            GL11.attach(context);
+            for (var map : maps) {
+                tile.map(map);
+                context.geometry(map.geometry());
+                phase = hasRenderRailStatic ? "renderRailStatic" : "renderStaticParts";
+                if (hasRenderRailStatic) instance.invoke("renderRailStatic", tile, 0.0, 0.0, 0.0, 0.0f, 0);
+                else renderer.renderStaticParts(tile, 0, 0, 0);
+            }
+            tile.map(maps[0]);
+            context.geometry(maps[0].geometry());
+            if (hasRenderRailDynamic) {
+                phase = "renderRailDynamic";
+                double y = maps[0].geometry().sample(0).position().y() - startPoint.getY();
+                instance.invoke("renderRailDynamic", tile, 0.0, y, 0.0, 0.0f, 0);
+            }
+            if (filterFailure != null) throw new IllegalStateException(filterFailure);
+            var result = context.finish();
             completed = true;
-            if (result instanceof Boolean value) return value;
-            // Missing/undefined results follow the legacy renderer: keep the object.
-            return true;
+            return result;
         } catch (Exception | LinkageError exception) {
-            String location = RtmScript.describe(prepared, exception);
-            LOGGER.warn("Rail script {} shouldRenderObject failed at {}; rendering all static parts instead: {}",
-                    label, location, exception.getMessage());
-            LOGGER.debug("Rail script shouldRenderObject failure", exception);
-            return true;
+            Throwable failure = filterFailure == null ? exception : filterFailure;
+            LOGGER.warn("Turnout script {} {} failed at {}; using native turnout appearance: {}",
+                    label, filterFailure == null ? phase : "shouldRenderObject",
+                    RtmScript.describe(prepared, failure), failure.getMessage());
+            LOGGER.debug("Turnout script build failure", failure);
+            return null;
         } finally {
+            GL11.detach();
+            context.restore();
+            renderer.context(null);
+            tile.unbind();
+            filterFailure = null;
             if (!completed) close();
+        }
+    }
+
+    /** A null result means failure; discard the whole build and use the complete static model. */
+    public RailTrackMeshData buildStatic(TrackGeometry geometry, BlockPos startPoint, int chunkX, int chunkZ,
+                                         double scale, double period, boolean preview) {
+        if (failed) return null;
+        var context = new RailScriptDrawContext(geometry, startPoint, chunkX, chunkZ, scale, period,
+                preview, this::shouldRender);
+        boolean completed = false;
+        try {
+            tile.bind(geometry, startPoint);
+            renderer.context(context);
+            GL11.attach(context);
+            phase = hasRenderRailStatic ? "renderRailStatic" : "renderStaticParts";
+            if (hasRenderRailStatic) instance.invoke("renderRailStatic", tile, 0.0, 0.0, 0.0, 0.0f, 0);
+            else renderer.renderStaticParts(tile, 0, 0, 0);
+            // A JS catch around renderStaticParts must not commit a partially filtered mesh.
+            if (filterFailure != null) throw new IllegalStateException(filterFailure);
+            var result = context.finish();
+            completed = true;
+            return result;
+        } catch (Exception | LinkageError exception) {
+            Throwable failure = filterFailure == null ? exception : filterFailure;
+            String location = RtmScript.describe(prepared, failure);
+            LOGGER.warn("Rail script {} {} failed at {}; rendering all static parts instead: {}",
+                    label, filterFailure == null ? phase : "shouldRenderObject", location, failure.getMessage());
+            LOGGER.debug("Rail script static build failure", failure);
+            return null;
+        } finally {
+            GL11.detach();
+            context.restore();
+            renderer.context(null);
+            tile.unbind();
+            filterFailure = null;
+            if (!completed) close();
+        }
+    }
+
+    private boolean shouldRender(String partName, long index, long count) {
+        if (filterFailure != null) throw new IllegalStateException(filterFailure);
+        if (!hasShouldRenderObject) return true;
+        String previous = phase;
+        phase = "shouldRenderObject";
+        try {
+            Object result = instance.invoke("shouldRenderObject", tile, partName, (double)count, (double)index);
+            phase = previous;
+            return !(result instanceof Boolean value) || value;
+        } catch (Exception | LinkageError exception) {
+            // The native builder has a non-throwing callback; preserve the script exception as the cause.
+            filterFailure = exception;
+            throw new IllegalStateException(exception);
         }
     }
 
@@ -102,5 +213,6 @@ public final class RailScriptRuntime implements AutoCloseable {
         failed = true;
         instance.close();
         renderer.release();
+        tile.close();
     }
 }

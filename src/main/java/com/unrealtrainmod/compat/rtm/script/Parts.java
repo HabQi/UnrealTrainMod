@@ -41,5 +41,8 @@ public final class Parts {
         target.renderParts(this);
     }
 
+    /** Geometry is already prepared; registering resolves and validates the authored names. */
+    public void prepare(RtmPartsRenderer renderer) { renderer.registerParts(this); }
+
     @Override public String toString() { return "Parts" + names; }
 }

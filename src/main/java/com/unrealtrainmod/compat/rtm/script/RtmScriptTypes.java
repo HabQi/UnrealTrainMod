@@ -16,6 +16,8 @@ final class RtmScriptTypes {
             new Type("org.lwjgl.opengl.GL11", GL11.class, "GL11"),
             new Type("jp.ngt.rtm.render.Parts", Parts.class, "Parts"),
             new Type("jp.ngt.rtm.rail.util.RailDir", RailDir.class, "RailDir"),
+            new Type("jp.ngt.rtm.rail.util.RailPosition", RailPosition.class, "RailPosition"),
+            new Type("jp.ngt.ngtlib.renderer.TESRRenderStats", TESRRenderStats.class, "TESRRenderStats"),
             new Type("jp.ngt.ngtlib.renderer.GLHelper", GLHelper.class, "GLHelper"),
             new Type("jp.ngt.rtm.entity.train.util.TrainState", RtmTrainState.class, "TrainState"),
             new Type("jp.ngt.rtm.RTMCore", RtmCore.class, "RTMCore"),

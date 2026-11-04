@@ -11,10 +11,14 @@ import com.unrealtrainmod.network.payload.TrackSegmentRemovePayload;
 import com.unrealtrainmod.track.TrackSegmentData;
 import com.unrealtrainmod.track.geometry.TrackGeometry;
 import com.unrealtrainmod.track.assembly.TrackAssemblyInstance;
+import com.unrealtrainmod.track.assembly.TrackAssemblyDefinition;
+import com.unrealtrainmod.track.assembly.SwitchPosition;
+import com.unrealtrainmod.compat.rtm.script.RailScriptRuntime;
 import com.unrealtrainmod.network.payload.TrackAssemblyPayload;
 import com.unrealtrainmod.network.payload.TrackAssemblyStatePayload;
 import com.unrealtrainmod.network.payload.TrackAssemblyRemovePayload;
 import java.util.Collections;
+import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
@@ -108,6 +112,8 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
             entry.chunks.remove(chunk);
             closeMeshes(entry.meshes.remove(chunk));
             closeMeshes(entry.tongues.remove(chunk));
+            var railStates = entry.railStates.remove(chunk);
+            if (railStates != null) for (var mesh : railStates.values()) mesh.close();
             if (entry.chunks.isEmpty()) { entry.close(); iterator.remove(); }
         }
         Set<UUID> members = chunks.remove(chunk);
@@ -181,7 +187,9 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
             if (scriptFailures.contains(ClientRailModelManager.INSTANCE.model(entry.data.modelId()))) entry.close();
         }
         for (var entry : assemblies.values()) {
-            if (scriptFailures.contains(ClientRailModelManager.INSTANCE.model(entry.data.modelId()))) entry.close();
+            // Custom turnouts have isolated script globals and do not inherit normal-track script failures.
+            if (entry.data.definition() != TrackAssemblyDefinition.CUSTOM
+                    && scriptFailures.contains(ClientRailModelManager.INSTANCE.model(entry.data.modelId()))) entry.close();
         }
         scriptFailures.clear();
     }
@@ -215,6 +223,9 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
         final Map<Long, List<TrackRenderMesh>> meshes = new HashMap<>();
         // Built-in turnouts keep the two-state tongue mesh separate from shared static rails.
         final Map<Long, List<TrackRenderMesh>> tongues = new HashMap<>();
+        final Map<Long, EnumMap<SwitchPosition, TrackRenderMesh>> railStates = new HashMap<>();
+        RailScriptRuntime assemblyScript;
+        boolean scriptAttempted, scriptFailed;
         boolean missingReported;
         AssemblyEntry(TrackAssemblyInstance data) {
             this.data = data;
@@ -235,16 +246,25 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
             return model == null ? data.bounds() : data.bounds().inflate(model.padding() * model.scaleForGauge(data.gauge()));
         }
         void setState(TrackAssemblyInstance data) {
-            if (data.definition().direction() != null) {
+            if (data.definition().direction() != null || scriptFailed) {
                 for (var meshes : tongues.values()) closeMeshes(meshes);
                 tongues.clear();
             }
             this.data = data;
         }
+        void clearScriptMeshes() {
+            for (var states : railStates.values()) for (var mesh : states.values()) mesh.close();
+            railStates.clear();
+        }
         @Override public void close() {
             for (var meshes : meshes.values()) closeMeshes(meshes);
             for (var meshes : tongues.values()) closeMeshes(meshes);
             meshes.clear(); tongues.clear(); missingReported = false;
+            clearScriptMeshes();
+            if (assemblyScript != null) assemblyScript.close();
+            assemblyScript = null;
+            scriptAttempted = false;
+            scriptFailed = false;
         }
     }
 

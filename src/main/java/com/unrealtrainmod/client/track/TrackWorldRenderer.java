@@ -14,7 +14,11 @@ import com.unrealtrainmod.track.mesh.TrackMeshBuilder;
 import com.unrealtrainmod.track.geometry.TrackGeometry;
 import com.unrealtrainmod.track.mesh.TrackMeshData;
 import com.unrealtrainmod.track.mesh.RailTrackMeshBuilder;
+import com.unrealtrainmod.track.assembly.TrackAssemblyDefinition;
+import com.unrealtrainmod.track.assembly.SwitchPosition;
+import java.io.IOException;
 import java.util.ArrayList;
+import java.util.EnumMap;
 import java.util.List;
 import java.util.UUID;
 import net.minecraft.client.Minecraft;
@@ -79,13 +83,50 @@ public final class TrackWorldRenderer {
                 }
             }
             for (var entry : cache.assemblies.values()) {
+                // A failure later in last frame's traversal must not retire already queued buffers mid-frame.
+                if (entry.scriptFailed) entry.clearScriptMeshes();
                 if (!event.getFrustum().isVisible(entry.broadBounds())) continue;
                 boolean simplified = entry.data.definition().direction() != null;
+                var model = ClientRailModelManager.INSTANCE.model(entry.data.modelId());
+                boolean scriptedCustom = entry.data.definition() == TrackAssemblyDefinition.CUSTOM
+                        && model != null && model.scripted();
+                if (scriptedCustom && !entry.scriptAttempted) prepareAssemblyScript(entry, model);
                 for (long chunk : entry.chunks) {
                     int x = ChunkPos.getX(chunk), z = ChunkPos.getZ(chunk);
                     if (!level.hasChunk(x, z)) continue;
                     if (stats != null) stats.chunk();
-                    if (simplified) {
+                    if (scriptedCustom && !entry.scriptFailed) {
+                        var active = entry.data.state().controls().get("main");
+                        var inactive = active == SwitchPosition.NORMAL ? SwitchPosition.REVERSE : SwitchPosition.NORMAL;
+                        var states = entry.railStates.computeIfAbsent(chunk, ignored -> new EnumMap<>(SwitchPosition.class));
+                        for (var position : List.of(active, inactive)) {
+                            if (states.containsKey(position)) continue;
+                            if (builds == 0) {
+                                if (stats != null) stats.candidate();
+                                break;
+                            }
+                            long buildStart = stats == null ? 0L : System.nanoTime();
+                            var data = entry.assemblyScript.buildAssembly(position, x, z,
+                                    model.scaleForGauge(entry.data.gauge()), model.period());
+                            builds--;
+                            if (stats != null) stats.built(System.nanoTime() - buildStart);
+                            if (data == null) {
+                                entry.scriptFailed = true;
+                                break;
+                            }
+                            states.put(position, new RailTrackGpuMesh(data, false));
+                        }
+                        if (!entry.scriptFailed) {
+                            var mesh = states.get(active);
+                            if (mesh != null) uploads = draw(stats, state, queue, event, level, camera, modelView,
+                                    uploads, mesh, TrackRenderStats.STRUCTURE_ASSEMBLY);
+                            // Pre-upload the other state within the same frame budget, without drawing it.
+                            var other = states.get(inactive);
+                            if (other != null) uploads -= other.upload(level, uploads, stats);
+                            continue;
+                        }
+                    }
+                    if (simplified || (scriptedCustom && entry.scriptFailed)) {
                         // Built-in turnouts keep their moving tongue meshes on a dedicated two-pass path.
                         for (int pass = 0; pass < 2; pass++) {
                             boolean tongue = pass == 1;
@@ -149,6 +190,23 @@ public final class TrackWorldRenderer {
         if (stats != null) stats.logIfDue();
     }
 
+    private static void prepareAssemblyScript(ClientTrackCache.AssemblyEntry entry, ClientRailModelManager.Model model) {
+        entry.scriptAttempted = true;
+        if (model.script() == null) {
+            entry.scriptFailed = true;
+            LOGGER.warn("Turnout {} has an unavailable rail script; using native appearance", entry.data.id());
+            return;
+        }
+        try {
+            entry.assemblyScript = model.script().newAssembly(entry.data);
+        } catch (IOException | RuntimeException | LinkageError exception) {
+            entry.scriptFailed = true;
+            LOGGER.warn("Cannot initialise rail script for turnout {}; using native appearance: {}",
+                    entry.data.id(), exception.getMessage());
+            LOGGER.debug("Turnout script initialisation failure", exception);
+        }
+    }
+
     private static int drawAll(TrackRenderStats stats, TrackRenderState state, TrackDrawQueue queue, RenderLevelStageEvent event,
                                ClientLevel level, Vec3 camera, Matrix4f modelView, int uploads,
                                List<TrackRenderMesh> group) {
@@ -208,15 +266,12 @@ public final class TrackWorldRenderer {
                     double scale = model.scaleForGauge(gauge);
                     var script = filterScript ? model.script() : null;
                     if (script != null && !script.failed()) {
-                        try {
-                            var start = geometry.sample(0).position();
-                            var startPoint = BlockPos.containing(start.x(), start.y(), start.z());
-                            var filtered = RailTrackMeshBuilder.build(geometry, partSources(model), x, z,
-                                    scale, model.period(), new RailScriptFilter(model, startPoint));
-                            return new RailTrackGpuMesh(filtered, false);
-                        } catch (RailScriptFilter.Failure failure) {
-                            LOGGER.warn("Rail script for {} failed; using the full static model from now on", modelId);
-                        }
+                        var start = geometry.sample(0).position();
+                        var startPoint = BlockPos.containing(start.x(), start.y() + 0.0625, start.z());
+                        var scripted = script.buildStatic(geometry, startPoint, x, z, scale, model.period(), false);
+                        if (scripted != null) return new RailTrackGpuMesh(scripted, false);
+                        ClientTrackCache.INSTANCE.invalidateScriptedModel(model);
+                        LOGGER.warn("Rail script for {} failed; using the full static model from now on", modelId);
                     }
                     // No script, a failed script or a dynamic assembly: flat material merge with every part.
                     return new RailTrackGpuMesh(RailTrackMeshBuilder.build(geometry, staticSources(model), x, z,
@@ -236,18 +291,6 @@ public final class TrackWorldRenderer {
             LOGGER.warn("Cannot build track {} in chunk {}, {}: {}", id, x, z, exception.getMessage());
             return new TrackGpuMesh(TrackMeshData.EMPTY);
         }
-    }
-
-    /** Authored object groups, so the script filter can still name individual parts. */
-    private static List<RailTrackMeshBuilder.Source> partSources(ClientRailModelManager.Model model) {
-        var sources = new ArrayList<RailTrackMeshBuilder.Source>();
-        for (var part : model.parts()) {
-            for (var batch : part.batches()) {
-                sources.add(new RailTrackMeshBuilder.Source(part.name(), batch.texture(),
-                        batch.doubleSided(), batch.mesh()));
-            }
-        }
-        return sources;
     }
 
     /** Flat material merge used when no filter runs or after the script fell back to the full model. */

@@ -15,7 +15,7 @@ public abstract class RtmPartsRenderer {
     private final Set<Parts> registeredParts = new LinkedHashSet<>();
     private final Map<Integer, Object> data = new HashMap<>();
 
-    /** Submit the named parts in the current draw context. Mesh-generation callers may ignore draws. */
+    /** Submit the named parts in the current vehicle or static rail draw context. */
     protected abstract void draw(List<String> names);
 
     public Parts registerParts(Parts parts) {
@@ -24,7 +24,7 @@ public abstract class RtmPartsRenderer {
         return parts;
     }
 
-    /** Vehicle renderers can validate immediately against their associated model. */
+    /** Renderers can validate immediately against their associated model. */
     protected void registered(Parts parts) {}
 
     public Object getData(int id) { return data.getOrDefault(id, 0); }

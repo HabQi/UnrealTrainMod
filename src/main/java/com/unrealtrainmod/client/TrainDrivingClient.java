@@ -4,6 +4,7 @@
  */
 package com.unrealtrainmod.client;
 
+import com.unrealtrainmod.client.gui.screen.TrainDrivingScreen;
 import com.unrealtrainmod.entity.TrainEntity;
 import com.unrealtrainmod.network.TrackSyncEvent;
 import com.unrealtrainmod.network.payload.TrainControlInputPayload;
@@ -48,6 +49,7 @@ public final class TrainDrivingClient {
     private static final KeyMapping EMERGENCY = key("emergency", GLFW.GLFW_KEY_F);
     private static final KeyMapping DOOR_LEFT = key("door_left", GLFW.GLFW_KEY_J);
     private static final KeyMapping DOOR_RIGHT = key("door_right", GLFW.GLFW_KEY_K);
+    private static final KeyMapping PANEL = key("panel", GLFW.GLFW_KEY_G);
     private static TrainControlSyncPayload snapshot;
     private static long sequence;
     private static int silence, heartbeat;
@@ -71,9 +73,10 @@ public final class TrainDrivingClient {
         event.register(EMERGENCY);
         event.register(DOOR_LEFT);
         event.register(DOOR_RIGHT);
+        event.register(PANEL);
     }
 
-    private static TrainEntity riddenVehicle() {
+    public static TrainEntity riddenVehicle() {
         var mc = Minecraft.getInstance();
         if (snapshot == null || mc.player == null) return null;
         return mc.player.getVehicle() instanceof TrainEntity entity && entity.getUUID().equals(snapshot.vehicle())
@@ -84,6 +87,14 @@ public final class TrainDrivingClient {
         var mc = Minecraft.getInstance();
         return snapshot != null && mc.level != null
                 && mc.level.dimension().location().equals(snapshot.dimension()) && riddenVehicle() != null;
+    }
+
+    public static TrainControlSyncPayload state() { return riding() ? snapshot : null; }
+
+    public static boolean panelKey(int key, int scanCode) { return PANEL.matches(key, scanCode); }
+
+    private static void openPanel() {
+        if (riding()) Minecraft.getInstance().setScreen(new TrainDrivingScreen(snapshot.session()));
     }
 
     public static void onSync(TrackSyncEvent event) {
@@ -114,20 +125,37 @@ public final class TrainDrivingClient {
             clear();
             return;
         }
-        for (var key : new KeyMapping[] {POWER, BRAKE, REVERSER, EMERGENCY, DOOR_LEFT, DOOR_RIGHT}) while (key.consumeClick()) { }
+        for (var key : new KeyMapping[] {POWER, BRAKE, REVERSER, EMERGENCY, DOOR_LEFT, DOOR_RIGHT, PANEL}) while (key.consumeClick()) { }
         if (riding() && ++heartbeat >= 10) send(Action.HEARTBEAT);
     }
 
     public static void keyPressed(InputEvent.Key event) {
-        if (event.getAction() != GLFW.GLFW_PRESS || !CONTEXT.isActive()) return;
-        press(POWER.matches(event.getKey(), event.getScanCode()), BRAKE.matches(event.getKey(), event.getScanCode()),
-                REVERSER.matches(event.getKey(), event.getScanCode()), EMERGENCY.matches(event.getKey(), event.getScanCode()));
-        if (DOOR_LEFT.matches(event.getKey(), event.getScanCode())) door(VehicleDoor.LEFT);
-        if (DOOR_RIGHT.matches(event.getKey(), event.getScanCode())) door(VehicleDoor.RIGHT);
+        var screen = Minecraft.getInstance().screen;
+        if (event.getAction() != GLFW.GLFW_PRESS || !riding()
+                || (screen != null && !(screen instanceof TrainDrivingScreen))) return;
+        if (panelKey(event.getKey(), event.getScanCode())) openPanel();
+        else controlKey(event.getKey(), event.getScanCode());
+    }
+
+    public static boolean isControlKey(int key, int scanCode) {
+        return POWER.matches(key, scanCode) || BRAKE.matches(key, scanCode)
+                || REVERSER.matches(key, scanCode) || EMERGENCY.matches(key, scanCode)
+                || DOOR_LEFT.matches(key, scanCode) || DOOR_RIGHT.matches(key, scanCode);
+    }
+
+    /** The panel leaves mapped keys unconsumed; the raw event distinguishes presses from repeats. */
+    private static void controlKey(int key, int scanCode) {
+        boolean power = POWER.matches(key, scanCode), brake = BRAKE.matches(key, scanCode);
+        boolean direction = REVERSER.matches(key, scanCode), stop = EMERGENCY.matches(key, scanCode);
+        boolean left = DOOR_LEFT.matches(key, scanCode), right = DOOR_RIGHT.matches(key, scanCode);
+        press(power, brake, direction, stop);
+        if (left) door(VehicleDoor.LEFT);
+        if (right) door(VehicleDoor.RIGHT);
     }
 
     public static void mousePressed(InputEvent.MouseButton.Post event) {
         if (event.getAction() != GLFW.GLFW_PRESS || !CONTEXT.isActive()) return;
+        if (PANEL.matchesMouse(event.getButton())) { openPanel(); return; }
         press(POWER.matchesMouse(event.getButton()), BRAKE.matchesMouse(event.getButton()),
                 REVERSER.matchesMouse(event.getButton()), EMERGENCY.matchesMouse(event.getButton()));
         if (DOOR_LEFT.matchesMouse(event.getButton())) door(VehicleDoor.LEFT);
@@ -142,7 +170,8 @@ public final class TrainDrivingClient {
         if (stop) send(snapshot.emergency() ? Action.EMERGENCY_RELEASE : Action.EMERGENCY_APPLY);
     }
 
-    private static void send(Action action) {
+    public static void send(Action action) {
+        if (!riding()) return;
         heartbeat = 0;
         sequence++;
         PacketDistributor.sendToServer(new TrainControlInputPayload(snapshot.session(), sequence, action));
@@ -171,7 +200,7 @@ public final class TrainDrivingClient {
 
     public static void render(RenderGuiEvent.Post event) {
         var mc = Minecraft.getInstance();
-        if (!riding() || mc.options.hideGui) return;
+        if (!riding() || mc.options.hideGui || mc.screen instanceof TrainDrivingScreen) return;
         var graphics = event.getGuiGraphics();
         int width = Math.min(graphics.guiWidth() - 24, 430);
         // The server snapshot changes around 10 Hz; rendering may run hundreds of times per second.
@@ -186,11 +215,8 @@ public final class TrainDrivingClient {
 
     private static void rebuildHud(Minecraft mc, int width) {
         var state = snapshot;
-        var direction = Component.translatable(PREFIX + "direction." + state.reverser().name().toLowerCase(Locale.ROOT));
-        boolean releasing = state.handle() > 0 && state.brakeForce() > 0 && state.reverser() != Reverser.NEUTRAL;
-        var condition = Component.translatable(PREFIX + (state.emergency() ? "state.emergency"
-                : releasing ? "state.brake_releasing" : state.speed() != 0 ? "state.running"
-                : state.stopReason() == StopReason.END_OF_ROUTE ? "state.end_of_route" : "state.stopped"));
+        var direction = direction(state);
+        var condition = condition(state);
         Component brakeDemand = state.emergency() ? Component.translatable(PREFIX + "brake_emergency")
                 : Component.literal(number(Math.max(0, -state.handle()) * 100.0 / TrainControlProfile.BRAKE_NOTCHES) + "%");
         Component[] lines = {
@@ -202,7 +228,8 @@ public final class TrainDrivingClient {
             Component.translatable(PREFIX + "help", POWER.getTranslatedKeyMessage(), BRAKE.getTranslatedKeyMessage(),
                     REVERSER.getTranslatedKeyMessage(), EMERGENCY.getTranslatedKeyMessage(),
                     DOOR_LEFT.getTranslatedKeyMessage(), DOOR_RIGHT.getTranslatedKeyMessage(),
-                    mc.options.keyShift.getTranslatedKeyMessage())
+                    mc.options.keyShift.getTranslatedKeyMessage()),
+            Component.translatable(PREFIX + "panel_hint", PANEL.getTranslatedKeyMessage())
         };
         var wrapped = new ArrayList<FormattedCharSequence>();
         for (var line : lines) wrapped.addAll(mc.font.split(line, width));
@@ -215,6 +242,17 @@ public final class TrainDrivingClient {
 
     private static String number(double value) { return String.format(Locale.ROOT, "%.2f", value); }
 
+    public static Component direction(TrainControlSyncPayload state) {
+        return Component.translatable(PREFIX + "direction." + state.reverser().name().toLowerCase(Locale.ROOT));
+    }
+
+    public static Component condition(TrainControlSyncPayload state) {
+        boolean releasing = state.handle() > 0 && state.brakeForce() > 0 && state.reverser() != Reverser.NEUTRAL;
+        return Component.translatable(PREFIX + (state.emergency() ? "state.emergency"
+                : releasing ? "state.brake_releasing" : state.speed() != 0 ? "state.running"
+                : state.stopReason() == StopReason.END_OF_ROUTE ? "state.end_of_route" : "state.stopped"));
+    }
+
     public static void clear() {
         snapshot = null;
         sequence = 0;
@@ -223,6 +261,8 @@ public final class TrainDrivingClient {
         hudLanguage = null;
         hudFont = null;
         hudRows = List.of();
+        var mc = Minecraft.getInstance();
+        if (mc.screen instanceof TrainDrivingScreen) mc.setScreen(null);
     }
 
     public static void unload(LevelEvent.Unload event) { if (event.getLevel().isClientSide()) clear(); }

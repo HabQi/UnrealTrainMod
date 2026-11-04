@@ -34,6 +34,10 @@ public final class RtmScript {
     }
 
     public static String describe(RtmScriptSource.Prepared prepared, Throwable exception) {
+        // Native mesh callbacks can wrap a nested JS invocation; retain the innermost script location.
+        for (Throwable cause = exception.getCause(); cause != null; cause = cause.getCause()) {
+            if (cause instanceof ScriptException || cause instanceof NashornException) exception = cause;
+        }
         int line;
         String file;
         if (exception instanceof ScriptException script) {

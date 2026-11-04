@@ -9,15 +9,15 @@ package com.unrealtrainmod.compat.rtm.script;
  * OpenGL fixed pipeline; every call is applied to the current script's PoseStack.
  */
 public final class GL11 {
-    private static final ThreadLocal<ScriptDrawContext> CURRENT = new ThreadLocal<>();
+    private static final ThreadLocal<ScriptMatrixContext> CURRENT = new ThreadLocal<>();
 
     private GL11() {}
 
-    static void attach(ScriptDrawContext context) { CURRENT.set(context); }
+    static void attach(ScriptMatrixContext context) { CURRENT.set(context); }
 
     static void detach() { CURRENT.remove(); }
 
-    static ScriptDrawContext current() {
+    static ScriptMatrixContext current() {
         var context = CURRENT.get();
         if (context == null) throw new IllegalStateException("RTM GL call outside a script render context");
         return context;

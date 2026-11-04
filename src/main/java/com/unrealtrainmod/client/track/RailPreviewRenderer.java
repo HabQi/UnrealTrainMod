@@ -9,6 +9,10 @@ import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.unrealtrainmod.client.renderer.preview.PreviewCamera;
 import com.unrealtrainmod.client.renderer.preview.PreviewRenderer;
+import com.unrealtrainmod.model.ModelBounds;
+import com.unrealtrainmod.track.geometry.LinearGrade;
+import com.unrealtrainmod.track.geometry.StraightTrackGeometry;
+import com.unrealtrainmod.track.geometry.TrackPoint;
 import com.unrealtrainmod.track.geometry.TrackVector;
 import com.unrealtrainmod.track.mesh.RailTrackMeshData;
 import com.unrealtrainmod.track.mesh.TrackMeshData;
@@ -23,53 +27,56 @@ public final class RailPreviewRenderer implements AutoCloseable {
     private ClientRailModelManager.Model model;
     private RailTrackGpuMesh mesh;
     private boolean staticMesh;
+    private ModelBounds bounds;
 
     public void render(GuiGraphics graphics, int x, int y, int width, int height,
                        ClientRailModelManager.Model selected, PreviewCamera camera) {
-        renderer.render(graphics, x, y, width, height, selected.bounds(), camera, pose -> draw(selected, pose));
+        prepare(selected);
+        renderer.render(graphics, x, y, width, height, bounds, camera, this::draw);
     }
 
     public NativeImage capture(ClientRailModelManager.Model selected) {
         try {
-            return renderer.capture(selected.bounds(), -180, 90, false,
-                    PreviewRenderer.RAIL_THUMBNAIL_SAMPLE_SCALE, pose -> draw(selected, pose));
+            prepare(selected);
+            return renderer.capture(bounds, -180, 90, false,
+                    PreviewRenderer.RAIL_THUMBNAIL_SAMPLE_SCALE, this::draw);
         } finally {
             clearMesh();
         }
     }
 
-    private void draw(ClientRailModelManager.Model selected, PoseStack pose) {
+    private void prepare(ClientRailModelManager.Model selected) {
         // Prepared model identity changes on resource reload, even when the selection keeps its ID.
         // A script that failed elsewhere in the world also forces the cached filtered preview to rebuild.
         boolean scriptFailed = selected.script() != null && selected.script().failed();
         if (model != selected || (scriptFailed && !staticMesh)) {
             clearMesh();
             var b = selected.bounds();
-            var batches = new ArrayList<RailTrackMeshData.Batch>();
-            if (selected.script() == null || scriptFailed) {
-                addStatic(selected, batches);
-                staticMesh = true;
-            } else {
-                // The preview shows one authored module; apply the same part filter as world generation.
-                var filter = new RailScriptFilter(selected, BlockPos.ZERO);
-                try {
-                    for (var part : selected.parts()) {
-                        if (!filter.shouldRender(part.name(), 0, 1)) continue;
-                        for (var batch : part.batches()) {
-                            batches.add(new RailTrackMeshData.Batch(batch.texture(), batch.doubleSided(), batch.mesh()));
-                        }
-                    }
-                } catch (RailScriptFilter.Failure failure) {
-                    // Discard the partially filtered preview and let world meshes fall back on the next frame.
-                    staticMesh = true;
-                    batches.clear();
-                    addStatic(selected, batches);
-                }
+            RailTrackMeshData data = null;
+            if (selected.script() != null && !scriptFailed) {
+                var geometry = new StraightTrackGeometry(new TrackPoint(0, -selected.period() / 2),
+                        new TrackPoint(0, selected.period() / 2), new LinearGrade(0, 0), 1.435);
+                var start = geometry.sample(0).position();
+                data = selected.script().buildStatic(geometry,
+                        BlockPos.containing(start.x(), start.y() + 0.0625, start.z()), 0, 0, 1, selected.period(), true);
+                if (data == null) ClientTrackCache.INSTANCE.invalidateScriptedModel(selected);
             }
-            mesh = new RailTrackGpuMesh(new RailTrackMeshData(new TrackVector(0, 0, 0),
-                    new TrackMeshData.Bounds(b.minX(), b.minY(), b.minZ(), b.maxX(), b.maxY(), b.maxZ()), List.copyOf(batches)), true);
+            staticMesh = data == null;
+            if (staticMesh) {
+                var batches = new ArrayList<RailTrackMeshData.Batch>();
+                addStatic(selected, batches);
+                data = new RailTrackMeshData(new TrackVector(0, 0, 0),
+                        new TrackMeshData.Bounds(b.minX(), b.minY(), b.minZ(), b.maxX(), b.maxY(), b.maxZ()), List.copyOf(batches));
+            }
+            var meshBounds = data.bounds();
+            bounds = data.batches().isEmpty() ? b : new ModelBounds((float)meshBounds.minX(), (float)meshBounds.minY(),
+                    (float)meshBounds.minZ(), (float)meshBounds.maxX(), (float)meshBounds.maxY(), (float)meshBounds.maxZ());
+            mesh = new RailTrackGpuMesh(data, true);
             model = selected;
         }
+    }
+
+    private void draw(PoseStack pose) {
         try (var state = new TrackRenderState(null)) {
             if (!mesh.isUploaded()) mesh.upload(null, Integer.MAX_VALUE, null);
             mesh.draw(state, pose.last().pose(), RenderSystem.getProjectionMatrix());
@@ -86,6 +93,7 @@ public final class RailPreviewRenderer implements AutoCloseable {
         if (mesh != null) mesh.close();
         mesh = null;
         model = null;
+        bounds = null;
         staticMesh = false;
     }
 

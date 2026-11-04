@@ -9,32 +9,19 @@ import com.unrealtrainmod.track.geometry.TrackGeometry;
 import com.unrealtrainmod.track.geometry.TrackPose;
 import com.unrealtrainmod.track.geometry.TrackVector;
 import it.unimi.dsi.fastutil.floats.FloatArrayList;
-import it.unimi.dsi.fastutil.ints.IntArrayList;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.longs.LongArrayList;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.LinkedHashMap;
 import java.util.List;
 import net.minecraft.resources.ResourceLocation;
 
 /** Rail-only static repetition with endpoint tangent extension. No GPU resources; textures are identifiers only. */
 public final class RailTrackMeshBuilder {
-    private static final int MAX_VERTICES = 262_144;
     /** One prepared model object and its material batch. */
     public record Source(String part, ResourceLocation texture, boolean doubleSided, IndexedMesh mesh) {}
     /** Legacy shouldRenderObject filter; index is the repeated module number and count the module total. */
     public interface Filter {
         Filter ALL = (part, index, count) -> true;
         boolean shouldRender(String part, long index, long count);
-    }
-
-    private record MaterialKey(ResourceLocation texture, boolean doubleSided) {}
-
-    private static final class MaterialBuffer {
-        final FloatArrayList vertices = new FloatArrayList();
-        final IntArrayList colors = new IntArrayList();
-        final IntArrayList indices = new IntArrayList();
     }
 
     private final TrackGeometry geometry;
@@ -44,10 +31,6 @@ public final class RailTrackMeshBuilder {
     private final long count;
     private final TrackVector origin;
     private final Long2ObjectOpenHashMap<TrackPose> poses = new Long2ObjectOpenHashMap<>();
-    private double minX = Double.POSITIVE_INFINITY, minY = minX, minZ = minX;
-    private double maxX = Double.NEGATIVE_INFINITY, maxY = maxX, maxZ = maxX;
-    /** Keep the existing limit on submitted references, not just the new shared vertex records. */
-    private int vertexCount;
 
     private RailTrackMeshBuilder(TrackGeometry geometry, int chunkX, int chunkZ, double scale, double referencePeriod) {
         this.geometry = geometry;
@@ -69,44 +52,19 @@ public final class RailTrackMeshBuilder {
         var builder = new RailTrackMeshBuilder(geometry, chunkX, chunkZ, scale, referencePeriod);
         var modules = new LongArrayList();
         if (!sources.isEmpty()) builder.collectModules(0, builder.count, modules);
-        var materials = new LinkedHashMap<MaterialKey, MaterialBuffer>();
+        var output = new RailMeshAccumulator(builder.origin);
         // Keep source/module invocation order even when nonadjacent sources share an output material.
         for (var source : sources) {
-            var key = new MaterialKey(source.texture(), source.doubleSided());
             var mesh = source.mesh();
-            int[] emittedIndices = null;
-            long[] emittedModules = null;
             for (int i = 0; i < modules.size(); i++) {
                 long module = modules.getLong(i);
                 if (!filter.shouldRender(source.part(), module, builder.count)) continue;
-                if (mesh.indices().length == 0) continue;
-                if (emittedIndices == null) {
-                    emittedIndices = new int[mesh.colors().length];
-                    emittedModules = new long[mesh.colors().length];
-                    Arrays.fill(emittedModules, -1L);
-                }
-                var output = materials.computeIfAbsent(key, ignored -> new MaterialBuffer());
                 double center = module * builder.period + builder.period / 2;
-                for (int index : mesh.indices()) {
-                    if (++builder.vertexCount > MAX_VERTICES) {
-                        throw new IllegalArgumentException("Rail chunk mesh exceeds 262,144 vertices");
-                    }
-                    if (emittedModules[index] != module) {
-                        emittedIndices[index] = output.colors.size();
-                        builder.emit(mesh, index, center, output);
-                        emittedModules[index] = module;
-                    }
-                    output.indices.add(emittedIndices[index]);
-                }
+                output.append(source.texture(), source.doubleSided(), mesh,
+                        (index, vertices) -> builder.emit(mesh, index, center, vertices));
             }
         }
-        var batches = new ArrayList<RailTrackMeshData.Batch>();
-        materials.forEach((key, output) -> batches.add(new RailTrackMeshData.Batch(key.texture(), key.doubleSided(),
-                new IndexedMesh(output.vertices.toFloatArray(), output.colors.toIntArray(),
-                        output.indices.toIntArray()))));
-        var bounds = batches.isEmpty() ? new TrackMeshData.Bounds(0, 0, 0, 0, 0, 0)
-                : new TrackMeshData.Bounds(builder.minX, builder.minY, builder.minZ, builder.maxX, builder.maxY, builder.maxZ);
-        return new RailTrackMeshData(builder.origin, bounds, batches);
+        return output.finish();
     }
 
     private void collectModules(long first, long end, LongArrayList modules) {
@@ -126,7 +84,7 @@ public final class RailTrackMeshBuilder {
         modules.add(first);
     }
 
-    private void emit(IndexedMesh mesh, int index, double center, MaterialBuffer output) {
+    private void emit(IndexedMesh mesh, int index, double center, FloatArrayList output) {
         float[] v = mesh.vertices();
         int offset = index * 8;
         double distance = v[offset + 2] * scale + center;
@@ -149,23 +107,10 @@ public final class RailTrackMeshBuilder {
         double nz = l.z() * v[offset + 5] + n.z() * v[offset + 6] + t.z() * v[offset + 7];
         double normalLength = Math.sqrt(nx * nx + ny * ny + nz * nz);
         if (normalLength > 0) { nx /= normalLength; ny /= normalLength; nz /= normalLength; }
-        append(output.vertices, xw - origin.x());
-        append(output.vertices, yw - origin.y());
-        append(output.vertices, zw - origin.z());
-        append(output.vertices, v[offset + 3]);
-        append(output.vertices, v[offset + 4]);
-        append(output.vertices, nx);
-        append(output.vertices, ny);
-        append(output.vertices, nz);
-        output.colors.add(mesh.colors()[index]);
-        minX = Math.min(minX, xw); maxX = Math.max(maxX, xw);
-        minY = Math.min(minY, yw); maxY = Math.max(maxY, yw);
-        minZ = Math.min(minZ, zw); maxZ = Math.max(maxZ, zw);
-    }
-
-    private static void append(FloatArrayList vertices, double value) {
-        float component = (float)value;
-        if (!Float.isFinite(component)) throw new IllegalArgumentException("Non-finite rail vertex");
-        vertices.add(component);
+        output.add((float)(xw - origin.x()));
+        output.add((float)(yw - origin.y()));
+        output.add((float)(zw - origin.z()));
+        output.add(v[offset + 3]); output.add(v[offset + 4]);
+        output.add((float)nx); output.add((float)ny); output.add((float)nz);
     }
 }
