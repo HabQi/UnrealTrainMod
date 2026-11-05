@@ -16,6 +16,8 @@ import com.unrealtrainmod.client.model.LoadedModel;
 import com.unrealtrainmod.client.model.ModelPreparer;
 import com.unrealtrainmod.client.model.ModelPreparer.PreparedReload;
 import com.unrealtrainmod.client.model.TextureLoader;
+import com.unrealtrainmod.client.texture.MaterialTexture;
+import com.unrealtrainmod.client.texture.PreparedTexture;
 import com.unrealtrainmod.client.renderer.TrainModelRenderer;
 import com.unrealtrainmod.compat.rtm.script.ScriptDiagnostics;
 import com.unrealtrainmod.compat.rtm.script.VehicleScriptManager;
@@ -24,7 +26,6 @@ import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.renderer.texture.DynamicTexture;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.packs.resources.ResourceManager;
 import net.minecraft.server.packs.resources.SimplePreparableReloadListener;
@@ -59,9 +60,9 @@ public final class ClientModelManager extends SimplePreparableReloadListener<Pre
             for (var entry : prepared.images().entrySet()) {
                 var textureId = entry.getKey();
                 var pixels = pending.remove(entry.getKey());
-                DynamicTexture texture;
+                MaterialTexture texture;
                 try {
-                    texture = new DynamicTexture(pixels);
+                    texture = new MaterialTexture(pixels);
                 } catch (RuntimeException | Error e) {
                     pixels.close();
                     throw e;
@@ -113,8 +114,8 @@ public final class ClientModelManager extends SimplePreparableReloadListener<Pre
             registered.forEach(textureManager::release);
             throw e;
         } finally {
-            // Removed images were transferred to DynamicTextures or closed on construction failure.
-            pending.values().forEach(pixels -> pixels.close());
+            // Removed images were transferred to material textures or closed on construction failure.
+            pending.values().forEach(PreparedTexture::close);
         }
     }
 

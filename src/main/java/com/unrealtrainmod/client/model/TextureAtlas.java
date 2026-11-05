@@ -10,6 +10,7 @@ import org.slf4j.LoggerFactory;
 import com.mojang.blaze3d.platform.NativeImage;
 import com.unrealtrainmod.client.RenderCategory;
 import com.unrealtrainmod.client.renderer.RenderBatch;
+import com.unrealtrainmod.client.texture.PbrSource;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
@@ -119,7 +120,12 @@ final class TextureAtlas {
                         }
                     }
                 }
-                var id = textures.addAtlas(atlas);
+                var auxiliary = new ArrayList<PbrSource.Tile>();
+                for (var placement : placements) {
+                    var source = textures.pbr(placement.tile().texture());
+                    if (source != null) auxiliary.add(new PbrSource.Tile(source, placement.x() + 1, placement.y() + 1));
+                }
+                var id = textures.addAtlas(atlas, auxiliary.isEmpty() ? null : new PbrSource.Atlas(width, height, auxiliary));
                 transferred = true;
                 for (var placement : placements) {
                     var tile = placement.tile();

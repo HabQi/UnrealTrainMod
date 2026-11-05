@@ -99,6 +99,7 @@ public final class IrisCompat {
             catch (Throwable exception) { throw new IllegalStateException("Cannot read Iris shader state", exception); }
         }
         if (next != active) {
+            com.unrealtrainmod.client.texture.MaterialTexture.invalidatePbr();
             active = next;
             ClientTrackCache.INSTANCE.invalidateGpuBuffers();
             com.unrealtrainmod.client.renderer.TrainModelRenderer.clearWorld();
@@ -112,6 +113,7 @@ public final class IrisCompat {
 
     public static void onFramePost(RenderFrameEvent.Post event) {
         if (active && Minecraft.getInstance().level != null) IrisGeometryCache.endFrame();
+        com.unrealtrainmod.client.texture.PbrStats.logIfDue();
     }
 
     /** Called by the optional mixin before Iris copies the opaque shadow depth. */

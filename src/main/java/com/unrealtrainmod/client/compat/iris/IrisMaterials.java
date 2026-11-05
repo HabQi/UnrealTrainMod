@@ -6,10 +6,10 @@ package com.unrealtrainmod.client.compat.iris;
 
 import com.mojang.blaze3d.platform.NativeImage;
 import com.unrealtrainmod.client.ClientModelManager;
+import com.unrealtrainmod.client.texture.MaterialTexture;
 import java.util.HashMap;
 import java.util.Map;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.renderer.texture.DynamicTexture;
 import net.minecraft.resources.ResourceLocation;
 
 /** Lazily derived alpha masks. The original package pixels and native backend are unchanged. */
@@ -24,9 +24,10 @@ public final class IrisMaterials {
         if (original.equals(ClientModelManager.WHITE)) return original;
         return TEXTURES.computeIfAbsent(new Key(original, mask), key -> {
             var manager = Minecraft.getInstance().getTextureManager();
-            var source = ((DynamicTexture) manager.getTexture(original)).getPixels();
+            var base = (MaterialTexture) manager.getTexture(original);
+            var source = base.getPixels();
             var pixels = new NativeImage(source.getWidth(), source.getHeight(), false);
-            DynamicTexture texture;
+            MaterialTexture texture;
             try {
                 for (int y = 0; y < source.getHeight(); y++) for (int x = 0; x < source.getWidth(); x++) {
                     int pixel = source.getPixelRGBA(x, y), alpha = pixel >>> 24;
@@ -38,7 +39,7 @@ public final class IrisMaterials {
                     };
                     pixels.setPixelRGBA(x, y, (pixel & 0xffffff) | result << 24);
                 }
-                texture = new DynamicTexture(pixels);
+                texture = base.derived(pixels);
             } catch (RuntimeException | Error exception) {
                 pixels.close();
                 throw exception;

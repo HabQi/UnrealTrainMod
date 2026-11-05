@@ -70,6 +70,7 @@ public class UnrealTrainModClient {
 
     @SubscribeEvent
     static void registerReloadListeners(RegisterClientReloadListenersEvent event) {
+        com.unrealtrainmod.client.compat.iris.IrisPbrBridge.initialize();
         event.registerReloadListener(ClientModelManager.INSTANCE);
         event.registerReloadListener(ClientRailModelManager.INSTANCE);
         event.registerReloadListener(ClientButtonTextureManager.INSTANCE);

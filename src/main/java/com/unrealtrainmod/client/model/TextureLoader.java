@@ -15,7 +15,7 @@ import javax.imageio.ImageIO;
 import javax.imageio.stream.MemoryCacheImageInputStream;
 import net.minecraft.resources.ResourceLocation;
 
-/** Vehicle image decoding and stable texture identifiers; callers own returned pixels. */
+/** Package image decoding and stable vehicle texture identifiers; callers own returned pixels. */
 public final class TextureLoader {
     public static final ResourceLocation WHITE = ResourceLocation.fromNamespaceAndPath(
             UnrealTrainMod.MODID, "textures/model/white.png");
@@ -34,7 +34,7 @@ public final class TextureLoader {
             // The byte[] overload copies the whole encoded image onto LWJGL's limited MemoryStack.
             return NativeImage.read(new ByteArrayInputStream(bytes));
         } catch (IOException | RuntimeException e) {
-            throw new IOException("Unable to decode vehicle texture " + asset, e);
+            throw new IOException("Unable to decode package texture " + asset, e);
         }
     }
 

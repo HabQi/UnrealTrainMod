@@ -12,7 +12,7 @@ import com.unrealtrainmod.vehicle.VehicleActions;
 import com.unrealtrainmod.vehicle.VehicleDefinition;
 import com.unrealtrainmod.vehicle.VehiclePartRole;
 import com.unrealtrainmod.compat.ir.IrBogieGroups;
-import com.mojang.blaze3d.platform.NativeImage;
+import com.unrealtrainmod.client.texture.PreparedTexture;
 import com.unrealtrainmod.client.RenderCategory;
 import com.unrealtrainmod.client.renderer.RenderBatch;
 import com.unrealtrainmod.model.IndexedMesh;
@@ -35,9 +35,9 @@ import net.minecraft.resources.ResourceLocation;
 /** Prepares vehicle geometry and pixels without registering textures or uploading GPU resources. */
 public final class ModelPreparer {
     private static final Logger LOGGER = LoggerFactory.getLogger(ModelPreparer.class);
-    /** Images belong to this reload until the manager transfers them to DynamicTextures. */
+    /** Base images belong to this reload; PBR descriptions do not decode auxiliary images. */
     public record PreparedReload(Map<ModelSource, PreparedModel> sources,
-                                 List<VehicleDefinition> vehicles, Map<ResourceLocation, NativeImage> images) {}
+                                 List<VehicleDefinition> vehicles, Map<ResourceLocation, PreparedTexture> images) {}
 
     private ModelPreparer() {}
 

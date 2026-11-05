@@ -15,7 +15,10 @@ import com.unrealtrainmod.resource.cache.ModelCacheCodecs;
 import com.unrealtrainmod.track.model.RailDefinition;
 import com.unrealtrainmod.track.model.RailCatalog;
 import com.unrealtrainmod.track.mesh.RailTrackMeshBuilder;
-import com.mojang.blaze3d.platform.NativeImage;
+import com.unrealtrainmod.client.model.TextureLoader;
+import com.unrealtrainmod.client.texture.MaterialTexture;
+import com.unrealtrainmod.client.texture.PbrDiscovery;
+import com.unrealtrainmod.client.texture.PreparedTexture;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.unrealtrainmod.UnrealTrainMod;
 import com.unrealtrainmod.model.IndexedMesh;
@@ -32,7 +35,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.renderer.texture.DynamicTexture;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.packs.resources.ResourceManager;
 import net.minecraft.server.packs.resources.SimplePreparableReloadListener;
@@ -68,7 +70,7 @@ public final class ClientRailModelManager extends SimplePreparableReloadListener
             if (script != null) script.close();
         }
     }
-    public record Prepared(Map<ResourceLocation, Model> models, Map<PackageAsset, NativeImage> images) {}
+    public record Prepared(Map<ResourceLocation, Model> models, Map<PackageAsset, PreparedTexture> images) {}
     private Map<ResourceLocation, Model> models = Map.of();
     private final Set<ResourceLocation> textures = new HashSet<>();
     private final Map<IndexedMesh, SharedRailPart> sharedParts = new java.util.IdentityHashMap<>();
@@ -86,10 +88,12 @@ public final class ClientRailModelManager extends SimplePreparableReloadListener
                 (asset.archive() + "!" + asset.entry()).getBytes(StandardCharsets.UTF_8)));
     }
 
-    private static NativeImage image(PackageAsset asset, Map<PackageAsset, NativeImage> images) throws IOException {
-        NativeImage image = images.get(asset);
+    private static PreparedTexture image(PackageAsset asset, Map<PackageAsset, PreparedTexture> images, PbrDiscovery discovery) throws IOException {
+        var image = images.get(asset);
         if (image == null) {
-            try (var input = asset.open()) { image = NativeImage.read(input); }
+            var pixels = TextureLoader.read(asset);
+            try { image = new PreparedTexture(pixels, discovery.find(asset, pixels.getWidth(), pixels.getHeight())); }
+            catch (IOException | RuntimeException | Error exception) { pixels.close(); throw exception; }
             images.put(asset, image);
         }
         return image;
@@ -99,7 +103,8 @@ public final class ClientRailModelManager extends SimplePreparableReloadListener
     protected Prepared prepare(ResourceManager resources, ProfilerFiller profiler) {
         var models = new HashMap<ResourceLocation, Model>();
         var scripts = new RtmScriptCache();
-        var images = new HashMap<PackageAsset, NativeImage>();
+        var images = new HashMap<PackageAsset, PreparedTexture>();
+        var discovery = new PbrDiscovery();
         var meshes = new HashMap<MeshKey, ModelMesh>();
         var sources = new HashMap<RailDefinition.Source, Model>();
         try (var cache = new ModelCache("rails")) {
@@ -141,7 +146,7 @@ public final class ClientRailModelManager extends SimplePreparableReloadListener
                                     ? null : source.textures().get(material.name());
                             ResourceLocation texture = WHITE;
                             if (binding != null) {
-                                image(binding.asset(), images);
+                                image(binding.asset(), images, discovery);
                                 texture = textureId(binding.asset());
                             }
                             var materialKey = new MaterialKey(texture, material.doubleSided());
@@ -194,9 +199,10 @@ public final class ClientRailModelManager extends SimplePreparableReloadListener
                             exception.getMessage(), exception);
                 }
             }
+            discovery.log("rails");
             return new Prepared(Map.copyOf(models), images);
         } catch (RuntimeException | Error exception) {
-            images.values().forEach(NativeImage::close);
+            images.values().forEach(PreparedTexture::close);
             models.values().forEach(Model::close);
             throw exception;
         }
@@ -239,9 +245,9 @@ public final class ClientRailModelManager extends SimplePreparableReloadListener
         try {
             for (var entry : prepared.images().entrySet()) {
                 ResourceLocation id = textureId(entry.getKey());
-                NativeImage image = pending.remove(entry.getKey());
-                DynamicTexture texture;
-                try { texture = new DynamicTexture(image); }
+                var image = pending.remove(entry.getKey());
+                MaterialTexture texture;
+                try { texture = new MaterialTexture(image); }
                 catch (RuntimeException | Error exception) { image.close(); throw exception; }
                 try { manager.register(id, texture); }
                 catch (RuntimeException | Error exception) { texture.close(); throw exception; }
@@ -249,7 +255,7 @@ public final class ClientRailModelManager extends SimplePreparableReloadListener
             }
             models = prepared.models();
         } catch (RuntimeException | Error exception) {
-            pending.values().forEach(NativeImage::close);
+            pending.values().forEach(PreparedTexture::close);
             prepared.models().values().forEach(Model::close);
             close();
             throw exception;

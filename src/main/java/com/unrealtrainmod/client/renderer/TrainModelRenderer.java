@@ -126,6 +126,7 @@ public final class TrainModelRenderer {
     public static void closeWorld() {
         WORLD.close();
         com.unrealtrainmod.client.compat.iris.IrisModelRenderer.clear();
+        com.unrealtrainmod.client.texture.MaterialTexture.invalidatePbr();
     }
 
     public static void onLevelUnload(LevelEvent.Unload event) {

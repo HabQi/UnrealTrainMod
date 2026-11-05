@@ -6,7 +6,8 @@
   "client": [
     "PassengerPoseRendererMixin",
     "TrainCameraMixin",
-    "IrisShadowRendererMixin"
+    "IrisShadowRendererMixin",
+    "IrisPipelineMixin"
   ],
   "injectors": {
     "defaultRequire": 1
