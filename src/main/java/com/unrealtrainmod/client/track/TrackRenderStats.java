@@ -30,6 +30,7 @@ final class TrackRenderStats {
     /** Frames stop arriving when statistics are switched off or the scene changes; drop that stale window. */
     private static final long IDLE_RESET_NANOS = 1_000_000_000L;
     private static final TrackRenderStats INSTANCE = new TrackRenderStats();
+    private static final TrackRenderStats SHADOW = new TrackRenderStats();
 
     /** Geometry source: native quads or an authored rail model. */
     static final int NATIVE = 0;
@@ -79,6 +80,7 @@ final class TrackRenderStats {
     private final Set<SharedRailPart> sharedParts = Collections.newSetFromMap(new IdentityHashMap<>());
     private long lightChecked, lightChanged;
     private int renderTypeSetups, shaderBinds, programSwitches;
+    private int irisProgram = -1;
     private long stageNanos, buildNanos, lightNanos, packNanos, vboNanos, groupNanos, drawNanos;
 
     private TrackRenderStats() {}
@@ -87,9 +89,10 @@ final class TrackRenderStats {
     static TrackRenderStats begin(ClientLevel level, String scene, String path) {
         if (!ClientConfig.LOG_TRACK_RENDER_STATS.getAsBoolean()) {
             INSTANCE.closeGpuTimer();
+            SHADOW.closeGpuTimer();
             return null;
         }
-        return INSTANCE.start(level, scene, path);
+        return (scene.equals("shadow") ? SHADOW : INSTANCE).start(level, scene, path);
     }
 
     private static int slot(int source, int structure) {
@@ -103,6 +106,10 @@ final class TrackRenderStats {
         INSTANCE.level = null;
         INSTANCE.lastFrame = now;
         INSTANCE.resetWindow(now);
+        SHADOW.closeGpuTimer();
+        SHADOW.level = null;
+        SHADOW.lastFrame = now;
+        SHADOW.resetWindow(now);
     }
 
     private TrackRenderStats start(ClientLevel level, String scene, String path) {
@@ -154,6 +161,7 @@ final class TrackRenderStats {
     }
 
     private void resetFrame() {
+        irisProgram = -1;
         animatedTurnouts = dynamicParts = 0;
         jsCalls = jsNanos = instanceBytes = activeBytes = 0;
         chunks = candidates = visible = empty = pending = 0;
@@ -230,6 +238,12 @@ final class TrackRenderStats {
     void renderTypeSetup() { renderTypeSetups++; }
 
     /** A shader {@code apply()} issued by the draw scope. */
+    void irisShaderBind() {
+        int program = RenderSystem.getShader().getId();
+        shaderBind(irisProgram != -1 && irisProgram != program);
+        irisProgram = program;
+    }
+
     void shaderBind(boolean programSwitch) {
         shaderBinds++;
         if (programSwitch) programSwitches++;
@@ -369,7 +383,7 @@ final class TrackRenderStats {
                 avg(windowProgramSwitches, frames), avg(windowLightChecked, frames),
                 avg(windowLightChanged, frames),
                 drawSlots, vertexSlots, triangleSlots, windowBuilds, windowUploads, windowVboBytes, windowIboBytes,
-                path.equals("materialGroups") ? "counted" : "notGrouped",
+                path.endsWith("Groups") ? "counted" : "notGrouped",
                 avg(windowRailChunkBatches, frames), avg(windowRailChunkMaterials, frames),
                 avg(windowRailChunkBatches - windowRailChunkMaterials, frames),
                 !gpuTimer.supported() ? "unsupported" : windowGpuSamples == 0 ? "noSamples" : "sampled",

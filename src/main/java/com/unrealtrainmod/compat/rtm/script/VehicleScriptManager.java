@@ -6,7 +6,7 @@ package com.unrealtrainmod.compat.rtm.script;
 
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.unrealtrainmod.client.model.LoadedModel;
-import com.unrealtrainmod.client.renderer.ModelRenderQueue;
+import com.unrealtrainmod.client.renderer.ModelDrawSink;
 import com.unrealtrainmod.entity.TrainEntity;
 import com.unrealtrainmod.resource.PackageAsset;
 import com.unrealtrainmod.vehicle.VehiclePartRole;
@@ -38,7 +38,7 @@ public final class VehicleScriptManager {
     private static final LinkedHashSet<PackageAsset> PREWARM = new LinkedHashSet<>();
     private static long prewarmCalls, prewarmNanos, prewarmFailures;
     private static final Map<TrainEntity, EnumMap<VehiclePartRole, Handle>> ENTITIES = new IdentityHashMap<>();
-    private static final Map<ModelRenderQueue, Map<LoadedModel.Source, EnumMap<VehiclePartRole, Handle>>> PREVIEWS =
+    private static final Map<ModelDrawSink, Map<LoadedModel.Source, EnumMap<VehiclePartRole, Handle>>> PREVIEWS =
             new IdentityHashMap<>();
     private static Level world;
 
@@ -95,7 +95,7 @@ public final class VehicleScriptManager {
         }
     }
 
-    public static boolean render(ModelRenderQueue queue, TrainEntity entity, VehiclePose vehiclePose,
+    public static boolean render(ModelDrawSink queue, TrainEntity entity, VehiclePose vehiclePose,
                                  LoadedModel.Instance instance, PoseStack pose, int light, float partialTick) {
         var definition = instance.definition();
         var script = definition.source().rendererPath();
@@ -111,7 +111,7 @@ public final class VehicleScriptManager {
         return handle.runtime().render(queue, entity, vehiclePose, partialTick, pose, light);
     }
 
-    private static Handle preview(ModelRenderQueue queue, LoadedModel.Source source, VehiclePartRole role,
+    private static Handle preview(ModelDrawSink queue, LoadedModel.Source source, VehiclePartRole role,
                                    PackageAsset script, PackageAsset model) {
         var scene = PREVIEWS.computeIfAbsent(queue, ignored -> new IdentityHashMap<>());
         var handles = scene.computeIfAbsent(source, ignored -> new EnumMap<>(VehiclePartRole.class));
@@ -195,7 +195,7 @@ public final class VehicleScriptManager {
     }
 
     /** Queue clear is per-frame; only queue close releases its persistent preview state. */
-    public static void releasePreview(ModelRenderQueue queue) {
+    public static void releasePreview(ModelDrawSink queue) {
         var scene = PREVIEWS.remove(queue);
         if (scene != null) closeScene(scene);
     }

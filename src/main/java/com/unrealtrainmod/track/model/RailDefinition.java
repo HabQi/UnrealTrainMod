@@ -29,9 +29,9 @@ public record RailDefinition(ResourceLocation id, String railName, PackageAsset 
         public Texture { flags = List.copyOf(flags); }
     }
 
-    /** Shared source geometry; scale, top offset and period describe the reference-gauge mesh. */
+    /** Shared startup geometry; cacheDigest identifies its package snapshot, or is null when hashing failed. */
     public record Source(PackageAsset model, ModelData data, Map<String, Texture> textures, PackageAsset rendererPath,
-                         Format format, float scale, double topOffset, double period) {
+                         Format format, float scale, double topOffset, double period, String cacheDigest) {
         public Source { textures = Map.copyOf(textures); }
     }
 

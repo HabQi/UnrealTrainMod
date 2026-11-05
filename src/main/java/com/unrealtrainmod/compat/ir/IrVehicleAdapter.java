@@ -15,6 +15,8 @@ import com.unrealtrainmod.resource.LoadReport;
 import com.unrealtrainmod.resource.PackageArchive;
 import com.unrealtrainmod.resource.PackageAsset;
 import com.unrealtrainmod.resource.ResourceIds;
+import com.unrealtrainmod.resource.cache.ModelCache;
+import com.unrealtrainmod.resource.cache.ModelCacheCodecs;
 import com.unrealtrainmod.vehicle.VehicleActions;
 import com.unrealtrainmod.vehicle.VehicleDefinition;
 import com.unrealtrainmod.vehicle.VehicleInteriorSpec;
@@ -39,10 +41,12 @@ final class IrVehicleAdapter {
     private final Map<ResourceLocation, VehicleDefinition> definitions;
     private final Map<PackageAsset, Map<String, ModelBounds>> boundsCache = new HashMap<>();
     private final LoadReport report;
+    private final ModelCache cache;
 
-    IrVehicleAdapter(Map<ResourceLocation, VehicleDefinition> definitions, LoadReport report) {
+    IrVehicleAdapter(Map<ResourceLocation, VehicleDefinition> definitions, LoadReport report, ModelCache cache) {
         this.definitions = definitions;
         this.report = report;
+        this.cache = cache;
     }
 
     void read(PackageArchive archive, String prefix, String type, String reference) {
@@ -81,9 +85,11 @@ final class IrVehicleAdapter {
         if (!Float.isFinite(scale) || scale <= 0) throw new IOException("Invalid IR model gauge scale");
         var rawParts = boundsCache.get(model);
         if (rawParts == null) {
-            try (var reader = new InputStreamReader(archive.open(model.entry()), StandardCharsets.UTF_8.newDecoder())) {
-                rawParts = ObjParser.scanPartBounds(reader, model.entry(), IrModelLoader::isVisible);
-            }
+            rawParts = cache.load(model, "bounds", "ir-vehicle-parts", ModelCacheCodecs.PART_BOUNDS, () -> {
+                try (var reader = new InputStreamReader(archive.open(model.entry()), StandardCharsets.UTF_8.newDecoder())) {
+                    return ObjParser.scanPartBounds(reader, model.entry(), IrModelLoader::isVisible);
+                }
+            });
             boundsCache.put(model, rawParts);
         }
         var groups = new EnumMap<VehiclePartRole, ModelBounds.Builder>(VehiclePartRole.class);

@@ -11,6 +11,11 @@ import com.mojang.blaze3d.vertex.VertexBuffer;
 import com.mojang.blaze3d.vertex.VertexFormat;
 import com.unrealtrainmod.track.geometry.TrackVector;
 import com.unrealtrainmod.track.mesh.TrackMeshData;
+import com.unrealtrainmod.client.compat.iris.IrisCompat;
+import com.unrealtrainmod.client.compat.iris.IrisDrawScope;
+import com.unrealtrainmod.client.compat.iris.IrisRenderTypes;
+import com.unrealtrainmod.client.compat.iris.IrisRenderStats;
+import com.unrealtrainmod.client.ClientModelManager;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.world.phys.AABB;
 import org.joml.Matrix4f;
@@ -41,12 +46,12 @@ final class TrackMorphMesh implements TrackRenderMesh {
     @Override public boolean isUploaded() { return buffer != null; }
     @Override public int source() { return TrackRenderStats.NATIVE; }
     @Override public int drawCalls() { return 1; }
-    @Override public int drawVertices() { return normal.vertexCount(); }
+    @Override public int drawVertices() { return IrisCompat.active() ? normal.vertexCount() / 4 * 6 : normal.vertexCount(); }
     @Override public int drawTriangles() { return normal.vertexCount() / 2; }
-    @Override public int storedVertices() { return normal.vertexCount(); }
+    @Override public int storedVertices() { return IrisCompat.active() ? normal.vertexCount() / 4 * 6 : normal.vertexCount(); }
 
     @Override public int upload(ClientLevel level, int budget, TrackRenderStats stats) {
-        boolean shader = TrackMorphShader.shader() != null;
+        boolean shader = !IrisCompat.active() && TrackMorphShader.shader() != null;
         long lightStart = stats == null ? 0 : System.nanoTime();
         lightDirty |= lighting.refresh(level);
         if (stats != null) stats.lightRefresh(System.nanoTime() - lightStart, lighting.checkedSamples(), lighting.changedSamples());
@@ -57,6 +62,17 @@ final class TrackMorphMesh implements TrackRenderMesh {
         // Streaming leaves must keep up with display time even when static uploads exhaust their budget.
         if (first && budget == 0) return 0;
         morph = shader;
+        if (IrisCompat.active()) {
+            if (buffer == null) buffer = new VertexBuffer(VertexBuffer.Usage.DYNAMIC);
+            try {
+                int size = TrackIrisMesh.upload(buffer, normal, reverse, movement, lighting, level);
+                IrisRenderStats.upload(size);
+                if (stats != null) stats.activeUpload(size);
+                uploadedMovement = movement;
+                lightDirty = false;
+            } catch (RuntimeException | Error exception) { close(); throw exception; }
+            return first ? 1 : 0;
+        }
         var format = morph ? TrackMorphShader.FORMAT : DefaultVertexFormat.POSITION_COLOR_LIGHTMAP;
         int bytesCount = normal.vertexCount() * format.getVertexSize();
         if (buffer == null) buffer = new VertexBuffer(VertexBuffer.Usage.DYNAMIC);
@@ -93,6 +109,10 @@ final class TrackMorphMesh implements TrackRenderMesh {
         return first ? 1 : 0;
     }
 
+    @Override public void drawIris(Matrix4f modelView, Matrix4f projection, TrackRenderStats stats) {
+        boolean changed = IrisDrawScope.draw(buffer, IrisRenderTypes.get(ClientModelManager.WHITE, false, false, true), modelView, projection);
+        if (stats != null) { if (changed) stats.renderTypeSetup(); stats.irisShaderBind(); }
+    }
     @Override public void draw(Matrix4f modelView, Matrix4f projection, TrackRenderStats stats) {
         try (var state = new TrackRenderState(stats)) { draw(state, modelView, projection); }
     }

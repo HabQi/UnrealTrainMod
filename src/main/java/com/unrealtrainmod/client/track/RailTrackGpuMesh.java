@@ -7,6 +7,11 @@ package com.unrealtrainmod.client.track;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.shaders.Uniform;
 import com.mojang.blaze3d.vertex.ByteBufferBuilder;
+import com.mojang.blaze3d.vertex.BufferBuilder;
+import com.unrealtrainmod.client.compat.iris.IrisCompat;
+import com.unrealtrainmod.client.compat.iris.IrisDrawScope;
+import com.unrealtrainmod.client.compat.iris.IrisRenderTypes;
+import com.unrealtrainmod.client.compat.iris.IrisRenderStats;
 import com.mojang.blaze3d.vertex.DefaultVertexFormat;
 import com.mojang.blaze3d.vertex.MeshData;
 import com.mojang.blaze3d.vertex.VertexBuffer;
@@ -77,7 +82,7 @@ final class RailTrackGpuMesh implements TrackRenderMesh {
     @Override
     public int storedVertices() {
         int vertices = 0;
-        for (int i = 0; i < uploaded; i++) vertices += data.batches().get(i).mesh().colors().length;
+        for (int i = 0; i < uploaded; i++) vertices += IrisCompat.active() ? data.batches().get(i).mesh().indices().length : data.batches().get(i).mesh().colors().length;
         return vertices;
     }
 
@@ -101,6 +106,34 @@ final class RailTrackGpuMesh implements TrackRenderMesh {
                 if (first) {
                     buffer = new VertexBuffer(VertexBuffer.Usage.STATIC);
                     buffers[nextUpload] = buffer;
+                }
+                if (IrisCompat.active()) {
+                    int capacity = Math.max(256, mesh.indices().length * DefaultVertexFormat.NEW_ENTITY.getVertexSize());
+                    long start = stats == null ? 0 : System.nanoTime();
+                    try (var bytes = new ByteBufferBuilder(capacity)) {
+                        var builder = new BufferBuilder(bytes, VertexFormat.Mode.TRIANGLES, DefaultVertexFormat.NEW_ENTITY);
+                        float[] vertices = mesh.vertices();
+                        for (int index : mesh.indices()) {
+                            int i = index * 8;
+                            int light = lighting == null ? LightTexture.FULL_BRIGHT : lighting.sample(level,
+                                    vertices[i], vertices[i + 1], vertices[i + 2], vertices[i + 5], vertices[i + 6], vertices[i + 7]);
+                            builder.addVertex(vertices[i], vertices[i + 1], vertices[i + 2], mesh.colors()[index],
+                                    vertices[i + 3], vertices[i + 4], OverlayTexture.NO_OVERLAY, light,
+                                    vertices[i + 5], vertices[i + 6], vertices[i + 7]);
+                        }
+                        if (stats != null) stats.packed(System.nanoTime() - start);
+                        buffer.bind();
+                        var built = builder.buildOrThrow();
+                        int size = built.vertexBuffer().remaining();
+                        start = stats == null ? 0 : System.nanoTime();
+                        buffer.upload(built);
+                        IrisRenderStats.upload(size);
+                        if (stats != null) { stats.gpuUpload(System.nanoTime() - start); stats.uploaded(size, 0, size, first); }
+                    }
+                    nextUpload++;
+                    uploaded = Math.max(uploaded, nextUpload);
+                    used++;
+                    continue;
                 }
                 int vertexSize = DefaultVertexFormat.NEW_ENTITY.getVertexSize();
                 int vertexCount = mesh.colors().length;
@@ -153,6 +186,14 @@ final class RailTrackGpuMesh implements TrackRenderMesh {
         return used;
     }
 
+    @Override public void drawIris(Matrix4f modelView, Matrix4f projection, TrackRenderStats stats) {
+        for (int i = 0; i < uploaded; i++) {
+            var batch = data.batches().get(i);
+            boolean changed = IrisDrawScope.draw(buffers[i], IrisRenderTypes.get(batch.texture(), batch.doubleSided(), false, false), modelView, projection);
+            if (stats != null) { if (changed) stats.renderTypeSetup(); stats.irisShaderBind(); }
+        }
+    }
+
     @Override
     public void draw(Matrix4f modelView, Matrix4f projection, TrackRenderStats stats) {
         for (int i = 0; i < uploaded; i++) {
@@ -193,8 +234,10 @@ final class RailTrackGpuMesh implements TrackRenderMesh {
         long chunk = ChunkPos.asLong((int)(data.origin().x() / 16), (int)(data.origin().z() / 16));
         for (int i = 0; i < uploaded; i++) {
             var mesh = data.batches().get(i).mesh();
-            queue.addTextured(types[i], buffers[i], modelView, structure,
-                    mesh.indices().length, mesh.colors().length, chunk);
+            var batch = data.batches().get(i);
+            var type = IrisCompat.active() ? IrisRenderTypes.get(batch.texture(), batch.doubleSided(), false, false) : types[i];
+            queue.addTextured(type, buffers[i], modelView, structure,
+                    mesh.indices().length, IrisCompat.active() ? mesh.indices().length : mesh.colors().length, chunk);
         }
     }
 

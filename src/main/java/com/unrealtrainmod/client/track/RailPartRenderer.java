@@ -9,6 +9,13 @@ import com.mojang.blaze3d.vertex.ByteBufferBuilder;
 import com.mojang.blaze3d.vertex.DefaultVertexFormat;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexFormat;
+import com.mojang.blaze3d.vertex.VertexBuffer;
+import com.unrealtrainmod.client.compat.iris.IrisCompat;
+import com.unrealtrainmod.client.compat.iris.IrisDrawScope;
+import com.unrealtrainmod.client.compat.iris.IrisRenderTypes;
+import com.unrealtrainmod.client.compat.iris.IrisVertices;
+import com.unrealtrainmod.client.compat.iris.IrisGeometryCache;
+import com.unrealtrainmod.client.compat.iris.IrisRenderStats;
 import com.unrealtrainmod.client.StaticModelShader;
 import com.unrealtrainmod.compat.rtm.script.RailDrawSnapshot;
 import java.util.BitSet;
@@ -36,6 +43,7 @@ final class RailPartRenderer implements AutoCloseable {
     private RailDrawSnapshot classifiedSnapshot;
     private final BitSet movingParts = new BitSet();
     private ByteBufferBuilder fallback;
+    private VertexBuffer irisFallback;
     private final TrackLighting lighting;
     private final TrackVector anchor;
     private final double meshOriginY;
@@ -48,6 +56,7 @@ final class RailPartRenderer implements AutoCloseable {
 
     int draw(ClientTrackCache.AssemblyEntry entry, RenderLevelStageEvent event, ClientLevel level,
              double time, boolean stateCache, boolean groupMaterials, int uploads, TrackRenderStats stats) {
+        if (IrisCompat.active()) return drawIris(entry, event, level, time, null, uploads, stats);
         try (var state = new TrackRenderState(stats)) {
             return draw(state, entry, event, level, time, stateCache, groupMaterials, uploads, stats);
         }
@@ -155,6 +164,73 @@ final class RailPartRenderer implements AutoCloseable {
         return uploads;
     }
 
+    int drawIris(ClientTrackCache.AssemblyEntry entry, RenderLevelStageEvent event, ClientLevel level,
+                 double time, TrackDrawQueue queue, int uploads, TrackRenderStats stats) {
+        var snapshot = entry.currentSnapshot;
+        if (snapshot == null) return uploads;
+        lighting.refresh(level);
+        var previous = snapshot.matches(entry.previousSnapshot) ? entry.previousSnapshot : null;
+        float fraction = entry.snapshotFraction(time);
+        var camera = event.getCamera().getPosition();
+        var modelView = new Matrix4f(event.getModelViewMatrix()).translate((float)(anchor.x() - camera.x),
+                (float)(anchor.y() - camera.y), (float)(anchor.z() - camera.z));
+        var local = new Matrix4f();
+        var stack = new PoseStack();
+        var writer = new IrisVertices();
+        if (fallback == null) fallback = new ByteBufferBuilder(1 << 16);
+        int drawn = 0;
+        for (int i = 0; i < snapshot.parts().size(); i++) {
+            var part = snapshot.parts().get(i);
+            snapshot.interpolate(previous, i, fraction, local);
+            long chunk = ChunkPos.asLong((int)Math.floor((anchor.x() + local.m30()) / 16),
+                    (int)Math.floor((anchor.z() + local.m32()) / 16));
+            if (!entry.chunks.contains(chunk) || !level.hasChunk(ChunkPos.getX(chunk), ChunkPos.getZ(chunk))) continue;
+            var source = part.source();
+            if (source.mesh().indices().length == 0) continue;
+            var shared = ClientRailModelManager.INSTANCE.sharedPart(source.mesh());
+            if (!event.getFrustum().isVisible(shared.transformedBounds(local, anchor.x(), anchor.y(), anchor.z()))) continue;
+            long start = stats == null ? 0 : System.nanoTime();
+            stack.last().pose().set(local);
+            local.normal(stack.last().normal());
+            int light = lighting.sample(level, local.m30(), local.m31(), local.m32(), 0, 1, 0);
+            var gpu = IrisGeometryCache.supportsPose(local)
+                    ? IrisGeometryCache.request(source.mesh(), 0, source.mesh().indices().length, false) : null;
+            var type = IrisRenderTypes.get(source.texture(), source.doubleSided(), false, false);
+            if (gpu != null) {
+                var posedView = new Matrix4f(modelView).mul(local);
+                if (queue != null) {
+                    queue.addCached(gpu, type, posedView, light);
+                } else {
+                    boolean changed = IrisDrawScope.current().drawCached(gpu, type, posedView, event.getProjectionMatrix(), light);
+                    IrisRenderStats.gpu(source.mesh().indices().length / 3);
+                    if (stats != null) { if (changed) stats.renderTypeSetup(); stats.irisShaderBind(); }
+                }
+            } else {
+                var builder = new BufferBuilder(fallback, VertexFormat.Mode.TRIANGLES, DefaultVertexFormat.NEW_ENTITY);
+                for (int index : source.mesh().indices()) writer.vertex(builder, source.mesh(), index, stack.last(), light, false);
+                if (irisFallback == null) irisFallback = new VertexBuffer(VertexBuffer.Usage.DYNAMIC);
+                irisFallback.bind();
+                var built = builder.buildOrThrow();
+                int bytes = built.vertexBuffer().remaining();
+                try { irisFallback.upload(built); }
+                finally { VertexBuffer.unbind(); }
+                boolean changed = IrisDrawScope.draw(irisFallback, type, modelView, event.getProjectionMatrix());
+                IrisRenderStats.owned(source.mesh().indices().length / 3);
+                IrisRenderStats.upload(bytes);
+                if (stats != null) { stats.activeUpload(bytes); if (changed) stats.renderTypeSetup(); stats.irisShaderBind(); }
+            }
+            drawn++;
+            if (gpu == null || queue == null) IrisRenderStats.submit(start);
+            if (stats != null) {
+                if (gpu == null || queue == null) stats.drawn(TrackRenderStats.RAIL_MODEL, TrackRenderStats.STRUCTURE_ASSEMBLY, 1,
+                        source.mesh().indices().length, source.mesh().indices().length / 3,
+                        gpu == null ? 0 : gpu.vertices, System.nanoTime() - start);
+            }
+        }
+        if (stats != null) stats.dynamicParts(drawn);
+        return uploads;
+    }
+
     private static boolean sameInstances(List<Draw> current, List<Draw> previous) {
         if (current.size() != previous.size()) return false;
         for (int i = 0; i < current.size(); i++) {
@@ -245,6 +321,7 @@ final class RailPartRenderer implements AutoCloseable {
     }
 
     void invalidateInstances() {
+        if (irisFallback != null) { irisFallback.close(); irisFallback = null; }
         fixedInstances.close(); movingInstances.close();
         uploadedFixed = uploadedMoving = List.of();
     }

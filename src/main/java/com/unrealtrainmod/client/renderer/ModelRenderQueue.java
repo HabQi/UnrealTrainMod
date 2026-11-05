@@ -11,7 +11,6 @@ import com.mojang.blaze3d.vertex.ByteBufferBuilder;
 import com.mojang.blaze3d.vertex.DefaultVertexFormat;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexFormat;
-import com.mojang.math.Axis;
 import com.unrealtrainmod.client.ClientConfig;
 import com.unrealtrainmod.client.GpuModel;
 import com.unrealtrainmod.client.RenderCategory;
@@ -34,7 +33,7 @@ import org.joml.Matrix4f;
 import org.joml.Vector3f;
 
 /** One world view or one preview. No per-triangle objects and no vertex uploads on the normal GPU path. */
-public final class ModelRenderQueue implements AutoCloseable {
+public final class ModelRenderQueue implements ModelDrawSink, AutoCloseable {
     private record Draw(RenderBatch batch, GpuModel.Part gpu, PoseStack.Pose pose, int light,
                         boolean directionalLighting) {}
     private static final class InstanceGroup {
@@ -82,20 +81,6 @@ public final class ModelRenderQueue implements AutoCloseable {
 
     public void submit(LoadedModel model, PoseStack pose, int light) {
         for (var instance : model.instances()) submit(instance, instance.visibleParts(), pose, light);
-    }
-
-    /** Supports the existing exact-name selection API, including explicitly selected hidden parts. */
-    public void submit(LoadedModel.Instance instance, PartSelection selection,
-                       PoseStack pose, int light) {
-        pose.pushPose();
-        try {
-            var offset = instance.offset();
-            pose.translate(offset.x(), offset.y(), offset.z());
-            if (instance.definition().reversedBogie()) pose.mulPose(Axis.YP.rotationDegrees(180));
-            submitGeometry(instance.model(), selection, pose, light);
-        } finally {
-            pose.popPose();
-        }
     }
 
     /** Geometry-only submission for a caller that already applied a component's complete transform. */

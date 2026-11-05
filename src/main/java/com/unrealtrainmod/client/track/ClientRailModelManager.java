@@ -10,6 +10,8 @@ import org.slf4j.LoggerFactory;
 import com.unrealtrainmod.compat.rtm.script.RailScriptRuntime;
 import com.unrealtrainmod.compat.rtm.script.RtmScriptCache;
 import com.unrealtrainmod.resource.PackageAsset;
+import com.unrealtrainmod.resource.cache.ModelCache;
+import com.unrealtrainmod.resource.cache.ModelCacheCodecs;
 import com.unrealtrainmod.track.model.RailDefinition;
 import com.unrealtrainmod.track.model.RailCatalog;
 import com.unrealtrainmod.track.mesh.RailTrackMeshBuilder;
@@ -100,7 +102,7 @@ public final class ClientRailModelManager extends SimplePreparableReloadListener
         var images = new HashMap<PackageAsset, NativeImage>();
         var meshes = new HashMap<MeshKey, ModelMesh>();
         var sources = new HashMap<RailDefinition.Source, Model>();
-        try {
+        try (var cache = new ModelCache("rails")) {
             for (var definition : RailCatalog.all()) {
                 var source = definition.source();
                 try {
@@ -114,7 +116,10 @@ public final class ClientRailModelManager extends SimplePreparableReloadListener
                     ModelMesh mesh = meshes.get(key);
                     if (mesh == null) {
                         boolean ir = source.format() == RailDefinition.Format.IR_OBJ;
-                        mesh = ModelMesh.prepare(source.data(), source.scale(), !ir, ir);
+                        String options = "rail:" + source.format() + ":" + Float.floatToIntBits(source.scale())
+                                + ":" + !ir + ":" + ir;
+                        mesh = cache.load(source.model(), source.cacheDigest(), "mesh", options, ModelCacheCodecs.MESH,
+                                () -> ModelMesh.prepare(source.data(), source.scale(), !ir, ir));
                         if (mesh.fanFallbackCount() > 0) {
                             LOGGER.warn("IR rail {}: used OBJ corner-order triangle fans for {} polygon faces",
                                     source.model(), mesh.fanFallbackCount());
@@ -253,6 +258,7 @@ public final class ClientRailModelManager extends SimplePreparableReloadListener
 
     @Override
     public void close() {
+        com.unrealtrainmod.client.compat.iris.IrisGeometryCache.clear();
         TrackWorldRenderer.resetSlowBuilds();
         sharedParts.values().forEach(SharedRailPart::close);
         sharedParts.clear();

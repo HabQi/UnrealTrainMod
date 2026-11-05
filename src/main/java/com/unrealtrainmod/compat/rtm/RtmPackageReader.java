@@ -6,6 +6,7 @@ package com.unrealtrainmod.compat.rtm;
 
 import com.unrealtrainmod.resource.LoadReport;
 import com.unrealtrainmod.resource.PackageArchive;
+import com.unrealtrainmod.resource.cache.ModelCache;
 import com.unrealtrainmod.track.model.RailDefinition;
 import com.unrealtrainmod.vehicle.VehicleDefinition;
 import java.util.Map;
@@ -22,9 +23,9 @@ public final class RtmPackageReader {
     private final RtmRailAdapter rails;
 
     public RtmPackageReader(Map<ResourceLocation, VehicleDefinition> vehicles,
-                            Map<ResourceLocation, RailDefinition> rails, LoadReport report) {
-        this.vehicles = new RtmVehicleAdapter(vehicles, report);
-        this.rails = new RtmRailAdapter(rails, report);
+                            Map<ResourceLocation, RailDefinition> rails, LoadReport report, ModelCache cache) {
+        this.vehicles = new RtmVehicleAdapter(vehicles, report, cache);
+        this.rails = new RtmRailAdapter(rails, report, cache);
     }
 
     public void read(PackageArchive archive) {

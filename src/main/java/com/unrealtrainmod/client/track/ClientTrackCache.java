@@ -198,6 +198,16 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
         invalidateMeshes();
     }
 
+    /** Backend switches retain CPU geometry, scripts and animation timelines. */
+    public void invalidateGpuBuffers() {
+        for (var entry : entries.values()) entry.meshes.values().forEach(TrackRenderMesh::close);
+        for (var entry : assemblies.values()) {
+            entry.meshes.values().forEach(group -> group.forEach(TrackRenderMesh::close));
+            entry.tongues.values().forEach(group -> group.forEach(TrackRenderMesh::close));
+            if (entry.parts != null) entry.parts.invalidateInstances();
+        }
+    }
+
     public void invalidateMeshes() {
         for (Entry entry : entries.values()) entry.close();
         for (var entry : assemblies.values()) entry.close();

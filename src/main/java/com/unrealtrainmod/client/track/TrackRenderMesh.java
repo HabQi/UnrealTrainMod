@@ -25,6 +25,7 @@ interface TrackRenderMesh extends AutoCloseable {
     int storedVertices();
     /** Check for light changes and upload within budget, keeping previously uploaded buffers drawable. */
     int upload(ClientLevel level, int budget, TrackRenderStats stats);
+    void drawIris(Matrix4f modelView, Matrix4f projection, TrackRenderStats stats);
     /** Original per-mesh path, kept as the comparison baseline. */
     void draw(Matrix4f modelView, Matrix4f projection, TrackRenderStats stats);
     /** Shared-scope path: reuses material state across consecutive meshes. */

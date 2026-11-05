@@ -8,6 +8,7 @@ import com.google.gson.JsonObject;
 import com.unrealtrainmod.resource.LoadReport;
 import com.unrealtrainmod.resource.PackageArchive;
 import com.unrealtrainmod.resource.PackageAsset;
+import com.unrealtrainmod.resource.cache.ModelCache;
 import com.unrealtrainmod.track.model.RailDefinition;
 import com.unrealtrainmod.vehicle.VehicleDefinition;
 import java.io.IOException;
@@ -26,9 +27,9 @@ public final class IrPackageReader {
     private final LoadReport report;
 
     public IrPackageReader(Map<ResourceLocation, VehicleDefinition> vehicles,
-                           Map<ResourceLocation, RailDefinition> rails, LoadReport report) {
-        this.vehicles = new IrVehicleAdapter(vehicles, report);
-        this.rails = new IrRailAdapter(rails, report);
+                           Map<ResourceLocation, RailDefinition> rails, LoadReport report, ModelCache cache) {
+        this.vehicles = new IrVehicleAdapter(vehicles, report, cache);
+        this.rails = new IrRailAdapter(rails, report, cache);
         this.report = report;
     }
 

@@ -19,6 +19,8 @@ import com.unrealtrainmod.resource.LoadReport;
 import com.unrealtrainmod.resource.PackageArchive;
 import com.unrealtrainmod.resource.PackageAsset;
 import com.unrealtrainmod.resource.ResourceIds;
+import com.unrealtrainmod.resource.cache.ModelCache;
+import com.unrealtrainmod.resource.cache.ModelCacheCodecs;
 import com.unrealtrainmod.track.model.RailDefinition;
 import java.io.IOException;
 import java.io.InputStreamReader;
@@ -39,10 +41,12 @@ final class RtmRailAdapter {
     private final Map<PackageAsset, ModelData> models = new HashMap<>();
     private final Map<PackageAsset, IOException> failedModels = new HashMap<>();
     private final LoadReport report;
+    private final ModelCache cache;
 
-    RtmRailAdapter(Map<ResourceLocation, RailDefinition> definitions, LoadReport report) {
+    RtmRailAdapter(Map<ResourceLocation, RailDefinition> definitions, LoadReport report, ModelCache cache) {
         this.definitions = definitions;
         this.report = report;
+        this.cache = cache;
     }
 
     void read(PackageArchive archive, String entry, String prefix) {
@@ -80,7 +84,7 @@ final class RtmRailAdapter {
                 }
             }
             var source = new RailDefinition.Source(asset, data, textures, renderer,
-                    RailDefinition.Format.MQO, 0.01f, 0.25, 0.5);
+                    RailDefinition.Format.MQO, 0.01f, 0.25, 0.5, cache.digest(asset.archive()));
             definitions.put(id, new RailDefinition(id, name, config,
                     source, button, accuracy, tags, ballast));
             report.registered(LoadReport.Kind.RTM_RAIL);
@@ -94,8 +98,12 @@ final class RtmRailAdapter {
         if (data != null) return data;
         IOException previous = failedModels.get(asset);
         if (previous != null) throw new IOException("model.modelFile: previous MQO parsing failed for " + asset.entry(), previous);
-        try (var input = MqoModelInput.open(archive.open(asset.entry()), asset.entry())) {
-            data = ModelImporter.parseMqo(input);
+        try {
+            data = cache.load(asset, "source", "rtm-rail", ModelCacheCodecs.MODEL_DATA, () -> {
+                try (var input = MqoModelInput.open(archive.open(asset.entry()), asset.entry())) {
+                    return ModelImporter.parseMqo(input);
+                }
+            });
         } catch (IOException | RuntimeException exception) {
             var failure = new IOException("model.modelFile " + asset.entry() + ": " + exception.getMessage(), exception);
             failedModels.put(asset, failure);

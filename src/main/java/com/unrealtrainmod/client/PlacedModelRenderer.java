@@ -10,6 +10,8 @@ import com.mojang.math.Axis;
 import com.unrealtrainmod.entity.PlacedModelEntity;
 import com.unrealtrainmod.model.ModelBounds;
 import com.unrealtrainmod.client.renderer.TrainModelRenderer;
+import com.unrealtrainmod.client.compat.iris.IrisCompat;
+import com.unrealtrainmod.client.compat.iris.IrisModelRenderer;
 import net.minecraft.client.renderer.LevelRenderer;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.RenderType;
@@ -35,7 +37,8 @@ public final class PlacedModelRenderer extends EntityRenderer<PlacedModelEntity>
                         bounds.minX(), bounds.minY(), bounds.minZ(),
                         bounds.maxX(), bounds.maxY(), bounds.maxZ(), 1, 0, 1, 1);
             } else {
-                TrainModelRenderer.renderPlaced(model, pose, light);
+                if (IrisCompat.active()) IrisModelRenderer.render(entity, model, null, null, 0.0f, pose, buffers, light);
+                else TrainModelRenderer.renderPlaced(model, pose, light);
             }
         } finally {
             pose.popPose();

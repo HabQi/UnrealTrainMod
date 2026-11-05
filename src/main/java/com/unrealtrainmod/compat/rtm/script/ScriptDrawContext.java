@@ -7,7 +7,7 @@ package com.unrealtrainmod.compat.rtm.script;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.unrealtrainmod.client.model.LoadedModel;
 import com.unrealtrainmod.client.model.PartSelection;
-import com.unrealtrainmod.client.renderer.ModelRenderQueue;
+import com.unrealtrainmod.client.renderer.ModelDrawSink;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -20,14 +20,14 @@ import java.util.List;
 final class ScriptDrawContext extends ScriptMatrixContext {
     private record Command(PartSelection selection, PoseStack.Pose pose, int light, boolean directionalLighting) {}
 
-    private final ModelRenderQueue queue;
+    private final ModelDrawSink queue;
     private final LoadedModel.Source source;
     private final ScriptPartResolver parts;
     private final List<Command> commands = new ArrayList<>();
     private int light;
     private boolean directionalLighting = true;
 
-    ScriptDrawContext(ModelRenderQueue queue, LoadedModel.Source source, ScriptPartResolver parts, PoseStack pose, int light) {
+    ScriptDrawContext(ModelDrawSink queue, LoadedModel.Source source, ScriptPartResolver parts, PoseStack pose, int light) {
         super(pose);
         this.queue = queue;
         this.source = source;

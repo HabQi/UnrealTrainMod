@@ -10,6 +10,11 @@ import com.mojang.blaze3d.vertex.DefaultVertexFormat;
 import com.mojang.blaze3d.vertex.VertexBuffer;
 import com.mojang.blaze3d.vertex.VertexFormat;
 import com.unrealtrainmod.track.mesh.TrackMeshData;
+import com.unrealtrainmod.client.compat.iris.IrisCompat;
+import com.unrealtrainmod.client.compat.iris.IrisDrawScope;
+import com.unrealtrainmod.client.compat.iris.IrisRenderTypes;
+import com.unrealtrainmod.client.compat.iris.IrisRenderStats;
+import com.unrealtrainmod.client.ClientModelManager;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.unrealtrainmod.track.geometry.TrackVector;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -37,9 +42,9 @@ final class TrackGpuMesh implements TrackRenderMesh {
     @Override public TrackVector origin() { return data.origin(); }
     @Override public int source() { return TrackRenderStats.NATIVE; }
     @Override public int drawCalls() { return 1; }
-    @Override public int drawVertices() { return data.vertexCount(); }
+    @Override public int drawVertices() { return IrisCompat.active() ? data.vertexCount() / 4 * 6 : data.vertexCount(); }
     @Override public int drawTriangles() { return data.vertexCount() / 2; }
-    @Override public int storedVertices() { return data.vertexCount(); }
+    @Override public int storedVertices() { return IrisCompat.active() ? data.vertexCount() / 4 * 6 : data.vertexCount(); }
 
     @Override
     public int upload(ClientLevel level, int budget, TrackRenderStats stats) {
@@ -58,6 +63,20 @@ final class TrackGpuMesh implements TrackRenderMesh {
     }
 
     private void upload(ClientLevel level, TrackRenderStats stats) {
+        if (IrisCompat.active()) {
+            boolean first = buffer == null;
+            if (first) buffer = new VertexBuffer(VertexBuffer.Usage.STATIC);
+            try {
+                long start = stats == null ? 0 : System.nanoTime();
+                int bytes = TrackIrisMesh.upload(buffer, data, null, 0, lighting, level);
+                IrisRenderStats.upload(bytes);
+                if (stats != null) {
+                    stats.gpuUpload(System.nanoTime() - start);
+                    stats.uploaded(bytes, 0, bytes, first);
+                }
+            } catch (RuntimeException | Error exception) { close(); throw exception; }
+            return;
+        }
         int vertexSize = DefaultVertexFormat.POSITION_COLOR_LIGHTMAP.getVertexSize();
         int capacity = Math.multiplyExact(data.vertexCount(), vertexSize);
         boolean first = buffer == null;
@@ -91,6 +110,11 @@ final class TrackGpuMesh implements TrackRenderMesh {
         } finally {
             VertexBuffer.unbind();
         }
+    }
+
+    @Override public void drawIris(Matrix4f modelView, Matrix4f projection, TrackRenderStats stats) {
+        boolean changed = IrisDrawScope.draw(buffer, IrisRenderTypes.get(ClientModelManager.WHITE, false, false, true), modelView, projection);
+        if (stats != null) { if (changed) stats.renderTypeSetup(); stats.irisShaderBind(); }
     }
 
     @Override

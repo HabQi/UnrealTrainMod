@@ -43,7 +43,7 @@ public final class TrainModelRenderer {
         submit(queue, model, null, null, 0.0f, pose, light);
     }
 
-    private static void submit(ModelRenderQueue queue, LoadedModel model, VehiclePose vehiclePose,
+    public static void submit(ModelDrawSink queue, LoadedModel model, VehiclePose vehiclePose,
                                TrainEntity entity, float partialTick, PoseStack pose, int light) {
         var stats = queue.statistics();
         long submitStart = stats == null ? 0L : System.nanoTime();
@@ -90,6 +90,8 @@ public final class TrainModelRenderer {
     /** Exact-name matches include hidden parts; submission never changes source visibility or geometry. */
     public static boolean renderPart(LoadedModel.Instance instance, String name, PoseStack pose,
                                      MultiBufferSource buffers, int light) {
+        if (com.unrealtrainmod.client.compat.iris.IrisCompat.active())
+            return com.unrealtrainmod.client.compat.iris.IrisModelRenderer.renderPart(instance, name, pose, buffers, light);
         return submitPart(WORLD, instance, name, pose, light);
     }
 
@@ -102,9 +104,13 @@ public final class TrainModelRenderer {
         return true;
     }
 
-    public static void onFramePre(RenderFrameEvent.Pre event) { clearWorld(); }
+    public static void onFramePre(RenderFrameEvent.Pre event) {
+        clearWorld();
+        com.unrealtrainmod.client.compat.iris.IrisModelRenderer.beginFrame();
+    }
 
     public static void onRenderStage(RenderLevelStageEvent event) {
+        if (com.unrealtrainmod.client.compat.iris.IrisCompat.active()) return;
         var stage = event.getStage();
         if (stage == RenderLevelStageEvent.Stage.AFTER_SKY || stage == RenderLevelStageEvent.Stage.AFTER_LEVEL) {
             clearWorld();
@@ -117,7 +123,10 @@ public final class TrainModelRenderer {
     }
 
     public static void clearWorld() { WORLD.clear(); }
-    public static void closeWorld() { WORLD.close(); }
+    public static void closeWorld() {
+        WORLD.close();
+        com.unrealtrainmod.client.compat.iris.IrisModelRenderer.clear();
+    }
 
     public static void onLevelUnload(LevelEvent.Unload event) {
         if (event.getLevel() instanceof ClientLevel) closeWorld();

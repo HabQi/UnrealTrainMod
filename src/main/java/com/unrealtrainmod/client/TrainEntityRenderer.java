@@ -7,6 +7,8 @@ package com.unrealtrainmod.client;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.math.Axis;
 import com.unrealtrainmod.client.renderer.TrainModelRenderer;
+import com.unrealtrainmod.client.compat.iris.IrisCompat;
+import com.unrealtrainmod.client.compat.iris.IrisModelRenderer;
 import com.unrealtrainmod.entity.TrainEntity;
 import com.unrealtrainmod.model.ModelBounds;
 import com.unrealtrainmod.vehicle.VehicleCatalog;
@@ -24,12 +26,12 @@ public final class TrainEntityRenderer extends EntityRenderer<TrainEntity> {
     @Override
     public void render(TrainEntity entity, float yaw, float partialTick, PoseStack pose,
                        MultiBufferSource buffers, int light) {
-        var stats = TrainModelRenderer.worldStatistics();
+        var stats = IrisCompat.active() ? null : TrainModelRenderer.worldStatistics();
         if (stats != null) stats.vehicle(entity.getModelId());
         long entityStart = stats == null ? 0L : System.nanoTime();
         var model = ClientModelManager.INSTANCE.model(entity.getModelId());
         long poseStart = stats == null ? 0L : System.nanoTime();
-        var vehiclePose = entity.renderPose(partialTick);
+        var vehiclePose = IrisCompat.active() ? IrisModelRenderer.vehiclePose(entity, partialTick) : entity.renderPose(partialTick);
         if (stats != null) stats.addPose(System.nanoTime() - poseStart);
         pose.pushPose();
         try {
@@ -62,7 +64,8 @@ public final class TrainEntityRenderer extends EntityRenderer<TrainEntity> {
             } else {
                 // A placed vehicle may have no rail pose yet. Keep the entity and partial tick anyway, so door
                 // actions and scripts read authoritative state instead of the entity-less preview context.
-                TrainModelRenderer.render(model, vehiclePose, entity, partialTick, pose, light);
+                if (IrisCompat.active()) IrisModelRenderer.render(entity, model, vehiclePose, entity, partialTick, pose, buffers, light);
+                else TrainModelRenderer.render(model, vehiclePose, entity, partialTick, pose, light);
             }
         } finally {
             pose.popPose();

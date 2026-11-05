@@ -10,17 +10,18 @@ import com.unrealtrainmod.track.geometry.TrackVector;
 public final class TrackMeshData {
     public record Bounds(double minX, double minY, double minZ, double maxX, double maxY, double maxZ) {}
     public static final TrackMeshData EMPTY = new TrackMeshData(new TrackVector(0, 0, 0),
-            new float[0], new int[0], new Bounds(0, 0, 0, 0, 0, 0));
+            new float[0], new int[0], new int[0], new Bounds(0, 0, 0, 0, 0, 0));
 
     private final TrackVector origin;
     private final float[] positions;
-    private final int[] colors;
+    private final int[] colors, baseColors;
     private final Bounds bounds;
 
-    TrackMeshData(TrackVector origin, float[] positions, int[] colors, Bounds bounds) {
+    TrackMeshData(TrackVector origin, float[] positions, int[] colors, int[] baseColors, Bounds bounds) {
         this.origin = origin;
         this.positions = positions;
         this.colors = colors;
+        this.baseColors = baseColors;
         this.bounds = bounds;
     }
 
@@ -31,4 +32,5 @@ public final class TrackMeshData {
     public float y(int index) { return positions[index * 3 + 1]; }
     public float z(int index) { return positions[index * 3 + 2]; }
     public int color(int index) { return colors[index]; }
+    public int baseColor(int index) { return baseColors[index]; }
 }

@@ -11,6 +11,8 @@ import com.unrealtrainmod.resource.LoadReport;
 import com.unrealtrainmod.resource.PackageArchive;
 import com.unrealtrainmod.resource.PackageAsset;
 import com.unrealtrainmod.resource.ResourceIds;
+import com.unrealtrainmod.resource.cache.ModelCache;
+import com.unrealtrainmod.resource.cache.ModelCacheCodecs;
 import com.unrealtrainmod.track.model.RailDefinition;
 import java.io.IOException;
 import java.util.HashMap;
@@ -27,10 +29,12 @@ final class IrRailAdapter {
     private final Map<PackageAsset, RailModel> models = new HashMap<>();
     private final Map<PackageAsset, IOException> failedModels = new HashMap<>();
     private final LoadReport report;
+    private final ModelCache cache;
 
-    IrRailAdapter(Map<ResourceLocation, RailDefinition> definitions, LoadReport report) {
+    IrRailAdapter(Map<ResourceLocation, RailDefinition> definitions, LoadReport report, ModelCache cache) {
         this.definitions = definitions;
         this.report = report;
+        this.cache = cache;
     }
 
     void read(PackageArchive archive, String prefix, String reference) {
@@ -75,7 +79,7 @@ final class IrRailAdapter {
             model.imported().textures().forEach((material, texture) ->
                     textures.put(material, new RailDefinition.Texture(texture.asset(), List.of())));
             var source = new RailDefinition.Source(asset, model.imported().model(), textures, null,
-                    RailDefinition.Format.IR_OBJ, scale, top, period);
+                    RailDefinition.Format.IR_OBJ, scale, top, period, cache.digest(asset.archive()));
             definitions.put(id, new RailDefinition(id, name, config, source, null, "", "", List.of()));
             report.registered(LoadReport.Kind.IR_RAIL);
         } catch (IOException | RuntimeException exception) {
@@ -89,7 +93,8 @@ final class IrRailAdapter {
         var previous = failedModels.get(asset);
         if (previous != null) throw new IOException("Previous IR rail model parsing failed: " + asset.entry(), previous);
         try {
-            var imported = IrModelLoader.loadRail(archive, asset);
+            var imported = cache.load(asset, "source", "ir-rail", ModelCacheCodecs.IR_SOURCE,
+                    () -> IrModelLoader.loadRail(archive, asset));
             double top = Double.NEGATIVE_INFINITY;
             boolean left = false, right = false;
             for (var part : imported.model().parts()) {

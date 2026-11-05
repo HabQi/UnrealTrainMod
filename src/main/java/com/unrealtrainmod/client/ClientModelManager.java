@@ -123,6 +123,8 @@ public final class ClientModelManager extends SimplePreparableReloadListener<Pre
             RenderSystem.recordRenderCall(this::close);
             return;
         }
+        com.unrealtrainmod.client.compat.iris.IrisModelRenderer.clear();
+        com.unrealtrainmod.client.compat.iris.IrisMaterials.clear();
         TrainModelRenderer.clearWorld();
         TrainModelRenderer.resetStatistics();
         VehicleScriptManager.clear();

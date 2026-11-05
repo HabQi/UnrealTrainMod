@@ -123,6 +123,8 @@ public class UnrealTrainModClient {
         NeoForge.EVENT_BUS.addListener(ClientPayloadHandlers::openModelSelector);
         NeoForge.EVENT_BUS.addListener(ClientPayloadHandlers::modelSelectionResult);
         NeoForge.EVENT_BUS.addListener(ClientPayloadHandlers::railSelectionResult);
+        NeoForge.EVENT_BUS.addListener(com.unrealtrainmod.client.compat.iris.IrisCompat::onFramePre);
+        NeoForge.EVENT_BUS.addListener(com.unrealtrainmod.client.compat.iris.IrisCompat::onFramePost);
         NeoForge.EVENT_BUS.addListener(TrainModelRenderer::onFramePre);
         NeoForge.EVENT_BUS.addListener(TrainModelRenderer::onLevelUnload);
         NeoForge.EVENT_BUS.addListener(TrainModelRenderer::onLogout);

@@ -26,7 +26,7 @@ public final class VehicleActionRenderer {
      * @param scriptOwnsBody the body renderer took over this model instance and already drew the door objects,
      *                       so the configured actions must not submit them a second time
      */
-    public static void submit(ModelRenderQueue queue, LoadedModel.Instance instance, TrainEntity entity,
+    public static void submit(ModelDrawSink queue, LoadedModel.Instance instance, TrainEntity entity,
                               float partialTick, PoseStack pose, int light, boolean scriptOwnsBody) {
         var definition = instance.definition();
         if (definition.role() != VehiclePartRole.BODY) return;
@@ -49,13 +49,13 @@ public final class VehicleActionRenderer {
         return entity == null ? 0.0f : entity.doorMovement(side, partialTick);
     }
 
-    private static void submitSide(ModelRenderQueue queue, LoadedModel.Source source, String model, List<VehicleAction> actions,
+    private static void submitSide(ModelDrawSink queue, LoadedModel.Source source, String model, List<VehicleAction> actions,
                                    float progress, PoseStack pose, int light) {
         float move = sigmoid(progress);
         for (var action : actions) submitAction(queue, source, model, action, move, pose, light);
     }
 
-    private static void submitAction(ModelRenderQueue queue, LoadedModel.Source source, String model, VehicleAction action,
+    private static void submitAction(ModelDrawSink queue, LoadedModel.Source source, String model, VehicleAction action,
                                      float move, PoseStack pose, int light) {
         var pivot = action.pivot();
         pose.pushPose();

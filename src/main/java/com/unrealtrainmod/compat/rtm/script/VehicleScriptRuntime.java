@@ -6,7 +6,7 @@ package com.unrealtrainmod.compat.rtm.script;
 
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.unrealtrainmod.client.model.LoadedModel;
-import com.unrealtrainmod.client.renderer.ModelRenderQueue;
+import com.unrealtrainmod.client.renderer.ModelDrawSink;
 import com.unrealtrainmod.entity.TrainEntity;
 import com.unrealtrainmod.resource.PackageAsset;
 import com.unrealtrainmod.vehicle.VehiclePartRole;
@@ -85,7 +85,7 @@ public final class VehicleScriptRuntime implements AutoCloseable {
     }
 
     /** Returns true when the script took over this model instance, even if it chose to draw nothing. */
-    public boolean render(ModelRenderQueue queue, TrainEntity entity, VehiclePose vehiclePose,
+    public boolean render(ModelDrawSink queue, TrainEntity entity, VehiclePose vehiclePose,
                           float partialTick, PoseStack pose, int light) {
         if (failed) return false;
         updateWheel(entity, vehiclePose, partialTick);

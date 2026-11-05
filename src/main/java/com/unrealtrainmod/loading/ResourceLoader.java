@@ -9,6 +9,7 @@ import com.unrealtrainmod.compat.rtm.RtmPackageReader;
 import com.unrealtrainmod.resource.LoadReport;
 import com.unrealtrainmod.resource.PackageArchive;
 import com.unrealtrainmod.resource.PackageAsset;
+import com.unrealtrainmod.resource.cache.ModelCache;
 import com.unrealtrainmod.track.model.RailCatalog;
 import com.unrealtrainmod.track.model.RailDefinition;
 import com.unrealtrainmod.vehicle.VehicleCatalog;
@@ -31,13 +32,19 @@ public final class ResourceLoader {
     private ResourceLoader() {}
 
     public static void load(Path modsDirectory, Path configDirectory) {
+        try (var cache = new ModelCache("startup")) {
+            load(modsDirectory, configDirectory, cache);
+        }
+    }
+
+    private static void load(Path modsDirectory, Path configDirectory, ModelCache cache) {
         var report = new LoadReport();
         var vehicles = new LinkedHashMap<ResourceLocation, VehicleDefinition>();
         var rails = new LinkedHashMap<ResourceLocation, RailDefinition>();
         Path rtmDirectory = modsDirectory.resolve("Packages_RTM");
         Path irDirectory = modsDirectory.resolve("Packages_IR");
-        var rtm = new RtmPackageReader(vehicles, rails, report);
-        var ir = new IrPackageReader(vehicles, rails, report);
+        var rtm = new RtmPackageReader(vehicles, rails, report, cache);
+        var ir = new IrPackageReader(vehicles, rails, report, cache);
         for (var path : archives(rtmDirectory, report)) {
             try (var archive = new PackageArchive(path)) {
                 rtm.read(archive);

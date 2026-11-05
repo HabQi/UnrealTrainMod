@@ -18,6 +18,7 @@ import com.unrealtrainmod.client.renderer.RenderBatch;
 import com.unrealtrainmod.model.IndexedMesh;
 import com.unrealtrainmod.model.MaterialRenderMode;
 import com.unrealtrainmod.model.importer.ModelImporter;
+import com.unrealtrainmod.resource.cache.ModelCache;
 import it.unimi.dsi.fastutil.ints.IntArrayList;
 import java.io.IOException;
 import java.util.ArrayList;
@@ -58,13 +59,13 @@ public final class ModelPreparer {
         var classified = new LinkedHashMap<ModelSource, List<ModelPart>>();
         var failed = new HashSet<ModelSource>();
         var actionSets = collectActionSets(definitions);
-        try (var textures = new TexturePool()) {
+        try (var cache = new ModelCache("vehicles"); var textures = new TexturePool()) {
             for (var definition : definitions) {
                 for (var instance : definition.parts()) {
                     var source = instance.source();
                     if (!classified.containsKey(source) && !failed.contains(source)) {
                         try {
-                            classified.put(source, classifySource(source, textures));
+                            classified.put(source, classifySource(source, textures, cache));
                         } catch (IOException | RuntimeException e) {
                             failed.add(source);
                             LOGGER.error("Unable to load vehicle model {}", source.model(), e);
@@ -107,8 +108,8 @@ public final class ModelPreparer {
         return result;
     }
 
-    private static List<ModelPart> classifySource(ModelSource source, TexturePool textures) throws IOException {
-        var imported = ModelImporter.load(source);
+    private static List<ModelPart> classifySource(ModelSource source, TexturePool textures, ModelCache cache) throws IOException {
+        var imported = ModelImporter.load(source, cache);
         var mesh = imported.mesh();
         var parts = new ArrayList<ModelPart>();
         var summaries = new LinkedHashMap<String, MaterialSummary>();

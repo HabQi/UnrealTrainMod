@@ -204,7 +204,8 @@ public final class TrackMeshBuilder {
         private final double originX, originZ;
         private double originY;
         private float[] positions = new float[288];
-        private int[] colors = new int[96];
+        private int[] colors = new int[96], baseColors = new int[96];
+        private int baseColor;
         private int count;
         private double minX = Double.POSITIVE_INFINITY, minY = minX, minZ = minX;
         private double maxX = Double.NEGATIVE_INFINITY, maxY = maxX, maxZ = maxX;
@@ -215,6 +216,7 @@ public final class TrackMeshBuilder {
         }
 
         private void box(TrackVector[] a, TrackVector[] b, int color, boolean capStart, boolean capEnd) {
+            baseColor = color;
             // Sections are CCW toward the forward tangent; all faces below have outward winding.
             quad(a[0], a[1], b[1], b[0], shade(color, 0.55));
             quad(a[1], a[2], b[2], b[1], shade(color, 0.7));
@@ -234,6 +236,7 @@ public final class TrackMeshBuilder {
             if (count + 4 > colors.length) {
                 int capacity = Math.min(MAX_VERTICES, colors.length * 2);
                 colors = Arrays.copyOf(colors, capacity);
+                baseColors = Arrays.copyOf(baseColors, capacity);
                 positions = Arrays.copyOf(positions, capacity * 3);
             }
             vertex(a, color); vertex(b, color); vertex(c, color); vertex(d, color);
@@ -248,6 +251,7 @@ public final class TrackMeshBuilder {
             positions[count * 3] = x;
             positions[count * 3 + 1] = y;
             positions[count * 3 + 2] = z;
+            baseColors[count] = baseColor;
             colors[count++] = color;
             minX = Math.min(minX, point.x()); minY = Math.min(minY, point.y()); minZ = Math.min(minZ, point.z());
             maxX = Math.max(maxX, point.x()); maxY = Math.max(maxY, point.y()); maxZ = Math.max(maxZ, point.z());
@@ -257,7 +261,7 @@ public final class TrackMeshBuilder {
             if (count == 0) return TrackMeshData.EMPTY;
             var origin = new TrackVector(originX, originY, originZ);
             var bounds = new TrackMeshData.Bounds(minX, minY, minZ, maxX, maxY, maxZ);
-            return new TrackMeshData(origin, Arrays.copyOf(positions, count * 3), Arrays.copyOf(colors, count), bounds);
+            return new TrackMeshData(origin, Arrays.copyOf(positions, count * 3), Arrays.copyOf(colors, count), Arrays.copyOf(baseColors, count), bounds);
         }
     }
 }

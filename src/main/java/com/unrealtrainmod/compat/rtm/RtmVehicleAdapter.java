@@ -18,6 +18,8 @@ import com.unrealtrainmod.resource.LoadReport;
 import com.unrealtrainmod.resource.PackageArchive;
 import com.unrealtrainmod.resource.PackageAsset;
 import com.unrealtrainmod.resource.ResourceIds;
+import com.unrealtrainmod.resource.cache.ModelCache;
+import com.unrealtrainmod.resource.cache.ModelCacheCodecs;
 import com.unrealtrainmod.vehicle.VehicleAction;
 import com.unrealtrainmod.vehicle.VehicleActions;
 import com.unrealtrainmod.vehicle.VehicleDefinition;
@@ -41,10 +43,12 @@ final class RtmVehicleAdapter {
     private final Map<ResourceLocation, VehicleDefinition> definitions;
     private final Map<PackageAsset, ModelBounds> boundsCache = new HashMap<>();
     private final LoadReport report;
+    private final ModelCache cache;
 
-    RtmVehicleAdapter(Map<ResourceLocation, VehicleDefinition> definitions, LoadReport report) {
+    RtmVehicleAdapter(Map<ResourceLocation, VehicleDefinition> definitions, LoadReport report, ModelCache cache) {
         this.definitions = definitions;
         this.report = report;
+        this.cache = cache;
     }
 
     void read(PackageArchive archive, String entry, String prefix) {
@@ -133,9 +137,11 @@ final class RtmVehicleAdapter {
         var asset = source.model();
         var bounds = boundsCache.get(asset);
         if (bounds == null) {
-            try (var input = MqoModelInput.open(archive.open(asset.entry()), asset.entry())) {
-                bounds = MqoParser.scanBounds(input, StandardCharsets.UTF_8, ModelSource.MQO_SCALE);
-            }
+            bounds = cache.load(asset, "bounds", "rtm-vehicle:" + ModelSource.MQO_SCALE, ModelCacheCodecs.BOUNDS, () -> {
+                try (var input = MqoModelInput.open(archive.open(asset.entry()), asset.entry())) {
+                    return MqoParser.scanBounds(input, StandardCharsets.UTF_8, ModelSource.MQO_SCALE);
+                }
+            });
             boundsCache.put(asset, bounds);
         }
         return new VehicleDefinition.Instance(source, offset, role, new TrackVector(0, 0, 0), bounds, actions);
