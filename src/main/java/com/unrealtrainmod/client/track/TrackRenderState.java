@@ -8,6 +8,7 @@ import com.mojang.blaze3d.platform.GlStateManager;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.BufferUploader;
 import com.mojang.blaze3d.vertex.VertexBuffer;
+import com.mojang.blaze3d.vertex.MeshData;
 import com.mojang.blaze3d.vertex.VertexFormat;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.RenderType;
@@ -70,11 +71,30 @@ final class TrackRenderState implements AutoCloseable {
         buffer.draw();
     }
 
+    void drawMorph(VertexBuffer buffer, Matrix4f modelView, Matrix4f projection, float movement) {
+        var shader = TrackMorphShader.shader();
+        shader.getUniform("Movement").set(movement);
+        begin(TrackRenderTypes.MORPH, VertexFormat.Mode.QUADS, modelView, projection);
+        shader.getUniform("Movement").upload();
+        buffer.bind();
+        buffer.draw();
+    }
+
     /** Authored rail batch: its own texture and cull mode, fixed world-space direction lights. */
     void drawTextured(RenderType type, VertexBuffer buffer, Matrix4f modelView, Matrix4f projection) {
         begin(type, VertexFormat.Mode.TRIANGLES, modelView, projection);
         buffer.bind();
         buffer.draw();
+    }
+
+    void prepareParts(RenderType type, Matrix4f modelView, Matrix4f projection) {
+        begin(type, VertexFormat.Mode.TRIANGLES, modelView, projection);
+    }
+
+    void drawBuffered(RenderType type, MeshData data,
+                      Matrix4f modelView, Matrix4f projection) {
+        begin(type, VertexFormat.Mode.TRIANGLES, modelView, projection);
+        BufferUploader.draw(data);
     }
 
     private void begin(RenderType type, VertexFormat.Mode mode, Matrix4f modelView, Matrix4f projection) {
@@ -132,19 +152,22 @@ final class TrackRenderState implements AutoCloseable {
         lightShader = null;
     }
 
+    /** Legacy submission still shares one backup scope, but reapplies state for the next draw. */
+    void endBatch() {
+        if (activeType != null) { activeType.clearRenderState(); activeType = null; }
+        if (appliedShader != null) {
+            restoreLights();
+            appliedShader.clear();
+            appliedShader = null;
+        }
+        projectionApplied = false;
+    }
+
     @Override
     public void close() {
         long start = stats == null ? 0L : System.nanoTime();
         try {
-            if (activeType != null) {
-                activeType.clearRenderState();
-                activeType = null;
-            }
-            if (appliedShader != null) {
-                restoreLights();
-                appliedShader.clear();
-                appliedShader = null;
-            }
+            endBatch();
         } finally {
             BufferUploader.invalidate();
             GlStateManager._glBindVertexArray(previousVao);

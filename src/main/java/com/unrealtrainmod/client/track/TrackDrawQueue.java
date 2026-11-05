@@ -14,20 +14,25 @@ import org.joml.Matrix4f;
 /** Frame-local references to uploaded buffers, grouped without taking ownership of GPU resources. */
 final class TrackDrawQueue {
     private record Draw(RenderType type, VertexBuffer buffer, Matrix4f modelView,
-                        int source, int structure, int vertices, int triangles, int storedVertices, long chunk) {}
+                        int source, int structure, int vertices, int triangles, int storedVertices, long chunk, float movement) {}
 
     private final LinkedHashMap<RenderType, List<Draw>> groups = new LinkedHashMap<>();
 
     /** The caller supplies one matrix snapshot per mesh, shared by all of that mesh's batches. */
     void addNative(VertexBuffer buffer, Matrix4f modelView, int structure, int vertices) {
         add(new Draw(TrackRenderTypes.OPAQUE, buffer, modelView,
-                TrackRenderStats.NATIVE, structure, vertices, vertices / 2, vertices, 0L));
+                TrackRenderStats.NATIVE, structure, vertices, vertices / 2, vertices, 0L, Float.NaN));
+    }
+
+    void addMorph(VertexBuffer buffer, Matrix4f modelView, int structure, int vertices, float movement) {
+        add(new Draw(TrackRenderTypes.MORPH, buffer, modelView, TrackRenderStats.NATIVE, structure,
+                vertices, vertices / 2, vertices, 0L, movement));
     }
 
     void addTextured(RenderType type, VertexBuffer buffer, Matrix4f modelView, int structure,
                      int vertices, int storedVertices, long chunk) {
         add(new Draw(type, buffer, modelView, TrackRenderStats.RAIL_MODEL, structure,
-                vertices, vertices / 3, storedVertices, chunk));
+                vertices, vertices / 3, storedVertices, chunk, Float.NaN));
     }
 
     private void add(Draw draw) {
@@ -39,7 +44,9 @@ final class TrackDrawQueue {
         try {
             for (var group : groups.values()) {
                 for (var draw : group) {
-                    if (draw.source() == TrackRenderStats.NATIVE) {
+                    if (!Float.isNaN(draw.movement())) {
+                        state.drawMorph(draw.buffer(), draw.modelView(), projection, draw.movement());
+                    } else if (draw.source() == TrackRenderStats.NATIVE) {
                         state.drawNative(draw.buffer(), draw.modelView(), projection);
                     } else {
                         state.drawTextured(draw.type(), draw.buffer(), draw.modelView(), projection);

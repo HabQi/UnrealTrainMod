@@ -18,6 +18,7 @@ final class TrackGpuTimer implements AutoCloseable {
     private final int[] ends = new int[QUERY_PAIRS];
     private final boolean[] pending = new boolean[QUERY_PAIRS];
     private final boolean[] eligible = new boolean[QUERY_PAIRS];
+    private final boolean[] animated = new boolean[QUERY_PAIRS];
     private final long[] windows = new long[QUERY_PAIRS];
     private int active = -1;
     private int framesUntilSample;
@@ -33,7 +34,7 @@ final class TrackGpuTimer implements AutoCloseable {
             if (eligible[i] && windows[i] == window) {
                 long start = GL33.glGetQueryObjecti64(starts[i], GL15.GL_QUERY_RESULT);
                 long end = GL33.glGetQueryObjecti64(ends[i], GL15.GL_QUERY_RESULT);
-                stats.gpuSpan(end - start);
+                stats.gpuSpan(end - start, animated[i]);
             }
         }
         if (framesUntilSample > 0) {
@@ -55,10 +56,11 @@ final class TrackGpuTimer implements AutoCloseable {
         // All pairs are still in flight. Skip this sample instead of synchronizing with the GPU.
     }
 
-    void endFrame(boolean include) {
+    void endFrame(boolean include, boolean animation) {
         if (active == -1) return;
         GL33.glQueryCounter(ends[active], GL33.GL_TIMESTAMP);
         eligible[active] = include;
+        animated[active] = animation;
         pending[active] = true;
         active = -1;
     }

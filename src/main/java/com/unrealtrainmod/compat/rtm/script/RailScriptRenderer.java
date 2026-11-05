@@ -13,7 +13,7 @@ import java.util.List;
 import java.util.Map;
 import net.minecraft.resources.ResourceLocation;
 
-/** Legacy {@code RailPartsRenderer} subset used while a cached normal-track mesh is generated. */
+/** Legacy {@code RailPartsRenderer} subset for static meshes and rigid turnout snapshots. */
 public final class RailScriptRenderer extends RtmPartsRenderer {
     /** Limited read-only texture metadata for the common getModelObject().textures[0].material.texture idiom. */
     public static final class ModelObject {
@@ -105,7 +105,7 @@ public final class RailScriptRenderer extends RtmPartsRenderer {
     }
 
     public int getBrightness(Object world, double x, double y, double z) {
-        ScriptDiagnostics.unsupported("rail renderer.getBrightness", "cached rail meshes sample native per-vertex light at upload");
+        ScriptDiagnostics.unsupported("rail renderer.getBrightness", "rail vertices and rigid part instances sample native world light");
         return 0;
     }
 

@@ -69,6 +69,11 @@ public final class ClientRailModelManager extends SimplePreparableReloadListener
     public record Prepared(Map<ResourceLocation, Model> models, Map<PackageAsset, NativeImage> images) {}
     private Map<ResourceLocation, Model> models = Map.of();
     private final Set<ResourceLocation> textures = new HashSet<>();
+    private final Map<IndexedMesh, SharedRailPart> sharedParts = new java.util.IdentityHashMap<>();
+
+    SharedRailPart sharedPart(IndexedMesh mesh) {
+        return sharedParts.computeIfAbsent(mesh, SharedRailPart::new);
+    }
 
     private ClientRailModelManager() {}
     Model model(String id) { return id == null ? null : models.get(ResourceLocation.parse(id)); }
@@ -248,6 +253,8 @@ public final class ClientRailModelManager extends SimplePreparableReloadListener
 
     @Override
     public void close() {
+        sharedParts.values().forEach(SharedRailPart::close);
+        sharedParts.clear();
         var manager = Minecraft.getInstance().getTextureManager();
         for (ResourceLocation id : textures) manager.release(id);
         textures.clear();

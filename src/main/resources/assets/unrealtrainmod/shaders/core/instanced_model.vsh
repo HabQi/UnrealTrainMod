@@ -21,6 +21,7 @@ uniform sampler2D Sampler1;
 uniform sampler2D Sampler2;
 uniform mat4 ModelViewMat;
 uniform mat4 ProjMat;
+uniform vec3 RenderOrigin;
 uniform ivec2 OverlayUV;
 uniform int FogShape;
 uniform vec3 Light0_Direction;
@@ -37,7 +38,7 @@ void main() {
     mat4 instanceModel = mat4(InstModel0, InstModel1, InstModel2, InstModel3);
     vec4 posedPosition = instanceModel * vec4(Position, 1.0);
     gl_Position = ProjMat * ModelViewMat * posedPosition;
-    vertexDistance = fog_distance(posedPosition.xyz, FogShape);
+    vertexDistance = fog_distance(posedPosition.xyz + RenderOrigin, FogShape);
     mat3 instanceNormal = mat3(InstNormal0, InstNormal1, InstNormal2);
     vec3 posedNormal = normalize(instanceNormal * Normal);
     vertexColor = DirectionalLighting != 0

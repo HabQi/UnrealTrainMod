@@ -130,6 +130,12 @@ public final class GpuModel implements AutoCloseable {
         }
     }
 
+    /** Shared rigid geometry for non-vehicle callers; the owning resource manager closes it. */
+    public static Mesh uploadSharedMesh(IndexedMesh mesh) {
+        RenderSystem.assertOnRenderThread();
+        return new Mesh(uploadMesh(mesh));
+    }
+
     private static byte normalByte(float value) { return (byte)(Math.clamp(value, -1f, 1f) * 127f); }
 
     public static final class Mesh implements AutoCloseable {

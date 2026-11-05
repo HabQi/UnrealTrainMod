@@ -13,7 +13,7 @@ public final class RailScriptSwitch {
         public final RailScriptMap rmMain, rmBranch;
         public final boolean mainDirIsPositive, branchDirIsPositive;
         public final RailDir branchDir;
-        private SwitchPosition position;
+        private float movement;
 
         private Point(RailScriptMap main, RailScriptMap branch, RailDir direction, SwitchPosition position) {
             rmMain = main;
@@ -22,10 +22,10 @@ public final class RailScriptSwitch {
             // Maps run A -> B/C. Only the common entrance is their positive endpoint.
             mainDirIsPositive = direction != RailDir.NONE;
             branchDirIsPositive = direction != RailDir.NONE;
-            this.position = position;
+            movement = position == SwitchPosition.NORMAL ? 0 : 1;
         }
 
-        public float getMovement() { return branchDir == RailDir.NONE || position == SwitchPosition.NORMAL ? 0 : 1; }
+        public float getMovement() { return branchDir == RailDir.NONE ? 0 : movement; }
     }
 
     private final Point[] points;
@@ -51,5 +51,5 @@ public final class RailScriptSwitch {
 
     RailScriptMap[] maps() { return maps.clone(); }
 
-    void position(SwitchPosition position) { points[0].position = position; }
+    void movement(float value) { points[0].movement = value; }
 }

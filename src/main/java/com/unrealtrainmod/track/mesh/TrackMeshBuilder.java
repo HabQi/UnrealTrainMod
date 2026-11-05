@@ -8,8 +8,8 @@ import com.unrealtrainmod.track.geometry.TrackGeometry;
 import com.unrealtrainmod.track.geometry.TrackPose;
 import com.unrealtrainmod.track.geometry.TrackVector;
 import java.util.Arrays;
+import java.util.TreeSet;
 import com.unrealtrainmod.track.assembly.TrackAssemblyInstance;
-import com.unrealtrainmod.track.assembly.TrackTransitionResolver;
 
 /** Chunk-owned primitives use global distance grids, so adjacent chunks never duplicate a face. */
 public final class TrackMeshBuilder {
@@ -49,8 +49,13 @@ public final class TrackMeshBuilder {
         return builder.mesh.finish();
     }
 
-    /** Shared sleepers/stock rails and a separately cached two-state tongue region. */
+    /** Fixed rails or both leaves, with identical leaf topology at every movement value. */
     public static TrackMeshData buildTurnout(TrackAssemblyInstance assembly, int chunkX, int chunkZ, boolean tongues) {
+        return buildTurnout(assembly, chunkX, chunkZ, tongues, 0);
+    }
+
+    public static TrackMeshData buildTurnout(TrackAssemblyInstance assembly, int chunkX, int chunkZ,
+                                              boolean tongues, double movement) {
         var geometry = assembly.geometry();
         var direct = geometry.paths().get("straight").getFirst();
         var branch = geometry.paths().get("diverging").getFirst();
@@ -58,8 +63,14 @@ public final class TrackMeshBuilder {
         var mesh = new Builder((double)chunkX * 16, (double)chunkZ * 16);
         int count = (int)Math.ceil(length / RAIL_STEP);
         double offset = (assembly.gauge() + RAIL_WIDTH) / 2;
-        for (int i = 0; i < count; i++) {
-            double from = (double)i / count, to = (double)(i + 1) / count, middle = (from + to) / 2;
+        var divisions = new TreeSet<Double>();
+        for (int i = 0; i <= count; i++) divisions.add((double)i / count);
+        divisions.add(0.35);
+        var steps = divisions.toArray(Double[]::new);
+        double branchSide = Math.copySign(1, lateralDistance(branch.sample(branch.getLength()).position(), direct.sample(length)));
+        double opening = 0.12 * assembly.gauge() / 1.435;
+        for (int i = 0; i + 1 < steps.length; i++) {
+            double from = steps[i], to = steps[i + 1], middle = (from + to) / 2;
             boolean inTongue = middle < 0.35;
             if (tongues && !inTongue) continue;
             TrackPose[] a = {direct.sample(length * from), branch.sample(branch.getLength() * from)};
@@ -74,24 +85,28 @@ public final class TrackMeshBuilder {
             }
             for (int rail = 0; rail < 4; rail++) {
                 if (tongues) {
-                    int active = TrackTransitionResolver.isPathEnabled(assembly, "straight") ? 0 : 1;
-                    if (rail / 2 != active || rail == low || rail == high) continue;
-                    if (horizontalDistanceSquared(centers[rail], centers[low]) < RAIL_WIDTH * RAIL_WIDTH
-                            || horizontalDistanceSquared(centers[rail], centers[high]) < RAIL_WIDTH * RAIL_WIDTH) continue;
+                    int side = rail % 2 == 0 ? -1 : 1;
+                    int innerSide = rail / 2 == 0 ? (int)branchSide : -(int)branchSide;
+                    if (side != innerSide) continue;
                 } else if (inTongue && rail != low && rail != high) continue;
                 // Coincident toe rails belong to the shared structure only once.
                 boolean duplicate = false;
                 for (int earlier = 0; earlier < rail; earlier++) {
                     if (!tongues && inTongue && earlier != low && earlier != high) continue;
-                    if (tongues && earlier / 2 != rail / 2) continue;
+                    if (tongues) continue;
                     double dx = centers[rail].x() - centers[earlier].x(), dz = centers[rail].z() - centers[earlier].z();
                     if (dx * dx + dz * dz < RAIL_WIDTH * RAIL_WIDTH) duplicate = true;
                 }
                 if (duplicate || !ownsChunk(centers[rail], chunkX, chunkZ)) continue;
                 double lateral = (rail % 2 == 0 ? -1 : 1) * offset;
                 double half = tongues ? RAIL_WIDTH * (0.15 + 0.35 * middle / 0.35) : RAIL_WIDTH / 2;
-                mesh.box(section(a[rail / 2], lateral, half, -RAIL_HEIGHT, 0, 0),
-                        section(b[rail / 2], lateral, half, -RAIL_HEIGHT, 0, 0), RAIL_COLOR, i == 0, i + 1 == count);
+                double open = tongues ? opening * (rail / 2 == 0 ? movement : 1 - movement) : 0;
+                int side = rail % 2 == 0 ? -1 : 1;
+                double startOffset = lateral - side * open * Math.max(0, 1 - from / 0.35);
+                double endOffset = lateral - side * open * Math.max(0, 1 - to / 0.35);
+                mesh.box(section(a[rail / 2], startOffset, half, -RAIL_HEIGHT, 0, 0),
+                        section(b[rail / 2], endOffset, half, -RAIL_HEIGHT, 0, 0), RAIL_COLOR,
+                        i == 0, tongues ? to == 0.35 : i + 2 == steps.length);
             }
         }
         if (!tongues) {
@@ -112,11 +127,6 @@ public final class TrackMeshBuilder {
     private static double lateralDistance(TrackVector point, TrackPose frame) {
         return (point.x() - frame.position().x()) * frame.lateral().x()
                 + (point.z() - frame.position().z()) * frame.lateral().z();
-    }
-
-    private static double horizontalDistanceSquared(TrackVector a, TrackVector b) {
-        double x = a.x() - b.x(), z = a.z() - b.z();
-        return x * x + z * z;
     }
 
     private static boolean ownsChunk(TrackVector point, int chunkX, int chunkZ) {

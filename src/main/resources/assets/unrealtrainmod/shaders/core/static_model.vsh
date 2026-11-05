@@ -13,6 +13,7 @@ uniform sampler2D Sampler2;
 uniform mat4 ModelViewMat;
 uniform mat4 ProjMat;
 uniform mat4 ModelMat;
+uniform vec3 RenderOrigin;
 uniform mat3 NormalMat;
 uniform ivec2 LightUV;
 uniform ivec2 OverlayUV;
@@ -30,7 +31,7 @@ out vec2 texCoord0;
 void main() {
     vec4 posedPosition = ModelMat * vec4(Position, 1.0);
     gl_Position = ProjMat * ModelViewMat * posedPosition;
-    vertexDistance = fog_distance(posedPosition.xyz, FogShape);
+    vertexDistance = fog_distance(posedPosition.xyz + RenderOrigin, FogShape);
     vec3 posedNormal = normalize(NormalMat * Normal);
     vertexColor = DirectionalLighting != 0
         ? minecraft_mix_light(Light0_Direction, Light1_Direction, posedNormal, Color) : Color;

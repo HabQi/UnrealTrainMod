@@ -11,6 +11,10 @@ import com.unrealtrainmod.track.mesh.RailMeshAccumulator;
 import com.unrealtrainmod.track.mesh.RailTrackMeshBuilder;
 import com.unrealtrainmod.track.mesh.RailTrackMeshData;
 import java.util.List;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.function.Consumer;
 import net.minecraft.core.BlockPos;
 import org.joml.Matrix3f;
 import org.joml.Matrix4f;
@@ -26,6 +30,9 @@ final class RailScriptDrawContext extends ScriptMatrixContext {
     private final TrackVector origin;
     private final RailTrackMeshBuilder.Filter filter;
     private final RailMeshAccumulator output;
+    private List<Consumer<RailScriptDrawContext>> staticCommands;
+    private List<RailDrawSnapshot.Part> dynamicParts;
+    private RailDrawSnapshot previousDynamic;
 
     RailScriptDrawContext(TrackGeometry geometry, BlockPos start, int chunkX, int chunkZ,
                           double scale, double period, boolean preview, RailTrackMeshBuilder.Filter filter) {
@@ -45,6 +52,19 @@ final class RailScriptDrawContext extends ScriptMatrixContext {
 
     void geometry(TrackGeometry geometry) { this.geometry = geometry; }
 
+    void captureStatic(List<Consumer<RailScriptDrawContext>> commands) { staticCommands = commands; }
+    void captureDynamic(RailDrawSnapshot previous) { dynamicParts = new ArrayList<>(); previousDynamic = previous; }
+    RailDrawSnapshot snapshot() { return new RailDrawSnapshot(dynamicParts); }
+
+    private void replay(Matrix4f matrix, Runnable command) {
+        push();
+        try {
+            pose.last().pose().set(matrix);
+            matrix.normal(pose.last().normal());
+            command.run();
+        } finally { pop(); }
+    }
+
     void repeat(List<RailTrackMeshBuilder.Source> sources, double x, double y, double z) {
         if (isCompiling()) {
             var captured = geometry;
@@ -57,15 +77,41 @@ final class RailScriptDrawContext extends ScriptMatrixContext {
             });
             return;
         }
+        if (staticCommands != null) {
+            var path = geometry;
+            var matrix = new Matrix4f(pose.last().pose());
+            if (!matrix.isFinite()) throw new IllegalArgumentException("Non-finite rail script transform");
+            long count = (long)Math.ceil(path.getLength() / (scale * period));
+            // Evaluate the JS filter now, while its tile/map is bound, never during chunk replay.
+            Map<String, boolean[]> selection = new HashMap<>();
+            for (var source : sources) {
+                if (selection.containsKey(source.part())) continue;
+                boolean[] allowed = new boolean[Math.toIntExact(count)];
+                for (int i = 0; i < allowed.length; i++) allowed[i] = filter.shouldRender(source.part(), i, count);
+                selection.put(source.part(), allowed);
+            }
+            staticCommands.add(target -> {
+                target.geometry(path);
+                target.replay(matrix, () -> target.repeatSelected(sources, x, y, z,
+                        (part, index, total) -> selection.get(part)[Math.toIntExact(index)]));
+            });
+            return;
+        }
+        if (dynamicParts != null) throw new IllegalArgumentException("Dynamic renderStaticParts is not a rigid part draw");
+        repeatSelected(sources, x, y, z, filter);
+    }
+
+    private void repeatSelected(List<RailTrackMeshBuilder.Source> sources, double x, double y, double z,
+                                RailTrackMeshBuilder.Filter selected) {
         var transform = (preview ? new Matrix4f(pose.last().pose()) : localTransform())
                 .translate((float)x, (float)y, (float)z);
         if (preview) {
             transform.scale((float)scale);
             for (var source : sources) {
-                if (filter.shouldRender(source.part(), 0, 1)) append(source, transform);
+                if (selected.shouldRender(source.part(), 0, 1)) append(source, transform);
             }
         } else {
-            var mesh = RailTrackMeshBuilder.build(geometry, sources, chunkX, chunkZ, scale, period, filter);
+            var mesh = RailTrackMeshBuilder.build(geometry, sources, chunkX, chunkZ, scale, period, selected);
             var o = mesh.origin();
             transform.translate((float)(o.x() - start.getX()), (float)(o.y() - start.getY()),
                     (float)(o.z() - start.getZ()));
@@ -78,6 +124,23 @@ final class RailScriptDrawContext extends ScriptMatrixContext {
     void draw(List<RailTrackMeshBuilder.Source> sources) {
         if (isCompiling()) {
             record(context -> ((RailScriptDrawContext)context).draw(sources));
+            return;
+        }
+        if (staticCommands != null) {
+            var matrix = new Matrix4f(pose.last().pose());
+            if (!matrix.isFinite()) throw new IllegalArgumentException("Non-finite rail script transform");
+            staticCommands.add(target -> target.replay(matrix, () -> target.draw(sources)));
+            return;
+        }
+        if (dynamicParts != null) {
+            var transform = new Matrix4f(pose.last().pose()).scale((float)scale);
+            for (var source : sources) {
+                int index = dynamicParts.size();
+                var previous = previousDynamic != null && index < previousDynamic.parts().size()
+                        ? previousDynamic.parts().get(index) : null;
+                dynamicParts.add(previous != null && previous.source() == source && previous.transform().equals(transform)
+                        ? previous : new RailDrawSnapshot.Part(source, transform));
+            }
             return;
         }
         var matrix = pose.last().pose();
@@ -134,7 +197,7 @@ final class RailScriptDrawContext extends ScriptMatrixContext {
 
     @Override void brightness(int value) {
         if (isCompiling()) { record(context -> context.brightness(value)); return; }
-        ScriptDiagnostics.unsupported("rail script brightness", "cached rail meshes use native per-vertex lighting; previews stay full bright");
+        ScriptDiagnostics.unsupported("rail script brightness", "native world lighting is used for vertices and rigid part instances; previews stay full bright");
     }
 
     @Override void directionalLighting(boolean value) {

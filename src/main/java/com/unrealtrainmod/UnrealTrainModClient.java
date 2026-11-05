@@ -59,6 +59,7 @@ public class UnrealTrainModClient {
     static void registerShaders(RegisterShadersEvent event) {
         StaticModelShader.register(event);
         InstancedModelShader.register(event);
+        com.unrealtrainmod.client.track.TrackMorphShader.register(event);
     }
 
     @SubscribeEvent
@@ -132,6 +133,7 @@ public class UnrealTrainModClient {
         NeoForge.EVENT_BUS.addListener(ClientTrackCache.INSTANCE::onLevelLoad);
         NeoForge.EVENT_BUS.addListener(ClientTrackCache.INSTANCE::onLevelUnload);
         NeoForge.EVENT_BUS.addListener(ClientTrackCache.INSTANCE::onLogout);
+        NeoForge.EVENT_BUS.addListener(ClientTrackCache.INSTANCE::onTick);
         NeoForge.EVENT_BUS.addListener(TrackWorldRenderer::render);
         NeoForge.EVENT_BUS.addListener(ClientTrackConstruction.INSTANCE::onSync);
         NeoForge.EVENT_BUS.addListener(ClientTrackConstruction.INSTANCE::onTick);

@@ -9,6 +9,12 @@ import net.neoforged.neoforge.common.ModConfigSpec;
 public final class ClientConfig {
     private static final ModConfigSpec.Builder BUILDER = new ModConfigSpec.Builder();
 
+    public static final ModConfigSpec.DoubleValue TURNOUT_ANIMATION_DURATION_SECONDS = BUILDER
+            .comment("Client-only full-stroke turnout animation duration in seconds. Zero switches immediately.",
+                    "Nonzero changes apply to the next throw. Routes and interlocking still switch immediately.")
+            .translation("unrealtrainmod.configuration.turnoutAnimationDurationSeconds")
+            .defineInRange("turnoutAnimationDurationSeconds", 1.0, 0.0, 10.0);
+
     public static final ModConfigSpec.BooleanValue SORT_TRANSLUCENT_TRIANGLES = BUILDER
             .comment("Sort vehicle translucent triangles from far to near in world and preview rendering.",
                     "Disabling only skips sorting; depth calculation, index uploads and adjacent draw merging remain active.",
@@ -57,7 +63,7 @@ public final class ClientConfig {
     public static final ModConfigSpec.BooleanValue GROUP_TRACK_DRAWS_BY_MATERIAL = BUILDER
             .comment("Group visible world track batches by render type across meshes before drawing.",
                     "Enabled by default, but only active while useTrackRenderStateCache is enabled.",
-                    "Reduces repeated material setup and shader apply calls, without merging draw calls or geometry.",
+                    "Fixed meshes reduce state changes; rigid turnout parts also group shared-mesh instances.",
                     "Changes submission order between materials; coplanar overlays may be covered differently.",
                     "Takes effect on the next frame without rebuilding meshes; previews and thumbnails are unchanged.")
             .translation("unrealtrainmod.configuration.groupTrackDrawsByMaterial")
@@ -72,7 +78,8 @@ public final class ClientConfig {
                     "Also reports stored vertex records, explicit index upload bytes, and ordinary rail chunk/material",
                     "batch duplication in the materialGroups path. Duplication is potential merge space, not saved draws.",
                     "Also samples the track GPU timeline span every 16 frames using nonblocking timestamps,",
-                    "excluding frames with builds, uploads or no track draws. Requires timer-query support.",
+                    "excluding builds, static uploads and empty frames; motion samples include streaming uploads.",
+                    "Separates stationary and animated GPU samples, and reports turnout/JS/part/streaming metrics.",
                     "CPU times are submission costs; GPU spans are not full-frame times or pure shader activity.",
                     "Disabling skips counters and timing and releases the GPU queries on the next track pass.")
             .translation("unrealtrainmod.configuration.logTrackRenderStats")

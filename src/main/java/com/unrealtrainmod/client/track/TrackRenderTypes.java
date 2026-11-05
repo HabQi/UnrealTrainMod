@@ -5,6 +5,8 @@
 package com.unrealtrainmod.client.track;
 
 import com.mojang.blaze3d.vertex.DefaultVertexFormat;
+import com.unrealtrainmod.client.StaticModelShader;
+import com.unrealtrainmod.client.renderer.instancing.InstancedModelShader;
 import com.mojang.blaze3d.vertex.VertexFormat;
 import java.util.OptionalDouble;
 import java.util.HashMap;
@@ -16,6 +18,21 @@ import net.minecraft.client.renderer.RenderType;
 final class TrackRenderTypes extends RenderStateShard {
     private record TextureKey(ResourceLocation texture, boolean doubleSided) {}
     private static final Map<TextureKey, RenderType> TEXTURED = new HashMap<>();
+    private record PartKey(ResourceLocation texture, boolean doubleSided, boolean instanced) {}
+    private static final Map<PartKey, RenderType> PARTS = new HashMap<>();
+
+    static RenderType part(ResourceLocation texture, boolean doubleSided, boolean instanced) {
+        return PARTS.computeIfAbsent(new PartKey(texture, doubleSided, instanced), key -> RenderType.create(
+                "utm_rail_part", StaticModelShader.FORMAT, VertexFormat.Mode.TRIANGLES,
+                1536, false, false, RenderType.CompositeState.builder()
+                        .setShaderState(new ShaderStateShard(() -> instanced
+                                ? InstancedModelShader.state().shader()
+                                : StaticModelShader.state().shader()))
+                        .setTextureState(new TextureStateShard(texture, false, false))
+                        .setTransparencyState(NO_TRANSPARENCY).setDepthTestState(LEQUAL_DEPTH_TEST)
+                        .setWriteMaskState(COLOR_DEPTH_WRITE).setCullState(doubleSided ? NO_CULL : CULL)
+                        .setLightmapState(LIGHTMAP).setOverlayState(OVERLAY).createCompositeState(false)));
+    }
 
     static RenderType textured(ResourceLocation texture, boolean doubleSided) {
         return TEXTURED.computeIfAbsent(new TextureKey(texture, doubleSided), key -> RenderType.create(
@@ -27,7 +44,12 @@ final class TrackRenderTypes extends RenderStateShard {
                         .setLightmapState(LIGHTMAP).setOverlayState(OVERLAY).createCompositeState(false)));
     }
 
-    static void clearTextures() { TEXTURED.clear(); }
+    static void clearTextures() { TEXTURED.clear(); PARTS.clear(); }
+    static final RenderType MORPH = RenderType.create("utm_turnout_leaf", TrackMorphShader.FORMAT,
+            VertexFormat.Mode.QUADS, 1536, false, false, RenderType.CompositeState.builder()
+                    .setShaderState(new ShaderStateShard(TrackMorphShader::shader)).setLightmapState(LIGHTMAP)
+                    .setTransparencyState(NO_TRANSPARENCY).setDepthTestState(LEQUAL_DEPTH_TEST)
+                    .setWriteMaskState(COLOR_DEPTH_WRITE).setCullState(CULL).createCompositeState(false));
     static final RenderType OPAQUE = RenderType.create("utm_track", DefaultVertexFormat.POSITION_COLOR_LIGHTMAP,
             VertexFormat.Mode.QUADS, 1536, false, false, RenderType.CompositeState.builder()
                     // This vanilla shader consumes packed block/sky UV2 and needs no surface texture or normals.

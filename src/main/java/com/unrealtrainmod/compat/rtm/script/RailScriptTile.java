@@ -5,7 +5,6 @@
 package com.unrealtrainmod.compat.rtm.script;
 
 import com.unrealtrainmod.track.geometry.TrackGeometry;
-import com.unrealtrainmod.track.assembly.SwitchPosition;
 import com.unrealtrainmod.track.assembly.TrackAssemblyInstance;
 import java.util.HashMap;
 import java.util.Map;
@@ -38,7 +37,7 @@ public final class RailScriptTile {
         anchor = new RailScriptMap.Position(position, origin.y());
     }
 
-    void position(SwitchPosition position) { railSwitch.position(position); }
+    void movement(float value) { railSwitch.movement(value); }
 
     void map(RailScriptMap map) { this.map = map; }
 

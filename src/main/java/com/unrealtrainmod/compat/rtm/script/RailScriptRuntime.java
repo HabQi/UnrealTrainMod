@@ -5,8 +5,11 @@
 package com.unrealtrainmod.compat.rtm.script;
 
 import com.unrealtrainmod.resource.PackageAsset;
+import com.unrealtrainmod.client.ClientConfig;
+import java.util.ArrayList;
+import java.util.function.Consumer;
+import javax.script.ScriptException;
 import com.unrealtrainmod.track.geometry.TrackGeometry;
-import com.unrealtrainmod.track.assembly.SwitchPosition;
 import com.unrealtrainmod.track.assembly.TrackAssemblyInstance;
 import com.unrealtrainmod.track.mesh.RailTrackMeshBuilder;
 import com.unrealtrainmod.track.mesh.RailTrackMeshData;
@@ -31,6 +34,29 @@ public final class RailScriptRuntime implements AutoCloseable {
     private final boolean hasRenderRailStatic;
     private final boolean hasRenderRailDynamic;
     private final String label;
+    private static long pendingCalls, pendingNanos;
+    private int invocationDepth;
+    private boolean worldDraw;
+
+    public record Metrics(long calls, long nanos) {}
+    public static Metrics drainMetrics() {
+        var result = new Metrics(pendingCalls, pendingNanos);
+        pendingCalls = pendingNanos = 0;
+        return result;
+    }
+
+    private Object invoke(String name, Object... arguments) throws ScriptException, NoSuchMethodException {
+        boolean measured = worldDraw && ClientConfig.LOG_TRACK_RENDER_STATS.getAsBoolean();
+        boolean outer = invocationDepth++ == 0;
+        long start = measured && outer ? System.nanoTime() : 0;
+        if (measured) pendingCalls++;
+        try { return instance.invoke(name, arguments); }
+        finally {
+            invocationDepth--;
+            if (start != 0) pendingNanos += System.nanoTime() - start;
+        }
+    }
+
     private boolean failed;
     private String phase;
     private Throwable filterFailure;
@@ -60,7 +86,7 @@ public final class RailScriptRuntime implements AutoCloseable {
                 + (runtime.hasRenderRailStatic ? "; renderRailStatic builds cached geometry at Pass 0"
                         : "; no renderRailStatic, default static repetition is used")
                 + (runtime.hasShouldRenderObject ? "; shouldRenderObject filters renderStaticParts" : "; no object filter")
-                + (runtime.hasRenderRailDynamic ? "; renderRailDynamic is cached for custom turnouts only" : ""));
+                + (runtime.hasRenderRailDynamic ? "; renderRailDynamic captures tick snapshots for custom turnouts" : ""));
         return runtime;
     }
 
@@ -108,45 +134,68 @@ public final class RailScriptRuntime implements AutoCloseable {
     /** A failed instance stays disabled; the caller must discard its current filtered build. */
     public boolean failed() { return failed; }
 
-    /** Static and dynamic script entries form one transactional, state-specific assembly mesh. */
-    public RailTrackMeshData buildAssembly(SwitchPosition position, int chunkX, int chunkZ, double scale, double period) {
-        if (failed) return null;
+    /** Capture static script commands once, then replay in Java under the chunk build budget. */
+    public RailStaticSnapshot captureAssemblyStatic(float movement, double scale, double period) {
+        var commands = new ArrayList<Consumer<RailScriptDrawContext>>();
+        if (!captureAssembly(movement, scale, period, commands)) return null;
+        var maps = tile.getAllRailMaps();
+        var start = tile.getStartPoint();
+        return new RailStaticSnapshot(maps[0].geometry(), new BlockPos(start[0], start[1], start[2]),
+                scale, period, commands);
+    }
+
+    private RailDrawSnapshot lastDynamic;
+
+    public RailDrawSnapshot captureAssemblyDynamic(float movement, double scale, double period) {
+        if (!captureAssembly(movement, scale, period, null)) return null;
+        return lastDynamic;
+    }
+
+    private boolean captureAssembly(float movement, double scale, double period,
+            List<Consumer<RailScriptDrawContext>> commands) {
+        if (failed) return false;
         var maps = tile.getAllRailMaps();
         var start = tile.getStartPoint();
         var startPoint = new BlockPos(start[0], start[1], start[2]);
-        var context = new RailScriptDrawContext(maps[0].geometry(), startPoint, chunkX, chunkZ,
+        var context = new RailScriptDrawContext(maps[0].geometry(), startPoint, 0, 0,
                 scale, period, false, this::shouldRender);
+        if (commands != null) context.captureStatic(commands);
+        else context.captureDynamic(lastDynamic);
         boolean completed = false;
         try {
-            tile.position(position);
+            worldDraw = true;
+            tile.movement(movement);
             renderer.context(context);
             GL11.attach(context);
-            for (var map : maps) {
-                tile.map(map);
-                context.geometry(map.geometry());
-                phase = hasRenderRailStatic ? "renderRailStatic" : "renderStaticParts";
-                if (hasRenderRailStatic) instance.invoke("renderRailStatic", tile, 0.0, 0.0, 0.0, 0.0f, 0);
-                else renderer.renderStaticParts(tile, 0, 0, 0);
-            }
-            tile.map(maps[0]);
-            context.geometry(maps[0].geometry());
-            if (hasRenderRailDynamic) {
+            if (commands != null) {
+                for (var map : maps) {
+                    tile.map(map);
+                    context.geometry(map.geometry());
+                    phase = hasRenderRailStatic ? "renderRailStatic" : "renderStaticParts";
+                    if (hasRenderRailStatic) invoke("renderRailStatic", tile, 0.0, 0.0, 0.0, 0.0f, 0);
+                    else renderer.renderStaticParts(tile, 0, 0, 0);
+                }
+            } else {
+                tile.map(maps[0]);
                 phase = "renderRailDynamic";
-                double y = maps[0].geometry().sample(0).position().y() - startPoint.getY();
-                instance.invoke("renderRailDynamic", tile, 0.0, y, 0.0, 0.0f, 0);
+                if (hasRenderRailDynamic) {
+                    double y = maps[0].geometry().sample(0).position().y() - startPoint.getY();
+                    invoke("renderRailDynamic", tile, 0.0, y, 0.0, 0.0f, 0);
+                }
+                lastDynamic = context.snapshot();
             }
             if (filterFailure != null) throw new IllegalStateException(filterFailure);
-            var result = context.finish();
             completed = true;
-            return result;
+            return true;
         } catch (Exception | LinkageError exception) {
             Throwable failure = filterFailure == null ? exception : filterFailure;
             LOGGER.warn("Turnout script {} {} failed at {}; using native turnout appearance: {}",
                     label, filterFailure == null ? phase : "shouldRenderObject",
                     RtmScript.describe(prepared, failure), failure.getMessage());
-            LOGGER.debug("Turnout script build failure", failure);
-            return null;
+            LOGGER.debug("Turnout script capture failure", failure);
+            return false;
         } finally {
+            worldDraw = false;
             GL11.detach();
             context.restore();
             renderer.context(null);
@@ -164,11 +213,12 @@ public final class RailScriptRuntime implements AutoCloseable {
                 preview, this::shouldRender);
         boolean completed = false;
         try {
+            worldDraw = !preview;
             tile.bind(geometry, startPoint);
             renderer.context(context);
             GL11.attach(context);
             phase = hasRenderRailStatic ? "renderRailStatic" : "renderStaticParts";
-            if (hasRenderRailStatic) instance.invoke("renderRailStatic", tile, 0.0, 0.0, 0.0, 0.0f, 0);
+            if (hasRenderRailStatic) invoke("renderRailStatic", tile, 0.0, 0.0, 0.0, 0.0f, 0);
             else renderer.renderStaticParts(tile, 0, 0, 0);
             // A JS catch around renderStaticParts must not commit a partially filtered mesh.
             if (filterFailure != null) throw new IllegalStateException(filterFailure);
@@ -183,6 +233,7 @@ public final class RailScriptRuntime implements AutoCloseable {
             LOGGER.debug("Rail script static build failure", failure);
             return null;
         } finally {
+            worldDraw = false;
             GL11.detach();
             context.restore();
             renderer.context(null);
@@ -198,7 +249,7 @@ public final class RailScriptRuntime implements AutoCloseable {
         String previous = phase;
         phase = "shouldRenderObject";
         try {
-            Object result = instance.invoke("shouldRenderObject", tile, partName, (double)count, (double)index);
+            Object result = invoke("shouldRenderObject", tile, partName, (double)count, (double)index);
             phase = previous;
             return !(result instanceof Boolean value) || value;
         } catch (Exception | LinkageError exception) {
@@ -211,6 +262,7 @@ public final class RailScriptRuntime implements AutoCloseable {
     @Override
     public void close() {
         failed = true;
+        lastDynamic = null;
         instance.close();
         renderer.release();
         tile.close();
