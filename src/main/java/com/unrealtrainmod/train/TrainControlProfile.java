@@ -4,23 +4,22 @@
  */
 package com.unrealtrainmod.train;
 
-/** One combined handle: B8 ... B1, N, P1 ... P5. */
+/** Independent traction (0..5) and service brake (0..8) notches. */
 public final class TrainControlProfile {
     public static final int BRAKE_NOTCHES = 8;
     public static final int POWER_NOTCHES = 5;
     private TrainControlProfile() {}
 
-    public static TrainControlState control(int handle, TrainControlState.Reverser reverser, boolean emergency) {
-        return new TrainControlState(reverser, emergency ? 0 : Math.max(0, handle) / (double) POWER_NOTCHES,
-                Math.max(0, -handle) / (double) BRAKE_NOTCHES, emergency);
+    public static TrainControlState control(int power, int brake, TrainControlState.Reverser reverser, boolean emergency) {
+        return new TrainControlState(reverser, emergency ? 0 : power / (double) POWER_NOTCHES,
+                brake / (double) BRAKE_NOTCHES, emergency);
     }
 
-    /** Recover the combined handle from a manual consist's normalized controls. */
-    public static int handle(TrainControlState control) {
-        if (control.emergencyBrake()) return 0;
-        return control.trainBrake() > 0 ? -(int) Math.round(control.trainBrake() * BRAKE_NOTCHES)
-                : (int) Math.round(control.throttle() * POWER_NOTCHES);
+    public static int powerNotch(TrainControlState control) {
+        return (int) Math.round(control.throttle() * POWER_NOTCHES);
     }
 
-    public static String notch(int handle) { return handle == 0 ? "N" : handle > 0 ? "P" + handle : "B" + -handle; }
+    public static int brakeNotch(TrainControlState control) {
+        return (int) Math.round(control.trainBrake() * BRAKE_NOTCHES);
+    }
 }

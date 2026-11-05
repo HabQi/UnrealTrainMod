@@ -4,32 +4,29 @@
  */
 package com.unrealtrainmod.client;
 
-import com.unrealtrainmod.client.gui.screen.TrainDrivingScreen;
+import com.mojang.blaze3d.platform.InputConstants;
+import com.unrealtrainmod.client.gui.TrainDrivingOverlay;
 import com.unrealtrainmod.entity.TrainEntity;
 import com.unrealtrainmod.network.TrackSyncEvent;
 import com.unrealtrainmod.network.payload.TrainControlInputPayload;
 import com.unrealtrainmod.network.payload.TrainControlInputPayload.Action;
 import com.unrealtrainmod.network.payload.TrainControlSyncPayload;
-import com.unrealtrainmod.train.TrainControlProfile;
 import com.unrealtrainmod.train.TrainControlState.Reverser;
 import com.unrealtrainmod.train.TrainConsist.StopReason;
 import com.unrealtrainmod.vehicle.VehicleDoor;
 import java.util.Locale;
-import java.util.ArrayList;
-import java.util.List;
-import com.mojang.blaze3d.platform.InputConstants;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.gui.Font;
-import net.minecraft.locale.Language;
 import net.minecraft.network.chat.Component;
-import net.minecraft.util.FormattedCharSequence;
+import net.neoforged.neoforge.client.event.CustomizeGuiOverlayEvent;
 import net.neoforged.neoforge.client.event.ClientPlayerNetworkEvent;
 import net.neoforged.neoforge.client.event.ClientTickEvent;
 import net.neoforged.neoforge.client.event.MovementInputUpdateEvent;
 import net.neoforged.neoforge.client.event.InputEvent;
 import net.neoforged.neoforge.client.event.RegisterKeyMappingsEvent;
 import net.neoforged.neoforge.client.event.RenderGuiEvent;
+import net.neoforged.neoforge.client.event.RenderGuiLayerEvent;
+import net.neoforged.neoforge.client.gui.VanillaGuiLayers;
 import net.neoforged.neoforge.client.settings.IKeyConflictContext;
 import net.neoforged.neoforge.client.settings.KeyConflictContext;
 import net.neoforged.neoforge.event.level.LevelEvent;
@@ -40,7 +37,10 @@ import org.lwjgl.glfw.GLFW;
 public final class TrainDrivingClient {
     private static final String PREFIX = "gui.unrealtrainmod.driving.";
     private static final IKeyConflictContext CONTEXT = new IKeyConflictContext() {
-        @Override public boolean isActive() { return Minecraft.getInstance().screen == null && riding(); }
+        @Override public boolean isActive() {
+            var mc = Minecraft.getInstance();
+            return mc.screen == null && mc.getOverlay() == null && riding();
+        }
         @Override public boolean conflicts(IKeyConflictContext other) { return other == this || other == KeyConflictContext.IN_GAME; }
     };
     private static final KeyMapping POWER = key("power", GLFW.GLFW_KEY_S);
@@ -49,15 +49,11 @@ public final class TrainDrivingClient {
     private static final KeyMapping EMERGENCY = key("emergency", GLFW.GLFW_KEY_F);
     private static final KeyMapping DOOR_LEFT = key("door_left", GLFW.GLFW_KEY_J);
     private static final KeyMapping DOOR_RIGHT = key("door_right", GLFW.GLFW_KEY_K);
-    private static final KeyMapping PANEL = key("panel", GLFW.GLFW_KEY_G);
+    private static final KeyMapping CURSOR = key("cursor", GLFW.GLFW_KEY_LEFT_ALT);
     private static TrainControlSyncPayload snapshot;
     private static long sequence;
     private static int silence, heartbeat;
-    private static TrainControlSyncPayload hudSnapshot;
-    private static Language hudLanguage;
-    private static Font hudFont;
-    private static int hudWidth;
-    private static List<FormattedCharSequence> hudRows = List.of();
+    private static boolean cursorOwned;
 
     private TrainDrivingClient() {}
 
@@ -73,7 +69,7 @@ public final class TrainDrivingClient {
         event.register(EMERGENCY);
         event.register(DOOR_LEFT);
         event.register(DOOR_RIGHT);
-        event.register(PANEL);
+        event.register(CURSOR);
     }
 
     public static TrainEntity riddenVehicle() {
@@ -91,10 +87,48 @@ public final class TrainDrivingClient {
 
     public static TrainControlSyncPayload state() { return riding() ? snapshot : null; }
 
-    public static boolean panelKey(int key, int scanCode) { return PANEL.matches(key, scanCode); }
+    public static boolean consoleVisible() {
+        var mc = Minecraft.getInstance();
+        return riding() && !mc.options.hideGui && mc.screen == null && mc.getOverlay() == null;
+    }
 
-    private static void openPanel() {
-        if (riding()) Minecraft.getInstance().setScreen(new TrainDrivingScreen(snapshot.session()));
+    public static boolean usingCursor() {
+        var mc = Minecraft.getInstance();
+        return cursorOwned && consoleVisible() && mc.isWindowActive() && !mc.isPaused();
+    }
+
+    public static Component cursorHint() {
+        return Component.translatable(PREFIX + "console.cursor_hint", CURSOR.getTranslatedKeyMessage());
+    }
+
+    public static Component controlHint() {
+        var mc = Minecraft.getInstance();
+        return Component.translatable(PREFIX + "help", POWER.getTranslatedKeyMessage(), BRAKE.getTranslatedKeyMessage(),
+                REVERSER.getTranslatedKeyMessage(), EMERGENCY.getTranslatedKeyMessage(),
+                DOOR_LEFT.getTranslatedKeyMessage(), DOOR_RIGHT.getTranslatedKeyMessage(),
+                mc.options.keyShift.getTranslatedKeyMessage());
+    }
+
+    private static void updateCursor() {
+        var mc = Minecraft.getInstance();
+        if (!consoleVisible() || !mc.isWindowActive()) CURSOR.setDown(false);
+        boolean requested = consoleVisible() && mc.isWindowActive() && !mc.isPaused() && CURSOR.isDown();
+        if (!requested) TrainDrivingOverlay.release();
+        if (requested && !cursorOwned && mc.mouseHandler.isMouseGrabbed()) {
+            mc.mouseHandler.releaseMouse();
+            cursorOwned = true;
+            for (var key : new KeyMapping[] {mc.options.keyAttack, mc.options.keyUse, mc.options.keyPickItem}) {
+                key.setDown(false);
+                while (key.consumeClick()) { }
+            }
+        } else if (!requested && cursorOwned) {
+            // A screen now owns the cursor. Never grab it here: grabMouse also closes screens.
+            if (mc.screen != null || mc.level == null || mc.player == null) cursorOwned = false;
+            else if (mc.getOverlay() == null && mc.isWindowActive()) {
+                mc.mouseHandler.grabMouse();
+                cursorOwned = false;
+            }
+        }
     }
 
     public static void onSync(TrackSyncEvent event) {
@@ -106,7 +140,10 @@ public final class TrainDrivingClient {
             return;
         }
         boolean newSession = snapshot == null || !snapshot.session().equals(incoming.session());
-        if (newSession) sequence = incoming.sequence();
+        if (newSession) {
+            sequence = incoming.sequence();
+            TrainDrivingOverlay.clear();
+        }
         snapshot = incoming;
         silence = 0;
         // A driver control session means this player is not a walking passenger; drop any stale local point.
@@ -119,31 +156,25 @@ public final class TrainDrivingClient {
 
     public static void tick(ClientTickEvent.Post event) {
         var mc = Minecraft.getInstance();
+        updateCursor();
         if (snapshot == null || mc.isPaused()) return;
         if (mc.level == null || mc.player == null || !mc.player.isAlive()
                 || !mc.level.dimension().location().equals(snapshot.dimension()) || ++silence > 60) {
             clear();
             return;
         }
-        for (var key : new KeyMapping[] {POWER, BRAKE, REVERSER, EMERGENCY, DOOR_LEFT, DOOR_RIGHT, PANEL}) while (key.consumeClick()) { }
+        if (usingCursor()) TrainDrivingOverlay.drag(mouseY());
+        for (var key : new KeyMapping[] {POWER, BRAKE, REVERSER, EMERGENCY, DOOR_LEFT, DOOR_RIGHT, CURSOR}) while (key.consumeClick()) { }
         if (riding() && ++heartbeat >= 10) send(Action.HEARTBEAT);
     }
 
     public static void keyPressed(InputEvent.Key event) {
-        var screen = Minecraft.getInstance().screen;
-        if (event.getAction() != GLFW.GLFW_PRESS || !riding()
-                || (screen != null && !(screen instanceof TrainDrivingScreen))) return;
-        if (panelKey(event.getKey(), event.getScanCode())) openPanel();
-        else controlKey(event.getKey(), event.getScanCode());
+        updateCursor();
+        if (event.getAction() != GLFW.GLFW_PRESS || !CONTEXT.isActive()) return;
+        if (!CURSOR.matches(event.getKey(), event.getScanCode())) controlKey(event.getKey(), event.getScanCode());
     }
 
-    public static boolean isControlKey(int key, int scanCode) {
-        return POWER.matches(key, scanCode) || BRAKE.matches(key, scanCode)
-                || REVERSER.matches(key, scanCode) || EMERGENCY.matches(key, scanCode)
-                || DOOR_LEFT.matches(key, scanCode) || DOOR_RIGHT.matches(key, scanCode);
-    }
-
-    /** The panel leaves mapped keys unconsumed; the raw event distinguishes presses from repeats. */
+    /** Raw press events distinguish deliberate input from keyboard repeat. */
     private static void controlKey(int key, int scanCode) {
         boolean power = POWER.matches(key, scanCode), brake = BRAKE.matches(key, scanCode);
         boolean direction = REVERSER.matches(key, scanCode), stop = EMERGENCY.matches(key, scanCode);
@@ -153,13 +184,50 @@ public final class TrainDrivingClient {
         if (right) door(VehicleDoor.RIGHT);
     }
 
-    public static void mousePressed(InputEvent.MouseButton.Post event) {
-        if (event.getAction() != GLFW.GLFW_PRESS || !CONTEXT.isActive()) return;
-        if (PANEL.matchesMouse(event.getButton())) { openPanel(); return; }
-        press(POWER.matchesMouse(event.getButton()), BRAKE.matchesMouse(event.getButton()),
-                REVERSER.matchesMouse(event.getButton()), EMERGENCY.matchesMouse(event.getButton()));
-        if (DOOR_LEFT.matchesMouse(event.getButton())) door(VehicleDoor.LEFT);
-        if (DOOR_RIGHT.matchesMouse(event.getButton())) door(VehicleDoor.RIGHT);
+    public static void mousePressed(InputEvent.MouseButton.Pre event) {
+        if (!CONTEXT.isActive()) return;
+        if (CURSOR.matchesMouse(event.getButton())) {
+            CURSOR.setDown(event.getAction() != GLFW.GLFW_RELEASE);
+            updateCursor();
+            event.setCanceled(true);
+            return;
+        }
+        if (usingCursor()) {
+            // Cancel before vanilla can grab the free cursor or use a held item.
+            event.setCanceled(true);
+            if (event.getAction() == GLFW.GLFW_PRESS && event.getButton() == GLFW.GLFW_MOUSE_BUTTON_LEFT) {
+                TrainDrivingOverlay.click(mouseX(), mouseY());
+            }
+            if (event.getAction() == GLFW.GLFW_RELEASE && event.getButton() == GLFW.GLFW_MOUSE_BUTTON_LEFT) {
+                TrainDrivingOverlay.drag(mouseY());
+                TrainDrivingOverlay.release();
+            }
+            return;
+        }
+        boolean power = POWER.matchesMouse(event.getButton()), brake = BRAKE.matchesMouse(event.getButton());
+        boolean direction = REVERSER.matchesMouse(event.getButton()), stop = EMERGENCY.matchesMouse(event.getButton());
+        boolean left = DOOR_LEFT.matchesMouse(event.getButton()), right = DOOR_RIGHT.matchesMouse(event.getButton());
+        if (power || brake || direction || stop || left || right) event.setCanceled(true);
+        if (event.getAction() != GLFW.GLFW_PRESS) return;
+        press(power, brake, direction, stop);
+        if (left) door(VehicleDoor.LEFT);
+        if (right) door(VehicleDoor.RIGHT);
+    }
+
+    public static void mouseScrolled(InputEvent.MouseScrollingEvent event) {
+        if (!consoleVisible()) return;
+        event.setCanceled(true);
+        if (usingCursor()) TrainDrivingOverlay.scroll(mouseX(), mouseY(), event.getScrollDeltaY());
+    }
+
+    private static double mouseX() {
+        var mc = Minecraft.getInstance();
+        return mc.mouseHandler.xpos() * mc.getWindow().getGuiScaledWidth() / mc.getWindow().getScreenWidth();
+    }
+
+    private static double mouseY() {
+        var mc = Minecraft.getInstance();
+        return mc.mouseHandler.ypos() * mc.getWindow().getGuiScaledHeight() / mc.getWindow().getScreenHeight();
     }
 
     /** Consume actual press events, so quick taps are retained and keyboard repeat cannot change a notch. */
@@ -171,10 +239,14 @@ public final class TrainDrivingClient {
     }
 
     public static void send(Action action) {
+        send(action, 0);
+    }
+
+    public static void send(Action action, int notch) {
         if (!riding()) return;
         heartbeat = 0;
         sequence++;
-        PacketDistributor.sendToServer(new TrainControlInputPayload(snapshot.session(), sequence, action));
+        PacketDistributor.sendToServer(new TrainControlInputPayload(snapshot.session(), sequence, action, notch));
     }
 
     /**
@@ -199,57 +271,37 @@ public final class TrainDrivingClient {
     }
 
     public static void render(RenderGuiEvent.Post event) {
+        if (consoleVisible()) TrainDrivingOverlay.render(event.getGuiGraphics(), snapshot,
+                event.getPartialTick().getGameTimeDeltaPartialTick(false),
+                usingCursor() ? mouseX() : -1, usingCursor() ? mouseY() : -1);
+    }
+
+    public static void guiLayer(RenderGuiLayerEvent.Pre event) {
+        if (!consoleVisible()) return;
         var mc = Minecraft.getInstance();
-        if (!riding() || mc.options.hideGui || mc.screen instanceof TrainDrivingScreen) return;
-        var graphics = event.getGuiGraphics();
-        int width = Math.min(graphics.guiWidth() - 24, 430);
-        // The server snapshot changes around 10 Hz; rendering may run hundreds of times per second.
-        if (hudSnapshot != snapshot || hudWidth != width || hudLanguage != Language.getInstance() || hudFont != mc.font) {
-            rebuildHud(mc, width);
-        }
-        int height = hudRows.size() * 10 + 12;
-        int x = 12, y = Math.max(12, graphics.guiHeight() - height - 48);
-        graphics.fill(x - 4, y - 4, x + width + 4, y + height - 4, 0xB0000000);
-        for (int i = 0; i < hudRows.size(); i++) graphics.drawString(mc.font, hudRows.get(i), x, y + i * 10, 0xFFFFFF, false);
+        int clearance = TrainDrivingOverlay.bottomClearance();
+        mc.gui.leftHeight = Math.max(mc.gui.leftHeight, clearance);
+        mc.gui.rightHeight = Math.max(mc.gui.rightHeight, clearance);
+        var name = event.getName();
+        if (name.equals(VanillaGuiLayers.HOTBAR) || name.equals(VanillaGuiLayers.EXPERIENCE_BAR)
+                || name.equals(VanillaGuiLayers.EXPERIENCE_LEVEL) || name.equals(VanillaGuiLayers.JUMP_METER)
+                || name.equals(VanillaGuiLayers.SELECTED_ITEM_NAME)) event.setCanceled(true);
     }
 
-    private static void rebuildHud(Minecraft mc, int width) {
-        var state = snapshot;
-        var direction = direction(state);
-        var condition = condition(state);
-        Component brakeDemand = state.emergency() ? Component.translatable(PREFIX + "brake_emergency")
-                : Component.literal(number(Math.max(0, -state.handle()) * 100.0 / TrainControlProfile.BRAKE_NOTCHES) + "%");
-        Component[] lines = {
-            Component.translatable(PREFIX + "speed", number(Math.abs(state.speed()) * 3.6)),
-            Component.translatable(PREFIX + "control", direction, TrainControlProfile.notch(state.handle()), condition),
-            Component.translatable(PREFIX + "motion", number(state.acceleration()), number(state.grade() * 1000)),
-            Component.translatable(PREFIX + "traction", number(state.tractionForce() / 1000), number(state.tractionPower() / 1000)),
-            Component.translatable(PREFIX + "brake", brakeDemand, number(state.brakeForce() / 1000)),
-            Component.translatable(PREFIX + "help", POWER.getTranslatedKeyMessage(), BRAKE.getTranslatedKeyMessage(),
-                    REVERSER.getTranslatedKeyMessage(), EMERGENCY.getTranslatedKeyMessage(),
-                    DOOR_LEFT.getTranslatedKeyMessage(), DOOR_RIGHT.getTranslatedKeyMessage(),
-                    mc.options.keyShift.getTranslatedKeyMessage()),
-            Component.translatable(PREFIX + "panel_hint", PANEL.getTranslatedKeyMessage())
-        };
-        var wrapped = new ArrayList<FormattedCharSequence>();
-        for (var line : lines) wrapped.addAll(mc.font.split(line, width));
-        hudRows = List.copyOf(wrapped);
-        hudSnapshot = state;
-        hudWidth = width;
-        hudLanguage = Language.getInstance();
-        hudFont = mc.font;
+    public static void chatOverlay(CustomizeGuiOverlayEvent.Chat event) {
+        if (consoleVisible()) event.setPosY(Math.min(event.getPosY(),
+                Minecraft.getInstance().getWindow().getGuiScaledHeight() - TrainDrivingOverlay.bottomClearance()));
     }
-
-    private static String number(double value) { return String.format(Locale.ROOT, "%.2f", value); }
 
     public static Component direction(TrainControlSyncPayload state) {
         return Component.translatable(PREFIX + "direction." + state.reverser().name().toLowerCase(Locale.ROOT));
     }
 
     public static Component condition(TrainControlSyncPayload state) {
-        boolean releasing = state.handle() > 0 && state.brakeForce() > 0 && state.reverser() != Reverser.NEUTRAL;
+        boolean releasing = state.powerNotch() > 0 && state.brakeForce() > 0 && state.reverser() != Reverser.NEUTRAL;
         return Component.translatable(PREFIX + (state.emergency() ? "state.emergency"
-                : releasing ? "state.brake_releasing" : state.speed() != 0 ? "state.running"
+                : state.brakeNotch() > 0 ? "state.brake_applied" : releasing ? "state.brake_releasing"
+                : state.speed() != 0 ? "state.running"
                 : state.stopReason() == StopReason.END_OF_ROUTE ? "state.end_of_route" : "state.stopped"));
     }
 
@@ -257,12 +309,8 @@ public final class TrainDrivingClient {
         snapshot = null;
         sequence = 0;
         silence = heartbeat = 0;
-        hudSnapshot = null;
-        hudLanguage = null;
-        hudFont = null;
-        hudRows = List.of();
-        var mc = Minecraft.getInstance();
-        if (mc.screen instanceof TrainDrivingScreen) mc.setScreen(null);
+        TrainDrivingOverlay.clear();
+        updateCursor();
     }
 
     public static void unload(LevelEvent.Unload event) { if (event.getLevel().isClientSide()) clear(); }

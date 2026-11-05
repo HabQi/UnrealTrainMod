@@ -65,6 +65,8 @@ final class TrackRenderStats {
     private long windowVboBytes, windowIboBytes, windowStagingBytes, windowLightChecked, windowLightChanged;
     private long windowStoredVertices, windowRailChunkBatches, windowRailChunkMaterials;
     private long windowRenderTypeSetups, windowShaderBinds, windowProgramSwitches;
+    private long windowBudgetSkipped, windowSlowBuilds, windowMaxSlowBuild;
+    private String windowSlowResource = "n/a";
 
     private int chunks, candidates, visible, empty, pending;
     private final int[] draws = new int[SLOTS];
@@ -147,6 +149,8 @@ final class TrackRenderStats {
         railChunkMaterials.clear();
         sharedParts.clear();
         windowRenderTypeSetups = windowShaderBinds = windowProgramSwitches = 0L;
+        windowBudgetSkipped = windowSlowBuilds = windowMaxSlowBuild = 0L;
+        windowSlowResource = "n/a";
     }
 
     private void resetFrame() {
@@ -184,6 +188,17 @@ final class TrackRenderStats {
     void built(long nanos) {
         builds++;
         buildNanos += nanos;
+    }
+
+    /** A visible missing task deferred by the time or task-count budget. */
+    void budgetSkipped() { windowBudgetSkipped++; }
+
+    void slowBuild(long nanos, String resource) {
+        windowSlowBuilds++;
+        if (nanos > windowMaxSlowBuild) {
+            windowMaxSlowBuild = nanos;
+            windowSlowResource = resource;
+        }
     }
 
     /** One successful VBO upload; non-first uploads are light refreshes because geometry is static. */
@@ -334,7 +349,8 @@ final class TrackRenderStats {
                         + "| chunkMerge={} railBatches={} chunkMaterials={} extraBatches={} "
                         + "| gpuStill={} samples={} avg={}ms max={}ms "
                         + "| animation turnouts={} jsCalls={} js={}ms parts={} instanceBytes={} activeBytes={} staticBytes={} "
-                        + "gpuMoving samples={} avg={}ms max={}ms",
+                        + "gpuMoving samples={} avg={}ms max={}ms "
+                        + "| buildBudget skipped={} slowBuilds={} maxSlow={}ms resource={}",
                 scene, path, frames,
                 ms(windowStage / frames), ms(windowMaxStage),
                 ms(traverse / frames), ms(windowBuild / frames), ms(windowLight / frames),
@@ -363,7 +379,8 @@ final class TrackRenderStats {
                 windowInstanceBytes, windowActiveBytes, windowVboBytes + windowIboBytes,
                 windowAnimatedGpuSamples,
                 windowAnimatedGpuSamples == 0 ? "n/a" : ms(windowAnimatedGpu / windowAnimatedGpuSamples),
-                windowAnimatedGpuSamples == 0 ? "n/a" : ms(windowMaxAnimatedGpu));
+                windowAnimatedGpuSamples == 0 ? "n/a" : ms(windowMaxAnimatedGpu),
+                windowBudgetSkipped, windowSlowBuilds, ms(windowMaxSlowBuild), windowSlowResource);
         resetWindow(now);
     }
 

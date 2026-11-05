@@ -93,8 +93,11 @@ public class UnrealTrainModClient {
         NeoForge.EVENT_BUS.addListener(TrainDrivingClient::tick);
         NeoForge.EVENT_BUS.addListener(TrainDrivingClient::keyPressed);
         NeoForge.EVENT_BUS.addListener(TrainDrivingClient::mousePressed);
+        NeoForge.EVENT_BUS.addListener(TrainDrivingClient::mouseScrolled);
         NeoForge.EVENT_BUS.addListener(TrainDrivingClient::movement);
         NeoForge.EVENT_BUS.addListener(TrainDrivingClient::render);
+        NeoForge.EVENT_BUS.addListener(TrainDrivingClient::guiLayer);
+        NeoForge.EVENT_BUS.addListener(TrainDrivingClient::chatOverlay);
         NeoForge.EVENT_BUS.addListener(TrainDrivingClient::unload);
         NeoForge.EVENT_BUS.addListener(TrainDrivingClient::logout);
         NeoForge.EVENT_BUS.addListener(TrainDrivingClient::clonePlayer);

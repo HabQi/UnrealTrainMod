@@ -38,5 +38,17 @@ public final class RtmScriptCache {
         return entry.program();
     }
 
+    /** Returns whether a shared program was compiled successfully without compiling it. */
+    boolean isReady(PackageAsset asset) {
+        var entry = programs.get(asset);
+        return entry != null && entry.program() != null;
+    }
+
+    /** Returns whether compilation was attempted and failed. */
+    boolean isFailed(PackageAsset asset) {
+        var entry = programs.get(asset);
+        return entry != null && entry.failure() != null;
+    }
+
     public void clear() { programs.clear(); }
 }

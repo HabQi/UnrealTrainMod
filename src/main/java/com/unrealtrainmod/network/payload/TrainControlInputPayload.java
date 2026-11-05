@@ -12,14 +12,15 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /** Discrete operations on the latest server control state; heartbeats never write controls. */
-public record TrainControlInputPayload(UUID session, long sequence, Action action) implements CustomPacketPayload {
+public record TrainControlInputPayload(UUID session, long sequence, Action action, int notch) implements CustomPacketPayload {
     /**
      * Door actions carry an explicit target, so a repeated request keeps the same state instead of flipping
      * the door back on the server.
      */
     public enum Action {
         HEARTBEAT, HANDLE_UP, HANDLE_DOWN, REVERSER_NEXT, EMERGENCY_APPLY, EMERGENCY_RELEASE,
-        DOOR_LEFT_OPEN, DOOR_LEFT_CLOSE, DOOR_RIGHT_OPEN, DOOR_RIGHT_CLOSE
+        DOOR_LEFT_OPEN, DOOR_LEFT_CLOSE, DOOR_RIGHT_OPEN, DOOR_RIGHT_CLOSE,
+        POWER_SET, BRAKE_SET, POWER_UP, POWER_DOWN, BRAKE_UP, BRAKE_DOWN
     }
     public static final Type<TrainControlInputPayload> TYPE = new Type<>(
             ResourceLocation.fromNamespaceAndPath(UnrealTrainMod.MODID, "train_control_input"));
@@ -28,6 +29,8 @@ public record TrainControlInputPayload(UUID session, long sequence, Action actio
                 buffer.writeUUID(value.session());
                 buffer.writeLong(value.sequence());
                 buffer.writeEnum(value.action());
-            }, buffer -> new TrainControlInputPayload(buffer.readUUID(), buffer.readLong(), buffer.readEnum(Action.class)));
+                buffer.writeVarInt(value.notch());
+            }, buffer -> new TrainControlInputPayload(buffer.readUUID(), buffer.readLong(), buffer.readEnum(Action.class),
+                    buffer.readVarInt()));
     @Override public Type<TrainControlInputPayload> type() { return TYPE; }
 }

@@ -107,6 +107,7 @@ public final class ClientModelManager extends SimplePreparableReloadListener<Pre
             sources = Map.copyOf(uploaded);
             textures = Set.copyOf(registered);
             models = Map.copyOf(loaded);
+            VehicleScriptManager.schedulePrewarm(models.values());
         } catch (RuntimeException | Error e) {
             releaseSources(uploaded);
             registered.forEach(textureManager::release);

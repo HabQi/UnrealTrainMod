@@ -899,7 +899,7 @@ public final class TrainManager {
                 loadedVehicles.remove(entity.getUUID());
                 return StopReason.INVALID_POSITION;
             }
-            if (spawn) train.setControl(TrainControlProfile.control(0, train.control().reverser(), false));
+            if (spawn) train.setControl(TrainControlProfile.control(0, 0, train.control().reverser(), false));
             put(train);
             saveCandidate(train, candidate, intervals);
             attached.add(entity.getUUID());

@@ -16,13 +16,17 @@ import com.unrealtrainmod.track.mesh.TrackMeshData;
 import com.unrealtrainmod.track.mesh.RailTrackMeshBuilder;
 import com.unrealtrainmod.track.assembly.TrackAssemblyDefinition;
 import com.unrealtrainmod.track.assembly.TrackAssemblyType;
+import com.unrealtrainmod.track.model.RailCatalog;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.BlockPos;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.phys.Vec3;
 import net.neoforged.neoforge.client.event.RenderLevelStageEvent;
@@ -33,6 +37,43 @@ public final class TrackWorldRenderer {
     private static final Logger LOGGER = LoggerFactory.getLogger(TrackWorldRenderer.class);
     private static final int BUILDS_PER_FRAME = 4;
     private static final int UPLOADS_PER_FRAME = 4;
+    private static final long BUILD_BUDGET_NANOS = 2_000_000L;
+    private static final long SLOW_BUILD_NANOS = 8_000_000L;
+    private record SlowBuild(String resource, String type) {}
+    private static final Set<SlowBuild> REPORTED_SLOW_BUILDS = new HashSet<>();
+
+    /** Measures build work only: drawing/uploading cached geometry does not consume this budget. */
+    private static final class BuildBudget {
+        private int remaining = BUILDS_PER_FRAME;
+        private long elapsed;
+        private final TrackRenderStats stats;
+
+        private BuildBudget(TrackRenderStats stats) { this.stats = stats; }
+
+        private boolean available() {
+            if (remaining > 0 && elapsed < BUILD_BUDGET_NANOS) return true;
+            if (stats != null) stats.budgetSkipped();
+            return false;
+        }
+
+        private void finished(long start, String modelId, UUID id, int x, int z, String type) {
+            long nanos = System.nanoTime() - start;
+            remaining--;
+            elapsed += nanos;
+            if (stats != null) stats.built(nanos);
+            if (nanos <= SLOW_BUILD_NANOS) return;
+            var definition = RailCatalog.find(modelId == null ? null : ResourceLocation.parse(modelId));
+            String resource = definition == null ? (modelId == null ? "native" : modelId)
+                    : definition.source().model().toString();
+            if (stats != null) stats.slowBuild(nanos, resource);
+            if (REPORTED_SLOW_BUILDS.add(new SlowBuild(resource, type))) {
+                LOGGER.warn("Slow track build: resource={} model={} track={} chunk={},{} type={} elapsed={}ms",
+                        resource, modelId, id, x, z, type, nanos / 1_000_000.0);
+            }
+        }
+    }
+
+    static void resetSlowBuilds() { REPORTED_SLOW_BUILDS.clear(); }
 
     private TrackWorldRenderer() {}
 
@@ -49,7 +90,8 @@ public final class TrackWorldRenderer {
                 groupMaterials ? "materialGroups" : stateCache ? "stateCache" : "legacy");
         long stageStart = stats == null ? 0L : System.nanoTime();
         TrackDrawQueue queue = groupMaterials ? new TrackDrawQueue() : null;
-        int builds = BUILDS_PER_FRAME, uploads = UPLOADS_PER_FRAME;
+        var budget = new BuildBudget(stats);
+        int uploads = UPLOADS_PER_FRAME;
         double time = cache.time(event.getPartialTick().getGameTimeDeltaPartialTick(level.tickRateManager().runsNormally()));
         var dynamic = new ArrayList<ClientTrackCache.AssemblyEntry>();
         var camera = event.getCamera().getPosition();
@@ -68,15 +110,23 @@ public final class TrackWorldRenderer {
                     var entry = cache.entries.get(id);
                     TrackRenderMesh mesh = entry.meshes.get(chunk);
                     if (mesh == null) {
-                        if (builds == 0 || !event.getFrustum().isVisible(entry.broadBounds(x, z))) {
+                        if (!event.getFrustum().isVisible(entry.broadBounds(x, z)) || !budget.available()) {
                             if (stats != null) stats.candidate();
                             continue;
                         }
-                        long buildStart = stats == null ? 0L : System.nanoTime();
-                        mesh = build(entry, id, x, z);
-                        entry.meshes.put(chunk, mesh);
-                        builds--;
-                        if (stats != null) stats.built(System.nanoTime() - buildStart);
+                        var model = ClientRailModelManager.INSTANCE.model(entry.data.modelId());
+                        if (entry.staticSnapshot == null && model != null
+                                && model.script() != null && !model.script().failed()) {
+                            long start = System.nanoTime();
+                            try { prepareTrackScript(entry, model); }
+                            finally { budget.finished(start, entry.data.modelId(), id, x, z, "railStaticCapture"); }
+                            if (!budget.available()) continue;
+                        }
+                        long buildStart = System.nanoTime();
+                        try {
+                            mesh = build(entry, model, id, x, z);
+                            entry.meshes.put(chunk, mesh);
+                        } finally { budget.finished(buildStart, entry.data.modelId(), id, x, z, "trackMesh"); }
                     }
                     uploads = draw(stats, state, queue, event, level, camera, modelView, uploads, mesh,
                             TrackRenderStats.STRUCTURE_TRACK);
@@ -89,11 +139,12 @@ public final class TrackWorldRenderer {
                 boolean scriptedCustom = entry.data.definition() == TrackAssemblyDefinition.CUSTOM
                         && model != null && model.scripted();
                 boolean inView = event.getFrustum().isVisible(entry.broadBounds());
-                if (scriptedCustom && !entry.scriptAttempted && inView && builds > 0) {
-                    long start = stats == null ? 0 : System.nanoTime();
-                    prepareAssemblyScript(entry, model, time);
-                    builds--;
-                    if (stats != null) stats.built(System.nanoTime() - start);
+                if (scriptedCustom && !entry.scriptAttempted && inView && budget.available()) {
+                    long start = System.nanoTime();
+                    var anchor = entry.data.geometry().ports().get("A").position();
+                    try { prepareAssemblyScript(entry, model, time); }
+                    finally { budget.finished(start, entry.data.modelId(), entry.data.id(),
+                            (int)Math.floor(anchor.x() / 16), (int)Math.floor(anchor.z() / 16), "turnoutScriptInit"); }
                 }
                 if (entry.scriptFailed) entry.clearScriptMeshes();
                 if (scriptedCustom && !entry.scriptFailed) {
@@ -106,8 +157,8 @@ public final class TrackWorldRenderer {
                     if (stats != null) stats.chunk();
                     if (scriptedCustom && !entry.scriptFailed) {
                         var group = entry.meshes.get(chunk);
-                        if (group == null && builds > 0) {
-                            long start = stats == null ? 0 : System.nanoTime();
+                        if (group == null && budget.available()) {
+                            long start = System.nanoTime();
                             try {
                                 group = List.of(new RailTrackGpuMesh(entry.staticSnapshot.build(x, z), false));
                             } catch (RuntimeException | LinkageError exception) {
@@ -118,8 +169,7 @@ public final class TrackWorldRenderer {
                                         entry.data.id(), x, z, exception);
                                 break;
                             } finally {
-                                builds--;
-                                if (stats != null) stats.built(System.nanoTime() - start);
+                                budget.finished(start, entry.data.modelId(), entry.data.id(), x, z, "turnoutStaticReplay");
                             }
                             entry.meshes.put(chunk, group);
                         }
@@ -132,11 +182,11 @@ public final class TrackWorldRenderer {
                             var meshes = tongue ? entry.tongues : entry.meshes;
                             var group = meshes.get(chunk);
                             if (group == null) {
-                                if (builds == 0) {
+                                if (!budget.available()) {
                                     if (stats != null) stats.candidate();
                                     continue;
                                 }
-                                long buildStart = stats == null ? 0L : System.nanoTime();
+                                long buildStart = System.nanoTime();
                                 TrackRenderMesh mesh;
                                 try {
                                     mesh = tongue ? new TrackMorphMesh(
@@ -146,9 +196,11 @@ public final class TrackWorldRenderer {
                                 } catch (IllegalArgumentException exception) {
                                     LOGGER.warn("Cannot build turnout {} in chunk {}, {}: {}", entry.data.id(), x, z, exception.getMessage());
                                     mesh = new TrackGpuMesh(TrackMeshData.EMPTY);
+                                } finally {
+                                    budget.finished(buildStart, entry.data.modelId(), entry.data.id(), x, z,
+                                            tongue ? "turnoutTongueMesh" : "turnoutFixedMesh");
                                 }
-                                group = List.of(mesh); meshes.put(chunk, group); builds--;
-                                if (stats != null) stats.built(System.nanoTime() - buildStart);
+                                group = List.of(mesh); meshes.put(chunk, group);
                             }
                             if (tongue) for (var mesh : group) {
                                 if (mesh instanceof TrackMorphMesh moving) moving.movement(entry.animation.position(time));
@@ -158,21 +210,21 @@ public final class TrackWorldRenderer {
                     } else {
                         var group = entry.meshes.get(chunk);
                         if (group == null) {
-                            if (builds == 0) {
+                            if (!budget.available()) {
                                 if (stats != null) stats.candidate();
                                 continue;
                             }
                             group = new ArrayList<TrackRenderMesh>();
                             entry.meshes.put(chunk, group);
                         }
-                        while (builds > 0 && group.size() < entry.geometries.size()) {
+                        while (group.size() < entry.geometries.size() && budget.available()) {
                             var geometry = entry.geometries.get(group.size());
-                            long buildStart = stats == null ? 0L : System.nanoTime();
-                            group.add(build(geometry, entry.data.gauge(), entry.data.modelId(), entry.data.id(),
-                                    x, z, !entry.missingReported, false));
-                            entry.missingReported = true;
-                            builds--;
-                            if (stats != null) stats.built(System.nanoTime() - buildStart);
+                            long buildStart = System.nanoTime();
+                            try {
+                                group.add(build(geometry, entry.data.gauge(), entry.data.modelId(), model, entry.data.id(),
+                                        x, z, !entry.missingReported));
+                                entry.missingReported = true;
+                            } finally { budget.finished(buildStart, entry.data.modelId(), entry.data.id(), x, z, "assemblyMesh"); }
                         }
                         uploads = drawAll(stats, state, queue, event, level, camera, modelView, uploads, group);
                     }
@@ -266,28 +318,40 @@ public final class TrackWorldRenderer {
         return uploads;
     }
 
-    private static TrackRenderMesh build(ClientTrackCache.Entry entry, UUID id, int x, int z) {
-        var mesh = build(entry.geometry, entry.data.gauge(), entry.data.modelId(), id, x, z, !entry.missingReported, true);
+    private static TrackRenderMesh build(ClientTrackCache.Entry entry, ClientRailModelManager.Model model, UUID id, int x, int z) {
+        if (entry.staticSnapshot != null && model != null && model.script() != null && !model.script().failed()) {
+            try {
+                return new RailTrackGpuMesh(entry.staticSnapshot.build(x, z), false);
+            } catch (RuntimeException | LinkageError exception) {
+                model.script().close();
+                entry.staticSnapshot = null;
+                ClientTrackCache.INSTANCE.invalidateScriptedModel(model);
+                LOGGER.warn("Cannot replay rail script for track {} in chunk {}, {}; using the full static model",
+                        id, x, z, exception);
+            }
+        }
+        var mesh = build(entry.geometry, entry.data.gauge(), entry.data.modelId(), model, id, x, z, !entry.missingReported);
         entry.missingReported = true;
         return mesh;
     }
 
-    private static TrackRenderMesh build(TrackGeometry geometry, double gauge, String modelId, UUID id,
-                                         int x, int z, boolean reportMissing, boolean filterScript) {
+    private static void prepareTrackScript(ClientTrackCache.Entry entry, ClientRailModelManager.Model model) {
+        var start = entry.geometry.sample(0).position();
+        var startPoint = BlockPos.containing(start.x(), start.y() + 0.0625, start.z());
+        entry.staticSnapshot = model.script().captureStatic(entry.geometry, startPoint,
+                model.scaleForGauge(entry.data.gauge()), model.period());
+        if (entry.staticSnapshot == null) {
+            ClientTrackCache.INSTANCE.invalidateScriptedModel(model);
+            LOGGER.warn("Rail script for {} failed; using the full static model from now on", entry.data.modelId());
+        }
+    }
+
+    private static TrackRenderMesh build(TrackGeometry geometry, double gauge, String modelId, ClientRailModelManager.Model model, UUID id,
+                                         int x, int z, boolean reportMissing) {
         if (modelId != null) {
-            var model = ClientRailModelManager.INSTANCE.model(modelId);
             if (model != null) {
                 try {
                     double scale = model.scaleForGauge(gauge);
-                    var script = filterScript ? model.script() : null;
-                    if (script != null && !script.failed()) {
-                        var start = geometry.sample(0).position();
-                        var startPoint = BlockPos.containing(start.x(), start.y() + 0.0625, start.z());
-                        var scripted = script.buildStatic(geometry, startPoint, x, z, scale, model.period(), false);
-                        if (scripted != null) return new RailTrackGpuMesh(scripted, false);
-                        ClientTrackCache.INSTANCE.invalidateScriptedModel(model);
-                        LOGGER.warn("Rail script for {} failed; using the full static model from now on", modelId);
-                    }
                     // No script, a failed script or a dynamic assembly: flat material merge with every part.
                     return new RailTrackGpuMesh(RailTrackMeshBuilder.build(geometry, staticSources(model), x, z,
                             scale, model.period(), RailTrackMeshBuilder.Filter.ALL), false);

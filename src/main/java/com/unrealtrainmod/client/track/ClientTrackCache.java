@@ -358,6 +358,7 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
         TrackGeometry geometry;
         final Set<Long> chunks = new HashSet<>();
         final Map<Long, TrackRenderMesh> meshes = new HashMap<>();
+        RailStaticSnapshot staticSnapshot;
         boolean missingReported;
 
         private Entry(TrackSegmentData data) {
@@ -393,6 +394,7 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
         public void close() {
             for (TrackRenderMesh mesh : meshes.values()) mesh.close();
             meshes.clear();
+            staticSnapshot = null;
         }
     }
 }

@@ -11,7 +11,7 @@ import java.util.List;
 import java.util.function.Consumer;
 import net.minecraft.core.BlockPos;
 
-/** Java-only chunk generation from a single invocation of each static script entry. */
+/** Java-only chunk generation from a normal track or turnout's captured static script commands. */
 public final class RailStaticSnapshot {
     private final TrackGeometry geometry;
     private final BlockPos start;

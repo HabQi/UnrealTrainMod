@@ -253,6 +253,7 @@ public final class ClientRailModelManager extends SimplePreparableReloadListener
 
     @Override
     public void close() {
+        TrackWorldRenderer.resetSlowBuilds();
         sharedParts.values().forEach(SharedRailPart::close);
         sharedParts.clear();
         var manager = Minecraft.getInstance().getTextureManager();

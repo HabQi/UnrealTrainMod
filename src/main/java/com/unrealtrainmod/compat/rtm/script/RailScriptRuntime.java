@@ -8,6 +8,7 @@ import com.unrealtrainmod.resource.PackageAsset;
 import com.unrealtrainmod.client.ClientConfig;
 import java.util.ArrayList;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 import javax.script.ScriptException;
 import com.unrealtrainmod.track.geometry.TrackGeometry;
 import com.unrealtrainmod.track.assembly.TrackAssemblyInstance;
@@ -211,6 +212,22 @@ public final class RailScriptRuntime implements AutoCloseable {
         if (failed) return null;
         var context = new RailScriptDrawContext(geometry, startPoint, chunkX, chunkZ, scale, period,
                 preview, this::shouldRender);
+        return evaluateStatic(geometry, startPoint, context, preview, context::finish);
+    }
+
+    /** One normal track owns the commands and frozen filter decisions for all of its chunks. */
+    public RailStaticSnapshot captureStatic(TrackGeometry geometry, BlockPos startPoint, double scale, double period) {
+        if (failed) return null;
+        var commands = new ArrayList<Consumer<RailScriptDrawContext>>();
+        var context = new RailScriptDrawContext(geometry, startPoint, 0, 0, scale, period,
+                false, this::shouldRender);
+        context.captureStatic(commands);
+        return evaluateStatic(geometry, startPoint, context, false,
+                () -> new RailStaticSnapshot(geometry, startPoint, scale, period, commands));
+    }
+
+    private <T> T evaluateStatic(TrackGeometry geometry, BlockPos startPoint, RailScriptDrawContext context,
+                                  boolean preview, Supplier<T> result) {
         boolean completed = false;
         try {
             worldDraw = !preview;
@@ -222,9 +239,9 @@ public final class RailScriptRuntime implements AutoCloseable {
             else renderer.renderStaticParts(tile, 0, 0, 0);
             // A JS catch around renderStaticParts must not commit a partially filtered mesh.
             if (filterFailure != null) throw new IllegalStateException(filterFailure);
-            var result = context.finish();
+            var value = result.get();
             completed = true;
-            return result;
+            return value;
         } catch (Exception | LinkageError exception) {
             Throwable failure = filterFailure == null ? exception : filterFailure;
             String location = RtmScript.describe(prepared, failure);

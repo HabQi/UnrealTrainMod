@@ -15,9 +15,9 @@ import net.minecraft.resources.ResourceLocation;
 
 /** Driver-facing directions and signed motion/force values; includes authoritative input acknowledgement. */
 public record TrainControlSyncPayload(UUID session, ResourceLocation dimension, UUID train, UUID vehicle,
-                                      boolean open, long sequence, int handle, Reverser reverser,
+                                      boolean open, long sequence, int powerNotch, int brakeNotch, Reverser reverser,
                                       boolean emergency, double speed, double acceleration, double grade,
-                                      double tractionForce, double brakeForce, double tractionPower,
+                                      double tractionForce, double brakeForce,
                                       StopReason stopReason, Feedback feedback) implements CustomPacketPayload {
     public enum Feedback { NONE, REVERSER_LOCKED, EMERGENCY_LOCKED }
     public static final Type<TrainControlSyncPayload> TYPE = new Type<>(
@@ -30,7 +30,8 @@ public record TrainControlSyncPayload(UUID session, ResourceLocation dimension, 
                 buffer.writeUUID(value.vehicle());
                 buffer.writeBoolean(value.open());
                 buffer.writeLong(value.sequence());
-                buffer.writeVarInt(value.handle());
+                buffer.writeVarInt(value.powerNotch());
+                buffer.writeVarInt(value.brakeNotch());
                 buffer.writeEnum(value.reverser());
                 buffer.writeBoolean(value.emergency());
                 buffer.writeDouble(value.speed());
@@ -38,13 +39,12 @@ public record TrainControlSyncPayload(UUID session, ResourceLocation dimension, 
                 buffer.writeDouble(value.grade());
                 buffer.writeDouble(value.tractionForce());
                 buffer.writeDouble(value.brakeForce());
-                buffer.writeDouble(value.tractionPower());
                 buffer.writeEnum(value.stopReason());
                 buffer.writeEnum(value.feedback());
             }, buffer -> new TrainControlSyncPayload(buffer.readUUID(), buffer.readResourceLocation(), buffer.readUUID(),
-                    buffer.readUUID(), buffer.readBoolean(), buffer.readLong(), buffer.readVarInt(), buffer.readEnum(Reverser.class),
+                    buffer.readUUID(), buffer.readBoolean(), buffer.readLong(), buffer.readVarInt(), buffer.readVarInt(), buffer.readEnum(Reverser.class),
                     buffer.readBoolean(), buffer.readDouble(), buffer.readDouble(), buffer.readDouble(),
-                    buffer.readDouble(), buffer.readDouble(), buffer.readDouble(),
+                    buffer.readDouble(), buffer.readDouble(),
                     buffer.readEnum(StopReason.class), buffer.readEnum(Feedback.class)));
     @Override public Type<TrainControlSyncPayload> type() { return TYPE; }
 }

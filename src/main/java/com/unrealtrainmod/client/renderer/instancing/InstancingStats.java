@@ -7,6 +7,7 @@ package com.unrealtrainmod.client.renderer.instancing;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.unrealtrainmod.client.ClientConfig;
 import com.unrealtrainmod.vehicle.VehicleCatalog;
+import com.unrealtrainmod.compat.rtm.script.VehicleScriptManager;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
@@ -46,6 +47,7 @@ public final class InstancingStats implements AutoCloseable {
     private long maxOpaque, maxTranslucent, maxEntity;
     private long gpuOpaque, maxGpuOpaque, gpuTranslucent, maxGpuTranslucent;
     private int opaqueSamples, translucentSamples;
+    private long prewarmCalls, prewarmNanos, prewarmFailures;
 
     public void beginFrame() {
         long now = System.nanoTime();
@@ -111,6 +113,12 @@ public final class InstancingStats implements AutoCloseable {
     }
 
     public void endFrame(String scene) {
+        if (scene.equals("world")) {
+            var prewarm = VehicleScriptManager.drainPrewarmMetrics();
+            prewarmCalls += prewarm.calls();
+            prewarmNanos += prewarm.nanos();
+            prewarmFailures += prewarm.failures();
+        }
         frames++;
         window.add(frame);
         maxOpaque = Math.max(maxOpaque, frame.opaque);
@@ -125,7 +133,8 @@ public final class InstancingStats implements AutoCloseable {
                         + "opaqueCalls={} translucentCalls={} opaqueTris={} translucentTris={} shaderBinds={} shaderSwitches={} upload={}B scriptCalls={} "
                         + "| cpu entity={} pose={} submit={} script={} enqueue={} opaque={} translucent={} group={} pack={} upload={} ms/frame "
                         + "maxEntity={}ms maxOpaque={}ms maxTranslucent={}ms "
-                        + "| gpuOpaque={} samples={} avg={} max={} gpuTranslucent={} samples={} avg={} max={} | models={}",
+                        + "| gpuOpaque={} samples={} avg={} max={} gpuTranslucent={} samples={} avg={} max={} "
+                        + "| sharedPrewarm calls={} total={}ms failures={} | models={}",
                 scene, frames, ms(now-windowStart), configuredInstancing, transparency,
                 avg(window.vehicles), avg(window.requests), avg(window.cutout), avg(window.groups), avg(window.covered),
                 avg(window.gpuCalls), avg(window.fallback), avg(window.groups+window.gpuCalls+window.fallback),
@@ -137,7 +146,8 @@ public final class InstancingStats implements AutoCloseable {
                 ms(maxEntity), ms(maxOpaque), ms(maxTranslucent),
                 gpuState(opaqueSamples), opaqueSamples, sampleMs(gpuOpaque, opaqueSamples), sampleMs(maxGpuOpaque, opaqueSamples == 0 ? 0 : 1),
                 gpuState(translucentSamples), translucentSamples, sampleMs(gpuTranslucent, translucentSamples),
-                sampleMs(maxGpuTranslucent, translucentSamples == 0 ? 0 : 1), modelSummary());
+                sampleMs(maxGpuTranslucent, translucentSamples == 0 ? 0 : 1),
+                prewarmCalls, ms(prewarmNanos), prewarmFailures, modelSummary());
         resetWindow(now);
     }
 
@@ -165,6 +175,7 @@ public final class InstancingStats implements AutoCloseable {
         windowModels.clear();
         maxOpaque = maxTranslucent = maxEntity = gpuOpaque = maxGpuOpaque = gpuTranslucent = maxGpuTranslucent = 0;
         opaqueSamples = translucentSamples = 0;
+        prewarmCalls = prewarmNanos = prewarmFailures = 0;
     }
 
     @Override

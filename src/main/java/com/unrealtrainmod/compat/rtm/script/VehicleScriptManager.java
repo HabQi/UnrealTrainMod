@@ -12,8 +12,10 @@ import com.unrealtrainmod.resource.PackageAsset;
 import com.unrealtrainmod.vehicle.VehiclePartRole;
 import com.unrealtrainmod.vehicle.VehiclePose;
 import java.io.IOException;
+import java.util.Collection;
 import java.util.EnumMap;
 import java.util.IdentityHashMap;
+import java.util.LinkedHashSet;
 import java.util.Map;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -32,6 +34,9 @@ public final class VehicleScriptManager {
     private record Handle(LoadedModel.Source source, VehicleScriptRuntime runtime) {}
 
     private static final RtmScriptCache PROGRAMS = new RtmScriptCache();
+    private static final LinkedHashSet<PackageAsset> SCRIPTS = new LinkedHashSet<>();
+    private static final LinkedHashSet<PackageAsset> PREWARM = new LinkedHashSet<>();
+    private static long prewarmCalls, prewarmNanos, prewarmFailures;
     private static final Map<TrainEntity, EnumMap<VehiclePartRole, Handle>> ENTITIES = new IdentityHashMap<>();
     private static final Map<ModelRenderQueue, Map<LoadedModel.Source, EnumMap<VehiclePartRole, Handle>>> PREVIEWS =
             new IdentityHashMap<>();
@@ -39,11 +44,63 @@ public final class VehicleScriptManager {
 
     private VehicleScriptManager() {}
 
+    public record PrewarmMetrics(long calls, long nanos, long failures) {}
+
+    /** World statistics consume this once; previews never consume shared-program diagnostics. */
+    public static PrewarmMetrics drainPrewarmMetrics() {
+        var metrics = new PrewarmMetrics(prewarmCalls, prewarmNanos, prewarmFailures);
+        prewarmCalls = prewarmNanos = prewarmFailures = 0;
+        return metrics;
+    }
+
+    /** Called after a successful model apply. No resource script code is evaluated here. */
+    public static void schedulePrewarm(Collection<LoadedModel> models) {
+        for (var model : models) for (var instance : model.instances()) {
+            var script = instance.definition().source().rendererPath();
+            if (script != null) SCRIPTS.add(script);
+        }
+        refillPrewarm();
+    }
+
+    private static void refillPrewarm() {
+        for (var script : SCRIPTS) {
+            if (!PROGRAMS.isReady(script) && !PROGRAMS.isFailed(script)) PREWARM.add(script);
+        }
+    }
+
+    /** Compilation is indivisible; start at most one shared program in each frame. */
+    private static void prewarmOne() {
+        if (PREWARM.isEmpty()) return;
+        var iterator = PREWARM.iterator();
+        var script = iterator.next();
+        iterator.remove();
+        long start = System.nanoTime();
+        Throwable failure = null;
+        try {
+            PROGRAMS.program(script);
+        } catch (IOException | RuntimeException | LinkageError exception) {
+            failure = exception;
+            prewarmFailures++;
+        }
+        long nanos = System.nanoTime() - start;
+        prewarmCalls++;
+        prewarmNanos += nanos;
+        if (failure == null) {
+            LOGGER.info("Vehicle script prewarm {}!{} completed in {}ms; pending={}",
+                    script.archive(), script.entry(), nanos / 1_000_000.0, PREWARM.size());
+        } else {
+            LOGGER.warn("Cannot prewarm vehicle script {}!{} after {}ms; using static models: {}",
+                    script.archive(), script.entry(), nanos / 1_000_000.0, failure.getMessage());
+            LOGGER.debug("Vehicle script prewarm failure", failure);
+        }
+    }
+
     public static boolean render(ModelRenderQueue queue, TrainEntity entity, VehiclePose vehiclePose,
                                  LoadedModel.Instance instance, PoseStack pose, int light, float partialTick) {
         var definition = instance.definition();
         var script = definition.source().rendererPath();
         if (script == null) return false;
+        if (!PROGRAMS.isReady(script)) return false;
         var source = instance.model();
         var role = definition.role();
         var model = definition.source().model();
@@ -70,6 +127,7 @@ public final class VehicleScriptManager {
         if (world != entity.level()) {
             clearInstances();
             world = entity.level();
+            refillPrewarm();
         }
         var handles = ENTITIES.computeIfAbsent(entity, ignored -> new EnumMap<>(VehiclePartRole.class));
         var handle = handles.get(role);
@@ -107,8 +165,10 @@ public final class VehicleScriptManager {
         if (world != current) {
             clearInstances();
             world = current;
+            refillPrewarm();
         }
         sweep();
+        prewarmOne();
     }
 
     public static void onLevelUnload(LevelEvent.Unload event) {
@@ -121,6 +181,7 @@ public final class VehicleScriptManager {
     public static void clear() {
         clearInstances();
         PROGRAMS.clear();
+        SCRIPTS.clear();
     }
 
     private static void clearInstances() {
@@ -128,6 +189,8 @@ public final class VehicleScriptManager {
         ENTITIES.clear();
         PREVIEWS.values().forEach(VehicleScriptManager::closeScene);
         PREVIEWS.clear();
+        PREWARM.clear();
+        prewarmCalls = prewarmNanos = prewarmFailures = 0;
         world = null;
     }
 

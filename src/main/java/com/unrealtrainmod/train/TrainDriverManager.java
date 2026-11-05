@@ -63,9 +63,10 @@ public final class TrainDriverManager {
             if (!player.startRiding(entity)) return false;
             if (aboard.isEmpty()) {
                 boolean emergency = train.control().emergencyBrake();
-                int handle = train.commandControlled() ? (train.running() || emergency ? 0 : -TrainControlProfile.BRAKE_NOTCHES)
-                        : TrainControlProfile.handle(train.control());
-                train.startManual(TrainControlProfile.control(handle, train.control().reverser(), emergency));
+                var control = train.commandControlled() ? TrainControlProfile.control(
+                        0, train.running() || emergency ? 0 : TrainControlProfile.BRAKE_NOTCHES,
+                        train.control().reverser(), emergency) : train.control();
+                train.startManual(control);
             }
             var session = new TrainDriverSession(player, train, entity.getUUID());
             sessions.put(player.getUUID(), session);
@@ -100,9 +101,13 @@ public final class TrainDriverManager {
         session.silentTicks = 0;
         var action = payload.action();
         if (action == TrainControlInputPayload.Action.HEARTBEAT) return;
+        if (action == TrainControlInputPayload.Action.POWER_SET
+                && (payload.notch() < 0 || payload.notch() > TrainControlProfile.POWER_NOTCHES)) return;
+        if (action == TrainControlInputPayload.Action.BRAKE_SET
+                && (payload.notch() < 0 || payload.notch() > TrainControlProfile.BRAKE_NOTCHES)) return;
         var train = session.train;
         var old = train.control();
-        int handle = TrainControlProfile.handle(old);
+        int power = TrainControlProfile.powerNotch(old), brake = TrainControlProfile.brakeNotch(old);
         var reverser = old.reverser();
         boolean emergency = old.emergencyBrake();
         boolean controlChange = true;
@@ -110,21 +115,41 @@ public final class TrainDriverManager {
         switch (action) {
             case HANDLE_UP, HANDLE_DOWN -> {
                 if (emergency) feedback = Feedback.EMERGENCY_LOCKED;
-                else handle = action == TrainControlInputPayload.Action.HANDLE_UP
-                        ? Math.min(TrainControlProfile.POWER_NOTCHES, handle + 1)
-                        : Math.max(-TrainControlProfile.BRAKE_NOTCHES, handle - 1);
+                else if (action == TrainControlInputPayload.Action.HANDLE_UP) {
+                    if (brake > 0) brake = 0;
+                    else power = Math.min(TrainControlProfile.POWER_NOTCHES, power + 1);
+                } else {
+                    if (power > 0) power = 0;
+                    else brake = Math.min(TrainControlProfile.BRAKE_NOTCHES, brake + 1);
+                }
+            }
+            case POWER_SET, BRAKE_SET, POWER_UP, POWER_DOWN, BRAKE_UP, BRAKE_DOWN -> {
+                if (emergency) feedback = Feedback.EMERGENCY_LOCKED;
+                else if (action == TrainControlInputPayload.Action.POWER_SET) power = payload.notch();
+                else if (action == TrainControlInputPayload.Action.BRAKE_SET) brake = payload.notch();
+                else if (action == TrainControlInputPayload.Action.POWER_UP) power = Math.min(TrainControlProfile.POWER_NOTCHES, power + 1);
+                else if (action == TrainControlInputPayload.Action.POWER_DOWN) power = Math.max(0, power - 1);
+                else if (action == TrainControlInputPayload.Action.BRAKE_UP) brake = Math.min(TrainControlProfile.BRAKE_NOTCHES, brake + 1);
+                else brake = Math.max(0, brake - 1);
+                // A positive request selects that handle; releasing to zero never restores the other one.
+                if (!emergency) {
+                    if ((action == TrainControlInputPayload.Action.POWER_SET && power > 0)
+                            || action == TrainControlInputPayload.Action.POWER_UP) brake = 0;
+                    if ((action == TrainControlInputPayload.Action.BRAKE_SET && brake > 0)
+                            || action == TrainControlInputPayload.Action.BRAKE_UP) power = 0;
+                }
             }
             case REVERSER_NEXT -> {
-                if (train.running() || handle != 0) feedback = Feedback.REVERSER_LOCKED;
+                if (train.running() || power != 0 || brake != 0) feedback = Feedback.REVERSER_LOCKED;
                 else {
                     int direction = train.member(session.vehicle).direction();
                     reverser = reverser.inFrame(direction).next().inFrame(direction);
                 }
             }
-            case EMERGENCY_APPLY -> { emergency = true; handle = 0; }
+            case EMERGENCY_APPLY -> { emergency = true; power = brake = 0; }
             case EMERGENCY_RELEASE -> {
                 if (emergency && train.running()) feedback = Feedback.EMERGENCY_LOCKED;
-                else if (emergency) { emergency = false; handle = 0; }
+                else if (emergency) { emergency = false; power = brake = 0; }
             }
             // Only the car the driver rides; the administrator door command's rules apply unchanged.
             case DOOR_LEFT_OPEN, DOOR_LEFT_CLOSE, DOOR_RIGHT_OPEN, DOOR_RIGHT_CLOSE -> {
@@ -137,7 +162,7 @@ public final class TrainDriverManager {
             }
             case HEARTBEAT -> { }
         }
-        if (controlChange && feedback == Feedback.NONE) train.setControl(TrainControlProfile.control(handle, reverser, emergency));
+        if (controlChange && feedback == Feedback.NONE) train.setControl(TrainControlProfile.control(power, brake, reverser, emergency));
         for (var driver : sessionsFor(train)) send(driver, true, driver == session ? feedback : Feedback.NONE);
     }
 
@@ -195,7 +220,7 @@ public final class TrainDriverManager {
         var reverser = source.control().reverser().inFrame(source.member(vehicle).direction())
                 .inFrame(combined.member(vehicle).direction());
         boolean emergency = first.control().emergencyBrake() || second.control().emergencyBrake();
-        var control = TrainControlProfile.control(emergency ? 0 : -TrainControlProfile.BRAKE_NOTCHES, reverser, emergency);
+        var control = TrainControlProfile.control(0, emergency ? 0 : TrainControlProfile.BRAKE_NOTCHES, reverser, emergency);
         if (ordered.isEmpty()) {
             combined.setControl(control);
             return;
@@ -223,7 +248,7 @@ public final class TrainDriverManager {
             var vehicle = drivers.isEmpty() ? component.cars().getFirst().entityId() : drivers.getFirst().vehicle;
             var reverser = control.reverser().inFrame(original.member(vehicle).direction())
                     .inFrame(component.member(vehicle).direction());
-            var parked = TrainControlProfile.control(control.emergencyBrake() ? 0 : -TrainControlProfile.BRAKE_NOTCHES,
+            var parked = TrainControlProfile.control(0, control.emergencyBrake() ? 0 : TrainControlProfile.BRAKE_NOTCHES,
                     reverser, control.emergencyBrake());
             if (drivers.isEmpty()) component.setControl(parked);
             else component.startManual(parked);
@@ -261,10 +286,11 @@ public final class TrainDriverManager {
         var train = session.train;
         int direction = train.member(session.vehicle).direction();
         PacketDistributor.sendToPlayer(session.player, new TrainControlSyncPayload(session.id, level.dimension().location(),
-                train.id(), session.vehicle, open, session.sequence, TrainControlProfile.handle(train.control()),
+                train.id(), session.vehicle, open, session.sequence, TrainControlProfile.powerNotch(train.control()),
+                TrainControlProfile.brakeNotch(train.control()),
                 train.control().reverser().inFrame(direction), train.control().emergencyBrake(),
                 direction * train.actualSpeed(), direction * train.dynamics().acceleration(), direction * train.dynamics().grade(),
-                direction * train.dynamics().tractionForce(), train.dynamics().brakeForce(), train.dynamics().tractionPower(),
+                direction * train.dynamics().tractionForce(), train.dynamics().brakeForce(),
                 train.stopReason(), feedback));
     }
 }
