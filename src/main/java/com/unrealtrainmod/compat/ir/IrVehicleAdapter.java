@@ -37,6 +37,7 @@ import net.minecraft.util.GsonHelper;
 
 /** Converts IR stock configurations while preserving lightweight startup bounds scanning. */
 final class IrVehicleAdapter {
+    private static final org.slf4j.Logger LOGGER = org.slf4j.LoggerFactory.getLogger(IrVehicleAdapter.class);
     private static final float STANDARD_GAUGE = 1.435f;
     private final Map<ResourceLocation, VehicleDefinition> definitions;
     private final Map<PackageAsset, Map<String, ModelBounds>> boundsCache = new HashMap<>();
@@ -102,6 +103,7 @@ final class IrVehicleAdapter {
             groups.computeIfAbsent(IrBogieGroups.role(part), ignored -> new ModelBounds.Builder()).include(rotated);
         });
         var bounds = combined.build();
+        double floorY = readFloorY(json, rawParts, scale, bounds, name);
         var spec = readMotionSpec(json, bounds, scale);
         var source = new ModelSource(model, Map.of(), Map.of("default", MaterialRenderMode.AUTO),
                 false, false, ModelSource.Format.IR_OBJ, scale);
@@ -116,7 +118,26 @@ final class IrVehicleAdapter {
                     new TrackVector(0, 0, z), builder.build(), VehicleActions.NONE));
         });
         return new VehicleDefinition(id, name, config, null, type, parts, bounds, spec,
-                VehiclePerformanceSpec.DEFAULT, VehicleInteriorSpec.DISABLED);
+                VehiclePerformanceSpec.DEFAULT, VehicleInteriorSpec.fromBounds(bounds, floorY));
+    }
+
+    private static double readFloorY(JsonObject json, Map<String, ModelBounds> rawParts, double scale,
+                                     ModelBounds bounds, String name) {
+        double lowest = Double.POSITIVE_INFINITY;
+        for (var entry : rawParts.entrySet()) {
+            if (entry.getKey().toUpperCase(Locale.ROOT).contains("SEAT_")) {
+                var raw = entry.getValue();
+                lowest = Math.min(lowest, raw.minY() * scale - 0.6);
+            }
+        }
+        if (lowest != Double.POSITIVE_INFINITY) return lowest;
+        var passenger = json.has("passenger") && json.get("passenger").isJsonObject()
+                ? json.getAsJsonObject("passenger") : null;
+        if (passenger != null && passenger.has("center_y")) {
+            return (GsonHelper.getAsDouble(passenger, "center_y") - 0.35) * scale;
+        }
+        LOGGER.warn("IR vehicle {} has no SEAT or passenger height; using model minimum Y {}", name, bounds.minY());
+        return bounds.minY();
     }
 
     private static VehicleMotionSpec readMotionSpec(JsonObject json, ModelBounds bounds, double scale) {

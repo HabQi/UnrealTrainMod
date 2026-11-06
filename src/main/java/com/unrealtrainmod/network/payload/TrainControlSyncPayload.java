@@ -6,6 +6,7 @@ package com.unrealtrainmod.network.payload;
 
 import com.unrealtrainmod.UnrealTrainMod;
 import com.unrealtrainmod.train.TrainConsist.StopReason;
+import com.unrealtrainmod.train.TrainCarEnd;
 import com.unrealtrainmod.train.TrainControlState.Reverser;
 import java.util.UUID;
 import net.minecraft.network.RegistryFriendlyByteBuf;
@@ -14,7 +15,7 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /** Driver-facing directions and signed motion/force values; includes authoritative input acknowledgement. */
-public record TrainControlSyncPayload(UUID session, ResourceLocation dimension, UUID train, UUID vehicle,
+public record TrainControlSyncPayload(UUID session, ResourceLocation dimension, UUID train, UUID vehicle, TrainCarEnd front,
                                       boolean open, long sequence, int powerNotch, int brakeNotch, Reverser reverser,
                                       boolean emergency, double speed, double acceleration, double grade,
                                       double tractionForce, double brakeForce,
@@ -28,6 +29,7 @@ public record TrainControlSyncPayload(UUID session, ResourceLocation dimension, 
                 buffer.writeResourceLocation(value.dimension());
                 buffer.writeUUID(value.train());
                 buffer.writeUUID(value.vehicle());
+                buffer.writeEnum(value.front());
                 buffer.writeBoolean(value.open());
                 buffer.writeLong(value.sequence());
                 buffer.writeVarInt(value.powerNotch());
@@ -42,7 +44,7 @@ public record TrainControlSyncPayload(UUID session, ResourceLocation dimension, 
                 buffer.writeEnum(value.stopReason());
                 buffer.writeEnum(value.feedback());
             }, buffer -> new TrainControlSyncPayload(buffer.readUUID(), buffer.readResourceLocation(), buffer.readUUID(),
-                    buffer.readUUID(), buffer.readBoolean(), buffer.readLong(), buffer.readVarInt(), buffer.readVarInt(), buffer.readEnum(Reverser.class),
+                    buffer.readUUID(), buffer.readEnum(TrainCarEnd.class), buffer.readBoolean(), buffer.readLong(), buffer.readVarInt(), buffer.readVarInt(), buffer.readEnum(Reverser.class),
                     buffer.readBoolean(), buffer.readDouble(), buffer.readDouble(), buffer.readDouble(),
                     buffer.readDouble(), buffer.readDouble(),
                     buffer.readEnum(StopReason.class), buffer.readEnum(Feedback.class)));

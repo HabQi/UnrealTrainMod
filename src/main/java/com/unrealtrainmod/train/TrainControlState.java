@@ -12,7 +12,7 @@ public record TrainControlState(Reverser reverser, double throttle, double train
         Reverser(int direction) { this.direction = direction; }
         public int direction() { return direction; }
         public Reverser next() { return values()[(ordinal() + 1) % values().length]; }
-        /** Conversion between the consist frame and a member's own facing is its own inverse. */
+        /** Conversion between consist, vehicle and driver frames is its own inverse for either facing. */
         public Reverser inFrame(int memberDirection) {
             return memberDirection > 0 || this == NEUTRAL ? this : this == FORWARD ? REVERSE : FORWARD;
         }

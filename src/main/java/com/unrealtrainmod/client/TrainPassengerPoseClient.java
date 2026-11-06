@@ -21,9 +21,9 @@ import net.neoforged.neoforge.network.PacketDistributor;
 import org.lwjgl.glfw.GLFW;
 
 /**
- * Turns key edges into explicit posture requests for ordinary passengers. Posture and lying height
- * stay server owned; this class only decides when a request is allowed and how a held height key
- * repeats.
+ * Turns key edges into explicit posture requests for anyone walking inside a train. Posture and
+ * lying height stay server owned; this class only decides when a request is allowed and how a held
+ * height key repeats.
  */
 public final class TrainPassengerPoseClient {
     private static final int HOLD_TICKS = 10;
@@ -108,17 +108,31 @@ public final class TrainPassengerPoseClient {
 
     public static void render(RenderGuiEvent.Post event) {
         var mc = Minecraft.getInstance();
-        if (mc.options.hideGui || riding(mc) == null) return;
+        if (mc.options.hideGui || mc.screen != null || mc.getOverlay() != null || riding(mc) == null) return;
         var graphics = event.getGuiGraphics();
-        int width = Math.min(graphics.guiWidth() - 24, 430);
-        var help = Component.translatable("gui.unrealtrainmod.passenger.help", SIT.getTranslatedKeyMessage(),
-                LIE.getTranslatedKeyMessage(), mc.options.keyJump.getTranslatedKeyMessage(),
-                LIE_UP.getTranslatedKeyMessage(), LIE_DOWN.getTranslatedKeyMessage());
-        var lines = mc.font.split(help, width);
-        int height = lines.size() * 10 + 8;
-        int x = 12, y = Math.max(12, graphics.guiHeight() - height - 48);
-        graphics.fill(x - 4, y - 4, x + width + 4, y + height - 4, 0xB0000000);
-        for (int i = 0; i < lines.size(); i++) graphics.drawString(mc.font, lines.get(i), x, y + i * 10, 0xFFFFFF, false);
+        Component[] lines = {
+            Component.translatable("gui.unrealtrainmod.passenger.help.sit", SIT.getTranslatedKeyMessage()),
+            Component.translatable("gui.unrealtrainmod.passenger.help.lie", LIE.getTranslatedKeyMessage()),
+            Component.translatable("gui.unrealtrainmod.passenger.help.stand", mc.options.keyJump.getTranslatedKeyMessage()),
+            Component.translatable("gui.unrealtrainmod.passenger.help.lie_up", LIE_UP.getTranslatedKeyMessage()),
+            Component.translatable("gui.unrealtrainmod.passenger.help.lie_down", LIE_DOWN.getTranslatedKeyMessage())
+        };
+        int width = 0;
+        for (var line : lines) width = Math.max(width, mc.font.width(line));
+        float scale = Math.min(0.7F, (graphics.guiWidth() - 24F) / width);
+        int lineHeight = mc.font.lineHeight + 3;
+        float x = graphics.guiWidth() - 12 - width * scale;
+        graphics.pose().pushPose();
+        try {
+            graphics.pose().translate(x, 12, 0);
+            graphics.pose().scale(scale, scale, 1);
+            graphics.fill(-4, -4, width + 4, (lines.length - 1) * lineHeight + mc.font.lineHeight + 4, 0x80000000);
+            for (int i = 0; i < lines.length; i++) {
+                graphics.drawString(mc.font, lines[i], 0, i * lineHeight, 0xFFFFFF, false);
+            }
+        } finally {
+            graphics.pose().popPose();
+        }
     }
 
     private static TrainPassengerStatePayload riding(Minecraft mc) {

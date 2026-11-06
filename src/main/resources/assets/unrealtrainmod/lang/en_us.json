@@ -366,15 +366,13 @@
   "gui.unrealtrainmod.track_curve.automatic_horizontal_hint": "Automatic handles follow the alignment. Opposite a directed handle, this end gradually straightens toward its control point. Edit a value to adjust manually.",
   "gui.unrealtrainmod.track_curve.turnout_automatic_hint": "Automatic exits straighten toward A's shared control point, independently for B and C. Edit a value to set this exit manually. Existing external-line directions stay locked.",
   "key.categories.unrealtrainmod.driving": "Train driving",
-  "key.unrealtrainmod.driving.power": "Release brake / increase traction",
-  "key.unrealtrainmod.driving.brake": "Reduce traction / increase brake",
+  "key.unrealtrainmod.driving.power": "Down arrow: release brake / increase traction",
+  "key.unrealtrainmod.driving.brake": "Up arrow: reduce traction / increase brake",
   "key.unrealtrainmod.driving.reverser": "Cycle reverser",
   "key.unrealtrainmod.driving.emergency": "Emergency brake / release at rest",
   "key.unrealtrainmod.driving.door_left": "Open/close left door of this car",
   "key.unrealtrainmod.driving.door_right": "Open/close right door of this car",
   "key.unrealtrainmod.driving.cursor": "Hold to use driving controls",
-  "gui.unrealtrainmod.driving.console.cursor_hint": "Hold %s · Controls",
-  "gui.unrealtrainmod.driving.console.cursor_active": "Controls active",
   "gui.unrealtrainmod.driving.console.toward_front": "To front",
   "gui.unrealtrainmod.driving.console.toward_back": "To rear",
   "gui.unrealtrainmod.driving.console.at_rest": "At rest",
@@ -400,7 +398,11 @@
   "key.unrealtrainmod.passenger.lie": "Lie down (jump key stands up)",
   "key.unrealtrainmod.passenger.lie_up": "Raise lying height",
   "key.unrealtrainmod.passenger.lie_down": "Lower lying height",
-  "gui.unrealtrainmod.passenger.help": "%s sit · %s lie · %s stand up · %s / %s lying height",
+  "gui.unrealtrainmod.passenger.help.sit": "%s Sit",
+  "gui.unrealtrainmod.passenger.help.lie": "%s Lie down",
+  "gui.unrealtrainmod.passenger.help.stand": "%s Stand up",
+  "gui.unrealtrainmod.passenger.help.lie_up": "%s Raise lying height",
+  "gui.unrealtrainmod.passenger.help.lie_down": "%s Lower lying height",
   "gui.unrealtrainmod.driving.motion": "Acceleration: %s m/s²  Consist average grade: %s per mille",
   "gui.unrealtrainmod.driving.help": "%s traction · %s brake · %s reverser · %s emergency · %s left door · %s right door · %s dismount",
   "gui.unrealtrainmod.driving.direction.forward": "Forward",
@@ -409,7 +411,7 @@
   "gui.unrealtrainmod.driving.state.emergency": "Emergency brake latched",
   "gui.unrealtrainmod.driving.state.stopped": "Stopped",
   "gui.unrealtrainmod.driving.state.running": "Moving",
-  "gui.unrealtrainmod.driving.reverser_locked": "Stop and set both traction and brake handles to 0 before changing the reverser.",
+  "gui.unrealtrainmod.driving.reverser_locked": "Set both traction and brake handles to 0 to change the reverser, including while moving.",
   "gui.unrealtrainmod.driving.emergency_locked": "Emergency brake latched: stop, then press emergency again to release. Both handles remain at 0.",
   "commands.unrealtrainmod.train.state.driver_present": "This train has a driver. Leave the cab first; administrators can still use stop immediately.",
   "commands.unrealtrainmod.train.state.passenger_present": "This train still has passengers. Ask them to leave before dismantling it.",
@@ -448,5 +450,18 @@
   "item.unrealtrainmod.vehicle_mover.tooltip": "Main-hand right-click a stopped car to push its consist 0.5 blocks along the track in your horizontal viewing direction",
   "item.unrealtrainmod.vehicle_mover.direction": "Look along the track in the desired direction before using the vehicle mover",
   "item.unrealtrainmod.vehicle_mover.moved": "Moved 0.5 blocks in your viewing direction",
-  "gui.unrealtrainmod.train_debug.orientation": "Current car reversed relative to the consist route: %s"
+  "gui.unrealtrainmod.train_debug.orientation": "Current car reversed relative to the consist route: %s",
+  "gui.unrealtrainmod.monitor.title": "TRAIN MONITOR",
+  "gui.unrealtrainmod.monitor.waiting": "Waiting for sync",
+  "gui.unrealtrainmod.monitor.now": "Now",
+  "gui.unrealtrainmod.monitor.speed_axis": "SPEED",
+  "gui.unrealtrainmod.monitor.position": "POSITION",
+  "gui.unrealtrainmod.monitor.gradient": "GRADE",
+  "gui.unrealtrainmod.monitor.track": "TRACK"
+  ,"gui.unrealtrainmod.monitor.speed_short": "SPD"
+  ,"gui.unrealtrainmod.monitor.limit_short": "LIM"
+  ,"gui.unrealtrainmod.monitor.distance_short": "DST"
+  ,"gui.unrealtrainmod.monitor.grade_short": "GRD"
+  ,"gui.unrealtrainmod.driving.console.monitor_expand": "Click to expand the train monitor"
+  ,"gui.unrealtrainmod.driving.console.monitor_collapse": "Click to minimize the train monitor"
 }

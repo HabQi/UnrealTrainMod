@@ -288,7 +288,7 @@ final class RtmVehicleAdapter {
     private static VehicleInteriorSpec readInteriorSpec(JsonObject json, ModelBounds bounds, String trainName)
             throws IOException {
         if (!json.has("walkable") || json.get("walkable").isJsonNull()) {
-            return VehicleInteriorSpec.fromBounds(bounds, 0);
+            return VehicleInteriorSpec.fromBounds(bounds, rtmFloor(json, trainName, bounds.minY()));
         }
         var walkable = json.get("walkable");
         if (!walkable.isJsonObject()) throw configError(trainName, "walkable", "must be an object");
@@ -309,6 +309,29 @@ final class RtmVehicleAdapter {
         } catch (IllegalArgumentException exception) {
             throw new IOException(trainName + " walkable: " + exception.getMessage(), exception);
         }
+    }
+
+    private static double rtmFloor(JsonObject json, String trainName, double fallback) throws IOException {
+        double floor = lowestY(json, "slotPos", trainName, false);
+        if (Double.isFinite(floor)) return floor;
+        floor = lowestY(json, "seatPos", trainName, true);
+        if (Double.isFinite(floor)) return floor;
+        floor = lowestY(json, "playerPos", trainName, false);
+        return Double.isFinite(floor) ? floor : fallback;
+    }
+
+    private static double lowestY(JsonObject json, String field, String trainName, boolean sixteenth) throws IOException {
+        if (!json.has(field) || !json.get(field).isJsonArray()) return Double.NaN;
+        double lowest = Double.POSITIVE_INFINITY;
+        for (var element : json.getAsJsonArray(field)) {
+            if (!element.isJsonArray() || element.getAsJsonArray().size() < 2) {
+                throw configError(trainName, field, "entries must contain at least X and Y");
+            }
+            double y = readFinite(element.getAsJsonArray().get(1), trainName, field + "[].y");
+            if (sixteenth) y /= 16.0;
+            lowest = Math.min(lowest, y);
+        }
+        return lowest == Double.POSITIVE_INFINITY ? Double.NaN : lowest;
     }
 
     private static VehicleMotionSpec readMotionSpec(JsonObject json, ModelBounds bounds,

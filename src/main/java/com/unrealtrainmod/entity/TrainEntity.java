@@ -16,7 +16,6 @@ import com.unrealtrainmod.train.TrainPassengerClientState;
 import com.unrealtrainmod.train.TrainPassengerManager;
 import com.unrealtrainmod.vehicle.VehicleCatalog;
 import com.unrealtrainmod.vehicle.VehicleDoor;
-import com.unrealtrainmod.vehicle.VehicleInteriorSpec;
 import com.unrealtrainmod.vehicle.VehiclePose;
 import com.unrealtrainmod.vehicle.VehiclePosePlayback;
 import com.unrealtrainmod.vehicle.VehiclePoseSnapshot;
@@ -525,10 +524,7 @@ public final class TrainEntity extends Entity {
     public Vec3 getPassengerRidingPosition(Entity passenger) {
         var walking = walkingLocal(passenger);
         if (walking != null) {
-            var model = VehicleCatalog.find(getModelId());
-            if (model != null && model.interiorSpec().enabled()) {
-                return localToWorld(currentBody(), model.interiorSpec(), walking.x(), walking.z());
-            }
+            return localToWorld(currentBody(), walking);
         }
         return passengerRidingPosition(currentBody());
     }
@@ -554,15 +550,14 @@ public final class TrainEntity extends Entity {
         var walking = level().isClientSide
                 ? TrainPassengerClientState.renderPoint(passenger.getUUID(), getUUID(), partialTick)
                 : walkingLocal(passenger);
-        var model = VehicleCatalog.find(getModelId());
-        if (walking != null && model != null && model.interiorSpec().enabled()) {
-            return localToWorld(body, model.interiorSpec(), walking.x(), walking.z());
+        if (walking != null) {
+            return localToWorld(body, walking);
         }
         return passengerRidingPosition(body);
     }
 
-    private static Vec3 localToWorld(VehiclePose.Body body, VehicleInteriorSpec spec, double x, double z) {
-        var point = VehiclePose.localToWorld(body, new TrackVector(x, spec.centerY(), z));
+    private static Vec3 localToWorld(VehiclePose.Body body, TrainPassengerClientState.LocalPoint local) {
+        var point = VehiclePose.localToWorld(body, new TrackVector(local.x(), local.y(), local.z()));
         return new Vec3(point.x(), point.y(), point.z());
     }
 

@@ -13,12 +13,16 @@ public final class TrainDriverSession {
     final ServerPlayer player;
     TrainConsist train;
     final UUID vehicle;
+    final TrainCarEnd front;
     long sequence;
     int silentTicks;
 
-    TrainDriverSession(ServerPlayer player, TrainConsist train, UUID vehicle) {
+    TrainDriverSession(ServerPlayer player, TrainConsist train, UUID vehicle, TrainCarEnd front) {
         this.player = player;
         this.train = train;
         this.vehicle = vehicle;
+        this.front = front;
     }
+
+    int direction() { return train.member(vehicle).direction() * front.sign(); }
 }

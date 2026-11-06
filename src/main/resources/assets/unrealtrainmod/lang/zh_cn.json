@@ -359,15 +359,13 @@
   "gui.unrealtrainmod.track_curve.automatic_horizontal_hint": "自动控制柄随线路计算；另一端使用有向控制柄时，本端随其控制点逐渐收直。修改数值可手动调整。",
   "gui.unrealtrainmod.track_curve.turnout_automatic_hint": "自动末端随 A 的共用控制点逐渐收直；B/C 分别计算。手动修改可固定本端参数，已有外线方向保持锁定。",
   "key.categories.unrealtrainmod.driving": "列车驾驶",
-  "key.unrealtrainmod.driving.power": "缓解制动／增加牵引",
-  "key.unrealtrainmod.driving.brake": "收回牵引／增加制动",
+  "key.unrealtrainmod.driving.power": "下方向键：缓解制动／增加牵引",
+  "key.unrealtrainmod.driving.brake": "上方向键：收回牵引／增加制动",
   "key.unrealtrainmod.driving.reverser": "切换换向器",
   "key.unrealtrainmod.driving.emergency": "紧急制动／停车后解除",
   "key.unrealtrainmod.driving.door_left": "开／关本车左门",
   "key.unrealtrainmod.driving.door_right": "开／关本车右门",
   "key.unrealtrainmod.driving.cursor": "按住操作驾驶控制台",
-  "gui.unrealtrainmod.driving.console.cursor_hint": "按住 %s 操作",
-  "gui.unrealtrainmod.driving.console.cursor_active": "鼠标操作中",
   "gui.unrealtrainmod.driving.console.toward_front": "朝车头",
   "gui.unrealtrainmod.driving.console.toward_back": "朝车尾",
   "gui.unrealtrainmod.driving.console.at_rest": "静止",
@@ -393,7 +391,11 @@
   "key.unrealtrainmod.passenger.lie": "躺下（跳跃键站起）",
   "key.unrealtrainmod.passenger.lie_up": "升高躺姿高度",
   "key.unrealtrainmod.passenger.lie_down": "降低躺姿高度",
-  "gui.unrealtrainmod.passenger.help": "%s 坐下 · %s 躺下 · %s 站起 · %s / %s 躺姿高度",
+  "gui.unrealtrainmod.passenger.help.sit": "%s 坐下",
+  "gui.unrealtrainmod.passenger.help.lie": "%s 躺下",
+  "gui.unrealtrainmod.passenger.help.stand": "%s 站起",
+  "gui.unrealtrainmod.passenger.help.lie_up": "%s 升高躺姿",
+  "gui.unrealtrainmod.passenger.help.lie_down": "%s 降低躺姿",
   "gui.unrealtrainmod.driving.motion": "加速度：%s m/s²  整列平均坡度：%s ‰",
   "gui.unrealtrainmod.driving.help": "%s 牵引侧 · %s 制动侧 · %s 换向 · %s 紧急制动 · %s 左门 · %s 右门 · %s 下车",
   "gui.unrealtrainmod.driving.direction.forward": "前进",
@@ -402,7 +404,7 @@
   "gui.unrealtrainmod.driving.state.emergency": "紧急制动锁定",
   "gui.unrealtrainmod.driving.state.stopped": "停稳",
   "gui.unrealtrainmod.driving.state.running": "运行",
-  "gui.unrealtrainmod.driving.reverser_locked": "停稳并将牵引、制动手柄都置 0 后才能切换换向器。",
+  "gui.unrealtrainmod.driving.reverser_locked": "将牵引、制动手柄都置 0 后即可切换换向器，无需停稳。",
   "gui.unrealtrainmod.driving.emergency_locked": "紧急制动已锁定：停稳后再次按紧急制动键解除，两个手柄保持 0。",
   "commands.unrealtrainmod.train.state.driver_present": "列车已有驾驶员，请先退出驾驶；管理员仍可使用 stop 立即停车。",
   "commands.unrealtrainmod.train.state.passenger_present": "列车上仍有普通乘客，请先让乘客下车再拆除。",
@@ -441,5 +443,18 @@
   "item.unrealtrainmod.vehicle_mover.tooltip": "主手右键停稳车辆，按水平视线方向沿轨推移整列 0.5 格",
   "item.unrealtrainmod.vehicle_mover.direction": "请朝沿轨前进或后退的方向看，再使用移车器",
   "item.unrealtrainmod.vehicle_mover.moved": "已沿视线方向移车 0.5 格",
-  "gui.unrealtrainmod.train_debug.orientation": "当前车辆相对编组路线反向：%s"
+  "gui.unrealtrainmod.train_debug.orientation": "当前车辆相对编组路线反向：%s",
+  "gui.unrealtrainmod.monitor.title": "列车运行监控",
+  "gui.unrealtrainmod.monitor.waiting": "等待同步",
+  "gui.unrealtrainmod.monitor.now": "现在",
+  "gui.unrealtrainmod.monitor.speed_axis": "速度",
+  "gui.unrealtrainmod.monitor.position": "当前位置",
+  "gui.unrealtrainmod.monitor.gradient": "坡度曲线",
+  "gui.unrealtrainmod.monitor.track": "道床曲线"
+  ,"gui.unrealtrainmod.monitor.speed_short": "速\n度"
+  ,"gui.unrealtrainmod.monitor.limit_short": "限\n速"
+  ,"gui.unrealtrainmod.monitor.distance_short": "距\n离"
+  ,"gui.unrealtrainmod.monitor.grade_short": "坡\n度"
+  ,"gui.unrealtrainmod.driving.console.monitor_expand": "点击展开运行监控"
+  ,"gui.unrealtrainmod.driving.console.monitor_collapse": "点击收起运行监控"
 }

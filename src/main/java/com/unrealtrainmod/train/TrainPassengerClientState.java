@@ -14,7 +14,7 @@ import java.util.UUID;
  * the walking client; the server never reads it.
  */
 public final class TrainPassengerClientState {
-    public record LocalPoint(double x, double z) {}
+    public record LocalPoint(double x, double y, double z) {}
     private static final Map<UUID, Entry> ENTRIES = new HashMap<>();
 
     public static final class Entry {
@@ -24,6 +24,7 @@ public final class TrainPassengerClientState {
         public long sequence;
         public long tick;
         public double targetX;
+        public final double floorY;
         public double targetZ;
         public double prevRenderX;
         public double prevRenderZ;
@@ -33,7 +34,7 @@ public final class TrainPassengerClientState {
         public PassengerPose pose = PassengerPose.STANDING;
         public int heightStep;
 
-        private Entry(UUID player, UUID vehicle, UUID session, long sequence, long tick, double x, double z,
+        private Entry(UUID player, UUID vehicle, UUID session, long sequence, long tick, double x, double floorY, double z,
                       PassengerPose pose, int heightStep) {
             this.player = player;
             this.vehicle = vehicle;
@@ -41,6 +42,7 @@ public final class TrainPassengerClientState {
             this.sequence = sequence;
             this.tick = tick;
             this.targetX = x;
+            this.floorY = floorY;
             this.targetZ = z;
             this.prevRenderX = this.renderX = x;
             this.prevRenderZ = this.renderZ = z;
@@ -53,7 +55,7 @@ public final class TrainPassengerClientState {
 
     /** Returns the accepted entry, or null when the snapshot is stale or marks a removal. */
     public static Entry accept(UUID player, UUID vehicle, UUID session, long sequence, long tick,
-                               double x, double z, PassengerPose pose, int heightStep, boolean present) {
+                               double x, double floorY, double z, PassengerPose pose, int heightStep, boolean present) {
         var current = ENTRIES.get(player);
         if (!present) {
             if (current != null && current.vehicle.equals(vehicle) && current.session.equals(session)) {
@@ -69,7 +71,7 @@ public final class TrainPassengerClientState {
             }
         }
         if (current == null || !current.session.equals(session)) {
-            current = new Entry(player, vehicle, session, sequence, tick, x, z, pose, heightStep);
+            current = new Entry(player, vehicle, session, sequence, tick, x, floorY, z, pose, heightStep);
             ENTRIES.put(player, current);
             return current;
         }
@@ -115,7 +117,7 @@ public final class TrainPassengerClientState {
 
     public static LocalPoint renderPoint(UUID player, UUID vehicle) {
         var entry = ENTRIES.get(player);
-        return entry == null || !entry.vehicle.equals(vehicle) ? null : new LocalPoint(entry.renderX, entry.renderZ);
+        return entry == null || !entry.vehicle.equals(vehicle) ? null : new LocalPoint(entry.renderX, entry.floorY, entry.renderZ);
     }
 
     /** Camera-facing local point interpolated between the previous and current client tick. */
@@ -123,6 +125,7 @@ public final class TrainPassengerClientState {
         var entry = ENTRIES.get(player);
         return entry == null || !entry.vehicle.equals(vehicle) ? null
                 : new LocalPoint(net.minecraft.util.Mth.lerp(partialTick, entry.prevRenderX, entry.renderX),
+                        entry.floorY,
                         net.minecraft.util.Mth.lerp(partialTick, entry.prevRenderZ, entry.renderZ));
     }
 

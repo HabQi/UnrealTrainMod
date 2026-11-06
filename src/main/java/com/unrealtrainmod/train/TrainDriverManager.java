@@ -10,6 +10,7 @@ import com.unrealtrainmod.network.payload.TrainControlInputPayload;
 import com.unrealtrainmod.network.payload.TrainControlSyncPayload;
 import com.unrealtrainmod.network.payload.TrainControlSyncPayload.Feedback;
 import com.unrealtrainmod.vehicle.VehicleDoor;
+import com.unrealtrainmod.vehicle.VehicleCatalog;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -48,7 +49,7 @@ public final class TrainDriverManager {
 
     public boolean board(ServerPlayer player, TrainEntity entity) {
         if (!player.isAlive() || player.isSpectator() || player.isShiftKeyDown() || player.isPassenger()
-                || sessions.containsKey(player.getUUID())) return false;
+                || entity.isRemoved() || sessions.containsKey(player.getUUID())) return false;
         if (!player.getMainHandItem().is(UnrealTrainMod.KEY.get())) {
             player.displayClientMessage(Component.translatable("item.unrealtrainmod.key.required"), true);
             return false;
@@ -60,15 +61,21 @@ public final class TrainDriverManager {
                 player.displayClientMessage(Component.translatable("item.unrealtrainmod.key.driver_limit", MAX_DRIVERS), true);
                 return false;
             }
-            if (!player.startRiding(entity)) return false;
+            var local = TrainPassengerManager.boardingPoint(player, entity);
+            var bounds = VehicleCatalog.find(entity.getModelId()).bounds();
+            var front = local.z() >= bounds.centerZ() ? TrainCarEnd.FRONT : TrainCarEnd.REAR;
+            if (!manager.passengers().board(player, entity, local, TrainWalkRole.DRIVER)) return false;
             if (aboard.isEmpty()) {
-                boolean emergency = train.control().emergencyBrake();
+                var old = train.control();
+                boolean emergency = old.emergencyBrake();
+                var reverser = TrainControlState.Reverser.FORWARD.inFrame(
+                        train.member(entity.getUUID()).direction() * front.sign());
                 var control = train.commandControlled() ? TrainControlProfile.control(
                         0, train.running() || emergency ? 0 : TrainControlProfile.BRAKE_NOTCHES,
-                        train.control().reverser(), emergency) : train.control();
+                        reverser, emergency) : new TrainControlState(reverser, old.throttle(), old.trainBrake(), emergency);
                 train.startManual(control);
             }
-            var session = new TrainDriverSession(player, train, entity.getUUID());
+            var session = new TrainDriverSession(player, train, entity.getUUID(), front);
             sessions.put(player.getUUID(), session);
             send(session, true, Feedback.NONE);
             return true;
@@ -140,9 +147,9 @@ public final class TrainDriverManager {
                 }
             }
             case REVERSER_NEXT -> {
-                if (train.running() || power != 0 || brake != 0) feedback = Feedback.REVERSER_LOCKED;
+                if (power != 0 || brake != 0) feedback = Feedback.REVERSER_LOCKED;
                 else {
-                    int direction = train.member(session.vehicle).direction();
+                    int direction = session.direction();
                     reverser = reverser.inFrame(direction).next().inFrame(direction);
                 }
             }
@@ -158,7 +165,8 @@ public final class TrainDriverManager {
                         || action == TrainControlInputPayload.Action.DOOR_LEFT_CLOSE;
                 boolean open = action == TrainControlInputPayload.Action.DOOR_LEFT_OPEN
                         || action == TrainControlInputPayload.Action.DOOR_RIGHT_OPEN;
-                ((TrainEntity) session.player.getVehicle()).setDoorOpen(left ? VehicleDoor.LEFT : VehicleDoor.RIGHT, open);
+                var side = left ? VehicleDoor.LEFT : VehicleDoor.RIGHT;
+                ((TrainEntity) session.player.getVehicle()).setDoorOpen(side.inFrame(session.front.sign()), open);
             }
             case HEARTBEAT -> { }
         }
@@ -284,9 +292,9 @@ public final class TrainDriverManager {
 
     private void send(TrainDriverSession session, boolean open, Feedback feedback) {
         var train = session.train;
-        int direction = train.member(session.vehicle).direction();
+        int direction = session.direction();
         PacketDistributor.sendToPlayer(session.player, new TrainControlSyncPayload(session.id, level.dimension().location(),
-                train.id(), session.vehicle, open, session.sequence, TrainControlProfile.powerNotch(train.control()),
+                train.id(), session.vehicle, session.front, open, session.sequence, TrainControlProfile.powerNotch(train.control()),
                 TrainControlProfile.brakeNotch(train.control()),
                 train.control().reverser().inFrame(direction), train.control().emergencyBrake(),
                 direction * train.actualSpeed(), direction * train.dynamics().acceleration(), direction * train.dynamics().grade(),

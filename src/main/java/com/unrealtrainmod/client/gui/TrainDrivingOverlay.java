@@ -22,16 +22,19 @@ public final class TrainDrivingOverlay {
     private static final int BACKGROUND = 0xF2141D27, PANEL = 0xFF0C131C, EDGE = 0xFF344656;
     private static final int TEXT = 0xFFE6F1F6, MUTED = 0xFF8B9DAC, CYAN = 0xFF62DFE0;
     private static final int GREEN = 0xFF75DC9D, AMBER = 0xFFFFC66B, RED = 0xFFFF706B;
-    private static final int GAP = 4, HEIGHT = 88, DOOR_WIDTH = 22;
-    private static final int HANDLE_TOP = 19, HANDLE_BOTTOM = 60;
+    private static final int GAP = 4, HEIGHT = 70, DOOR_WIDTH = 22;
+    private static final int MONITOR_HEIGHT = 170;
+    private static final int HANDLE_TOP = 16, HANDLE_BOTTOM = 55;
     private static final float TEXT_SCALE = 0.8F;
     private static TrainControlSyncPayload displayed;
     private static Language language;
     private static String speed;
-    private static Component condition, motion, controls;
+    private static Component motion, controls;
     private static Component[] values;
     private static Boolean draggingPower;
+    private static double handleGrabOffset;
     private static int requestedNotch = -1;
+    private static boolean monitorExpanded;
 
     private TrainDrivingOverlay() {}
 
@@ -41,32 +44,45 @@ public final class TrainDrivingOverlay {
         }
     }
 
-    private record Layout(Box desk, Box speed, Box data, Box handle, Box switches) {
+    private record Layout(Box desk, Box speed, Box monitor, Box data, Box handle, Box switches,
+                          int monitorCanvasWidth, float monitorScale) {
         Box power() { return new Box(handle.x + handle.width / 2 + 2, handle.y, handle.width - handle.width / 2 - 2, handle.height); }
         Box brake() { return new Box(handle.x, handle.y, handle.width / 2 - 2, handle.height); }
-        Box reverser() { return new Box(switches.x + 4, switches.y + 5, switches.width - 8, 25); }
-        Box emergency() { return new Box(switches.x + 4, switches.y + 35, switches.width - 8, 27); }
+        Box reverser() { return new Box(switches.x + 4, switches.y + 4, switches.width - 8, 24); }
+        Box emergency() { return new Box(switches.x + 4, switches.y + 32, switches.width - 8, 25); }
         Box leftDoor() { return new Box(desk.x + GAP, speed.y, DOOR_WIDTH, speed.height); }
         Box rightDoor() { return new Box(desk.x + desk.width - GAP - DOOR_WIDTH, speed.y, DOOR_WIDTH, speed.height); }
     }
 
     private static Layout layout() {
         var window = Minecraft.getInstance().getWindow();
-        int width = Math.min(700, window.getGuiScaledWidth() - 12);
+        int availableWidth = Math.min(1000, window.getGuiScaledWidth() - 12);
+        boolean wide = availableWidth >= 700;
+        int speedWidth = availableWidth < 360 ? 56 : 64;
+        int handleWidth = availableWidth < 360 ? 68 : 84;
+        int switchWidth = Math.min(104, Math.max(56, availableWidth / 6));
+        int dataWidth = wide ? Math.min(160, availableWidth / 6) : 0;
+        int fixedWidth = 2 * DOOR_WIDTH + (wide ? 8 : 7) * GAP
+                + speedWidth + dataWidth + handleWidth + switchWidth;
+        int monitorCanvasWidth = Math.max(120, availableWidth - fixedWidth);
+        float monitorScale = Math.min(1F, (availableWidth - fixedWidth) / (float) monitorCanvasWidth);
+        monitorScale = Math.min(monitorScale, (window.getGuiScaledHeight() - 16F) / MONITOR_HEIGHT);
+        int contentHeight = HEIGHT - 2 * GAP;
+        if (!monitorExpanded) monitorScale = Math.min(monitorScale, contentHeight / (float) MONITOR_HEIGHT);
+        int monitorWidth = Math.round(monitorCanvasWidth * monitorScale);
+        int monitorHeight = Math.round(MONITOR_HEIGHT * monitorScale);
+        int width = fixedWidth + monitorWidth;
         int left = (window.getGuiScaledWidth() - width) / 2, top = window.getGuiScaledHeight() - HEIGHT - 6;
-        boolean wide = width >= 560;
-        int innerWidth = width - 2 * DOOR_WIDTH - 4 * GAP;
-        int speedWidth = wide ? 88 : Math.max(68, width / 5);
-        int handleWidth = wide ? 112 : (innerWidth - speedWidth - 2 * GAP) / 2;
-        int switchWidth = wide ? 104 : innerWidth - speedWidth - handleWidth - 2 * GAP;
-        int dataWidth = wide ? innerWidth - speedWidth - handleWidth - switchWidth - 3 * GAP : 0;
-        int contentY = top + 17, contentHeight = HEIGHT - 21;
+        int contentY = top + GAP;
         var speedBox = new Box(left + 2 * GAP + DOOR_WIDTH, contentY, speedWidth, contentHeight);
-        var data = new Box(speedBox.x + speedWidth + GAP, contentY, dataWidth, contentHeight);
+        int monitorY = contentY + contentHeight - monitorHeight;
+        var monitor = new Box(speedBox.x + speedWidth + GAP, monitorY, monitorWidth, monitorHeight);
+        var data = new Box(monitor.x + monitorWidth + GAP, contentY, dataWidth, contentHeight);
         int handleX = wide ? data.x + dataWidth + GAP : data.x;
         var handle = new Box(handleX, contentY, handleWidth, contentHeight);
         var switches = new Box(handle.x + handle.width + GAP, contentY, switchWidth, contentHeight);
-        return new Layout(new Box(left, top, width, HEIGHT), speedBox, data, handle, switches);
+        return new Layout(new Box(left, top, width, HEIGHT), speedBox, monitor, data, handle, switches,
+                monitorCanvasWidth, monitorScale);
     }
 
     public static int bottomClearance() { return HEIGHT + 18; }
@@ -86,7 +102,6 @@ public final class TrainDrivingOverlay {
         displayed = state;
         language = Language.getInstance();
         speed = String.format(Locale.ROOT, "%.1f", Math.abs(state.speed()) * 3.6);
-        condition = TrainDrivingClient.condition(state);
         motion = text(state.speed() > 0 ? "toward_front" : state.speed() < 0 ? "toward_back" : "at_rest");
         controls = TrainDrivingClient.controlHint();
         values = new Component[] {
@@ -106,48 +121,51 @@ public final class TrainDrivingOverlay {
         graphics.fill(desk.x - 2, desk.y - 2, desk.x + desk.width + 2, desk.y + desk.height + 2, 0x66000000);
         panel(graphics, desk, BACKGROUND);
         graphics.fill(desk.x + 1, desk.y + 1, desk.x + desk.width - 1, desk.y + 3, EDGE);
-        int statusColor = state.emergency() ? RED : state.brakeNotch() > 0 ? AMBER : GREEN;
-        graphics.fill(desk.x + 5, desk.y + 6, desk.x + 8, desk.y + 9, statusColor);
-        label(graphics, font, condition, desk.x + 12, desk.y + 5, desk.width / 2 - 16, statusColor);
         speedometer(graphics, font, layout.speed, state);
+        var monitor = layout.monitor;
+        TrainMonitorOverlay.render(graphics, state, monitor.x, monitor.y,
+                layout.monitorCanvasWidth, MONITOR_HEIGHT, layout.monitorScale, monitor.contains(mouseX, mouseY));
         if (layout.data.width > 0) telemetry(graphics, font, layout.data);
         handle(graphics, font, layout.brake(), false, state, mouseX, mouseY);
         handle(graphics, font, layout.power(), true, state, mouseX, mouseY);
         switches(graphics, font, layout, state, mouseX, mouseY);
         door(graphics, font, layout.leftDoor(), VehicleDoor.LEFT, partialTick, mouseX, mouseY);
         door(graphics, font, layout.rightDoor(), VehicleDoor.RIGHT, partialTick, mouseX, mouseY);
-        Component hint = TrainDrivingClient.usingCursor() ? text("cursor_active") : TrainDrivingClient.cursorHint();
-        label(graphics, font, hint, desk.x + desk.width / 2, desk.y + 5, desk.width / 2 - 5,
-                TrainDrivingClient.usingCursor() ? CYAN : MUTED);
         tooltip(graphics, font, layout, state, partialTick, mouseX, mouseY);
     }
 
     private static void speedometer(GuiGraphics graphics, Font font, Box box, TrainControlSyncPayload state) {
         panel(graphics, box, PANEL);
-        int cx = box.x + box.width / 2, cy = box.y + 20, radius = 16;
+        int radius = Math.min((box.width - 20) / 2, (box.height - 29) * 2 / 3);
+        int cx = box.x + box.width / 2, cy = box.y + radius + 4;
         double velocity = Math.abs(state.speed()) * 3.6;
         int maximum = Math.max(120, (int) Math.ceil(velocity / 60) * 60);
         for (int tick = 0; tick <= 12; tick++) {
             float angle = 150 + tick * 20;
-            radialLine(graphics, cx, cy, radius - (tick % 2 == 0 ? 4 : 2), radius, angle,
+            radialLine(graphics, cx, cy, radius - (tick % 2 == 0 ? 6 : 3), radius, angle,
                     tick / 12.0 <= velocity / maximum ? CYAN : EDGE);
         }
-        radialLine(graphics, cx, cy, 0, radius - 7, (float) (150 + 240 * velocity / maximum), CYAN);
+        radialLine(graphics, cx, cy, 0, radius - 9, (float) (150 + 240 * velocity / maximum), CYAN);
         graphics.fill(cx - 2, cy - 2, cx + 3, cy + 3, TEXT);
-        label(graphics, font, Component.literal("0"), cx - radius - 5, box.y + 30, 8, MUTED);
+        int scaleY = cy + radius / 2 + 3;
+        label(graphics, font, Component.literal("0"), cx - radius - 3, scaleY, 8, MUTED);
         String limit = Integer.toString(maximum);
-        label(graphics, font, Component.literal(limit), cx + radius + 5 - (int) (font.width(limit) * TEXT_SCALE),
-                box.y + 30, 24, MUTED);
+        label(graphics, font, Component.literal(limit), cx + radius + 3 - (int) (font.width(limit) * TEXT_SCALE),
+                scaleY, 24, MUTED);
         int speedWidth = font.width(speed);
-        float scale = Math.min(1.25F, (box.width - 8) / (float) speedWidth);
+        float unitScale = TEXT_SCALE;
+        int unitWidth = (int) Math.ceil(font.width("km/h") * unitScale);
+        float scale = Math.min(1.5F, (box.width - unitWidth - 16) / (float) speedWidth);
+        float readingWidth = speedWidth * scale + 4 + unitWidth;
+        float readingX = cx - readingWidth / 2;
+        int readingY = box.y + box.height - 15;
         graphics.pose().pushPose();
-        graphics.pose().translate(cx - speedWidth * scale / 2, box.y + 40, 0);
+        graphics.pose().translate(readingX, readingY, 0);
         graphics.pose().scale(scale, scale, 1);
         graphics.drawString(font, speed, 0, 0, TEXT, false);
         graphics.pose().popPose();
-        int unitWidth = (int) Math.ceil(font.width("km/h") * TEXT_SCALE);
-        label(graphics, font, Component.literal("km/h"), box.x + 4, box.y + 56, unitWidth, MUTED);
-        label(graphics, font, motion, box.x + unitWidth + 9, box.y + 56, box.width - unitWidth - 13, MUTED);
+        label(graphics, font, Component.literal("km/h"), (int) (readingX + speedWidth * scale + 4),
+                readingY + (int) ((scale - unitScale) * font.lineHeight), unitWidth, MUTED);
     }
 
     private static void radialLine(GuiGraphics graphics, int x, int y, int from, int to, float angle, int color) {
@@ -178,10 +196,10 @@ public final class TrainDrivingOverlay {
         int cx = box.x + box.width / 2, top = box.y + HANDLE_TOP, bottom = box.y + HANDLE_BOTTOM;
         graphics.fill(cx - 2, top, cx + 3, bottom + 1, EDGE);
         for (int i = 0; i <= count; i++) {
-            int y = bottom - i * (bottom - top) / count;
+            int y = handlePosition(box, i, count);
             graphics.fill(cx - 7, y, cx + 8, y + 1, i <= value ? color : EDGE);
         }
-        int position = bottom - value * (bottom - top) / count;
+        int position = handlePosition(box, value, count);
         graphics.fill(cx - 11, position - 3, cx + 12, position + 4, 0xFF05090E);
         graphics.fill(cx - 10, position - 2, cx + 11, position + 3, state.emergency() ? RED : TEXT);
         graphics.fill(cx - 5, position - 1, cx + 6, position + 1, color);
@@ -192,12 +210,16 @@ public final class TrainDrivingOverlay {
         label(graphics, font, Component.literal(notch), box.x + box.width - notchWidth - 4, box.y + 5, notchWidth, color);
     }
 
+    private static int handlePosition(Box box, int notch, int count) {
+        return box.y + HANDLE_BOTTOM - Math.round(notch * (HANDLE_BOTTOM - HANDLE_TOP) / (float) count);
+    }
+
     private static void switches(GuiGraphics graphics, Font font, Layout layout, TrainControlSyncPayload state,
                                  double mouseX, double mouseY) {
         var box = layout.switches;
         panel(graphics, box, PANEL);
         button(graphics, font, layout.reverser(), text("reverser", TrainDrivingClient.direction(state)),
-                state.speed() == 0 && state.powerNotch() == 0 && state.brakeNotch() == 0, CYAN, mouseX, mouseY);
+                state.powerNotch() == 0 && state.brakeNotch() == 0, CYAN, mouseX, mouseY);
         button(graphics, font, layout.emergency(), text(state.emergency() ? "emergency_release" : "emergency"),
                 !state.emergency() || state.speed() == 0, RED, mouseX, mouseY);
         if (state.emergency()) graphics.renderOutline(layout.emergency().x, layout.emergency().y,
@@ -207,7 +229,8 @@ public final class TrainDrivingOverlay {
     private static void door(GuiGraphics graphics, Font font, Box box, VehicleDoor side, float partialTick,
                              double mouseX, double mouseY) {
         var vehicle = TrainDrivingClient.riddenVehicle();
-        boolean open = vehicle.isDoorOpen(side);
+        var vehicleSide = TrainDrivingClient.doorSide(side);
+        boolean open = vehicle.isDoorOpen(vehicleSide);
         panel(graphics, box, box.contains(mouseX, mouseY) ? 0xFF293E4A : PANEL);
         int color = open ? AMBER : GREEN;
         var characters = text(side == VehicleDoor.LEFT ? "left_door" : "right_door").getString().codePoints().toArray();
@@ -220,7 +243,7 @@ public final class TrainDrivingOverlay {
         }
         int barX = side == VehicleDoor.LEFT ? box.x + 2 : box.x + box.width - 4;
         graphics.fill(barX, box.y + 2, barX + 2, box.y + box.height - 2, EDGE);
-        int progress = Math.round((box.height - 4) * vehicle.doorMovement(side, partialTick));
+        int progress = Math.round((box.height - 4) * vehicle.doorMovement(vehicleSide, partialTick));
         graphics.fill(barX, box.y + box.height - 2 - progress, barX + 2, box.y + box.height - 2, AMBER);
     }
 
@@ -250,8 +273,10 @@ public final class TrainDrivingOverlay {
                                 float partialTick, double mouseX, double mouseY) {
         if (mouseX < 0 || mouseY < 0) return;
         Component tip = null;
-        if (layout.speed.contains(mouseX, mouseY) || layout.data.contains(mouseX, mouseY)) {
-            tip = Component.empty().append(motion).append("\n")
+        if (layout.monitor.contains(mouseX, mouseY)) {
+            tip = text(monitorExpanded ? "monitor_collapse" : "monitor_expand");
+        } else if (layout.speed.contains(mouseX, mouseY) || layout.data.contains(mouseX, mouseY)) {
+            tip = Component.empty().append(TrainDrivingClient.condition(state)).append("\n").append(motion).append("\n")
                     .append(drivingText("motion", number(state.acceleration()), number(state.grade() * 1000))).append("\n")
                     .append(text("grade_hint")).append("\n")
                     .append(drivingText("traction", number(state.tractionForce() / 1000))).append("\n")
@@ -267,8 +292,6 @@ public final class TrainDrivingOverlay {
             tip = doorHint(VehicleDoor.LEFT, partialTick);
         } else if (layout.rightDoor().contains(mouseX, mouseY)) {
             tip = doorHint(VehicleDoor.RIGHT, partialTick);
-        } else if (layout.desk.contains(mouseX, mouseY)) {
-            tip = Component.empty().append(condition).append("\n").append(TrainDrivingClient.cursorHint()).append("\n").append(controls);
         }
         if (tip != null) graphics.renderTooltip(font, font.split(tip,
                 Math.min(320, Minecraft.getInstance().getWindow().getGuiScaledWidth() - 16)), (int) mouseX, (int) mouseY);
@@ -276,28 +299,42 @@ public final class TrainDrivingOverlay {
 
     private static Component doorHint(VehicleDoor side, float partialTick) {
         var vehicle = TrainDrivingClient.riddenVehicle();
-        return text("door_hint", text(vehicle.isDoorOpen(side) ? "close" : "open"),
-                Math.round(vehicle.doorMovement(side, partialTick) * 100));
+        var vehicleSide = TrainDrivingClient.doorSide(side);
+        return text("door_hint", text(vehicle.isDoorOpen(vehicleSide) ? "close" : "open"),
+                Math.round(vehicle.doorMovement(vehicleSide, partialTick) * 100));
     }
 
     public static void click(double mouseX, double mouseY) {
         var state = TrainDrivingClient.state();
         var layout = layout();
+        if (layout.monitor.contains(mouseX, mouseY)) {
+            release();
+            monitorExpanded = !monitorExpanded;
+            return;
+        }
         if (!state.emergency() && mouseY >= layout.handle.y + HANDLE_TOP - 3
                 && (layout.power().contains(mouseX, mouseY) || layout.brake().contains(mouseX, mouseY))) {
             draggingPower = layout.power().contains(mouseX, mouseY);
+            var box = draggingPower ? layout.power() : layout.brake();
+            int count = draggingPower ? TrainControlProfile.POWER_NOTCHES : TrainControlProfile.BRAKE_NOTCHES;
+            requestedNotch = draggingPower ? state.powerNotch() : state.brakeNotch();
+            int position = handlePosition(box, requestedNotch, count);
+            var grip = new Box(box.x + box.width / 2 - 11, position - 3, 23, 7);
+            handleGrabOffset = grip.contains(mouseX, mouseY) ? mouseY - position : 0;
             drag(mouseY);
             return;
         }
         Action action = null;
-        if (layout.reverser().contains(mouseX, mouseY) && state.speed() == 0
+        if (layout.reverser().contains(mouseX, mouseY)
                 && state.powerNotch() == 0 && state.brakeNotch() == 0) action = Action.REVERSER_NEXT;
         else if (layout.emergency().contains(mouseX, mouseY) && (!state.emergency() || state.speed() == 0)) {
             action = state.emergency() ? Action.EMERGENCY_RELEASE : Action.EMERGENCY_APPLY;
         } else if (layout.leftDoor().contains(mouseX, mouseY)) {
-            action = TrainDrivingClient.riddenVehicle().isDoorOpen(VehicleDoor.LEFT) ? Action.DOOR_LEFT_CLOSE : Action.DOOR_LEFT_OPEN;
+            action = TrainDrivingClient.riddenVehicle().isDoorOpen(TrainDrivingClient.doorSide(VehicleDoor.LEFT))
+                    ? Action.DOOR_LEFT_CLOSE : Action.DOOR_LEFT_OPEN;
         } else if (layout.rightDoor().contains(mouseX, mouseY)) {
-            action = TrainDrivingClient.riddenVehicle().isDoorOpen(VehicleDoor.RIGHT) ? Action.DOOR_RIGHT_CLOSE : Action.DOOR_RIGHT_OPEN;
+            action = TrainDrivingClient.riddenVehicle().isDoorOpen(TrainDrivingClient.doorSide(VehicleDoor.RIGHT))
+                    ? Action.DOOR_RIGHT_CLOSE : Action.DOOR_RIGHT_OPEN;
         }
         if (action != null) TrainDrivingClient.send(action);
     }
@@ -318,7 +355,8 @@ public final class TrainDrivingOverlay {
         boolean power = draggingPower;
         var box = power ? layout().power() : layout().brake();
         int count = power ? TrainControlProfile.POWER_NOTCHES : TrainControlProfile.BRAKE_NOTCHES;
-        int target = (int) Math.round(Math.clamp((box.y + HANDLE_BOTTOM - mouseY) / (HANDLE_BOTTOM - HANDLE_TOP), 0, 1) * count);
+        int target = (int) Math.round(Math.clamp((box.y + HANDLE_BOTTOM - mouseY + handleGrabOffset)
+                / (HANDLE_BOTTOM - HANDLE_TOP), 0, 1) * count);
         if (target != requestedNotch) {
             requestedNotch = target;
             TrainDrivingClient.send(power ? Action.POWER_SET : Action.BRAKE_SET, target);
@@ -327,6 +365,7 @@ public final class TrainDrivingOverlay {
 
     public static void release() {
         draggingPower = null;
+        handleGrabOffset = 0;
         requestedNotch = -1;
     }
 
@@ -334,6 +373,7 @@ public final class TrainDrivingOverlay {
         displayed = null;
         language = null;
         values = null;
+        monitorExpanded = false;
         release();
     }
 }

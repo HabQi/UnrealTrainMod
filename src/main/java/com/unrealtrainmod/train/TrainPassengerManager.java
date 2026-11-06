@@ -27,10 +27,7 @@ import net.minecraft.world.entity.Entity;
 import net.neoforged.neoforge.network.PacketDistributor;
 import net.neoforged.neoforge.network.handling.IPayloadContext;
 
-/**
- * Ordinary passenger sessions. They share the vehicle entity with drivers but never touch manual
- * driving state, the driver limit or command motion.
- */
+/** Vehicle-local walking sessions; driver entries never touch manual controls or driver limits. */
 public final class TrainPassengerManager {
     public static final int MAX_PASSENGERS = 32;
     private static final int INPUT_REPEAT_TICKS = 2;
@@ -46,35 +43,32 @@ public final class TrainPassengerManager {
 
     public boolean isPassenger(ServerPlayer player, TrainEntity entity) {
         var session = sessions.get(player.getUUID());
-        return session != null && session.player == player && session.vehicle.equals(entity.getUUID());
+        return session != null && session.role == TrainWalkRole.PASSENGER && session.player == player
+                && session.vehicle.equals(entity.getUUID());
     }
 
     public boolean hasPassenger(TrainConsist train) {
-        return sessions.values().stream().anyMatch(session -> train.member(session.vehicle) != null);
+        return sessions.values().stream().anyMatch(session -> session.role == TrainWalkRole.PASSENGER
+                && train.member(session.vehicle) != null);
     }
 
     /** Server-side lookup used by {@link TrainEntity#getPassengerRidingPosition(Entity)}. */
     public TrainPassengerClientState.LocalPoint localPoint(Entity player, TrainEntity entity) {
         var session = sessions.get(player.getUUID());
         return session == null || !session.vehicle.equals(entity.getUUID())
-                ? null : new TrainPassengerClientState.LocalPoint(session.localX, session.localZ);
+                ? null : new TrainPassengerClientState.LocalPoint(session.localX, session.floorY, session.localZ);
+    }
+
+    /** Capture before startRiding can place the player at a default riding anchor. */
+    static TrackVector boardingPoint(ServerPlayer player, TrainEntity entity) {
+        return VehiclePose.worldToLocal(body(entity), new TrackVector(player.getX(), player.getY(), player.getZ()));
     }
 
     public boolean board(ServerPlayer player, TrainEntity entity) {
-        var existing = sessions.get(player.getUUID());
-        if (existing != null) {
-            if (!existing.exiting) return false;
-            remove(existing);
-        }
         if (!player.isAlive() || player.isSpectator() || player.isShiftKeyDown() || player.isPassenger()
                 || entity.isRemoved()) return false;
         if (!player.getMainHandItem().is(UnrealTrainMod.TICKET.get())) {
             player.displayClientMessage(Component.translatable("item.unrealtrainmod.ticket.required"), true);
-            return false;
-        }
-        var spec = spec(entity);
-        if (spec == null || !spec.enabled()) {
-            player.displayClientMessage(Component.translatable("item.unrealtrainmod.ticket.not_boardable"), true);
             return false;
         }
         if (sessionsFor(entity).size() >= MAX_PASSENGERS) {
@@ -93,10 +87,23 @@ public final class TrainPassengerManager {
                     + exception.reason().name().toLowerCase(Locale.ROOT)), true);
             return false;
         }
-        var body = body(entity);
-        var local = VehiclePose.worldToLocal(body, new TrackVector(player.getX(), player.getY(), player.getZ()));
+        return board(player, entity, boardingPoint(player, entity), TrainWalkRole.PASSENGER);
+    }
+
+    /** Both roles use the ticket boarding sequence; controls and role limits belong to their callers. */
+    boolean board(ServerPlayer player, TrainEntity entity, TrackVector local, TrainWalkRole role) {
+        var existing = sessions.get(player.getUUID());
+        if (existing != null) {
+            if (!existing.exiting) return false;
+            remove(existing);
+        }
+        var spec = enabledSpec(entity);
+        if (spec == null) {
+            player.displayClientMessage(Component.translatable("item.unrealtrainmod.ticket.not_boardable"), true);
+            return false;
+        }
         var session = new TrainPassengerSession(player, UUID.randomUUID(), entity.getUUID(),
-                spec.clampX(local.x()), spec.clampZ(local.z()));
+                spec.clampX(local.x()), spec.centerY(), spec.clampZ(local.z()), role);
         sessions.put(player.getUUID(), session);
         if (!player.startRiding(entity)) {
             sessions.remove(player.getUUID());
@@ -164,13 +171,11 @@ public final class TrainPassengerManager {
             }
             var entity = (TrainEntity) session.player.getVehicle();
             if (session.inputAge < INPUT_REPEAT_TICKS) {
-                var spec = spec(entity);
-                if (spec != null && spec.enabled()) {
-                    var point = TrainWalkStep.move(spec, session.localX, session.localZ,
-                            session.inputX, session.inputZ);
-                    session.localX = point.x();
-                    session.localZ = point.z();
-                }
+                var spec = enabledSpec(entity);
+                var point = TrainWalkStep.move(spec, session.localX, session.localZ,
+                        session.inputX, session.inputZ);
+                session.localX = point.x();
+                session.localZ = point.z();
             }
             if (session.inputAge < Integer.MAX_VALUE) session.inputAge++;
             session.appliedSequence = session.acceptedSequence;
@@ -197,16 +202,22 @@ public final class TrainPassengerManager {
     /** Sends the complete state for late observers when the entity or player enters tracking range. */
     void startTracking(ServerPlayer tracker, Entity target) {
         if (target instanceof TrainEntity entity) {
-            for (var session : sessionsFor(entity)) send(session, tracker, true);
+            for (var session : allSessionsFor(entity)) send(session, tracker, true);
         } else if (target instanceof ServerPlayer player) {
             var session = sessions.get(player.getUUID());
             if (session != null && session.player == player) send(session, tracker, true);
         }
     }
 
+    private List<TrainPassengerSession> allSessionsFor(TrainEntity entity) {
+        return sessions.values().stream().filter(session -> !session.exiting
+                && session.vehicle.equals(entity.getUUID())).toList();
+    }
+
     public void dismounted(ServerPlayer player, TrainEntity entity) {
         var session = sessions.get(player.getUUID());
-        if (session == null || session.player != player || !session.vehicle.equals(entity.getUUID())) return;
+        if (session == null || session.player != player
+                || !session.vehicle.equals(entity.getUUID())) return;
         // LivingEntity.stopRiding removes the passenger before asking for the dismount position.
         // Keep the personal local point available for that call; the next manager tick releases it.
         session.exiting = true;
@@ -255,12 +266,13 @@ public final class TrainPassengerManager {
     private TrainPassengerStatePayload payload(TrainPassengerSession session, boolean present) {
         return new TrainPassengerStatePayload(session.player.getUUID(), session.vehicle, level.dimension().location(),
                 session.session, present, session.appliedSequence, level.getGameTime(),
-                session.localX, session.localZ, session.pose, session.heightStep);
+                session.localX, session.floorY, session.localZ, session.pose, session.heightStep, session.role);
     }
 
     private List<TrainPassengerSession> sessionsFor(TrainEntity entity) {
         return sessions.values().stream()
-                .filter(session -> !session.exiting && session.vehicle.equals(entity.getUUID())).toList();
+                .filter(session -> session.role == TrainWalkRole.PASSENGER && !session.exiting
+                        && session.vehicle.equals(entity.getUUID())).toList();
     }
 
     private boolean valid(TrainPassengerSession session) {
@@ -268,16 +280,13 @@ public final class TrainPassengerManager {
         return player.serverLevel() == level && player.isAlive() && !player.isSpectator() && !player.hasDisconnected()
                 && !player.isRemoved() && !player.isChangingDimension()
                 && player.getVehicle() instanceof TrainEntity entity && entity.getUUID().equals(session.vehicle)
-                && !entity.isRemoved() && enabledSpec(entity) != null;
-    }
-
-    private static VehicleInteriorSpec spec(TrainEntity entity) {
-        var model = VehicleCatalog.find(entity.getModelId());
-        return model == null ? null : model.interiorSpec();
+                && !entity.isRemoved() && enabledSpec(entity) != null
+                && (session.role != TrainWalkRole.DRIVER || manager.drivers().isDriver(player, entity));
     }
 
     private static VehicleInteriorSpec enabledSpec(TrainEntity entity) {
-        var spec = spec(entity);
+        var model = VehicleCatalog.find(entity.getModelId());
+        var spec = model == null ? null : model.interiorSpec();
         return spec != null && spec.enabled() ? spec : null;
     }
 

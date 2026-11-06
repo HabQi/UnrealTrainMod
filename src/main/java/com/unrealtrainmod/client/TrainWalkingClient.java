@@ -48,7 +48,7 @@ public final class TrainWalkingClient {
         var mc = Minecraft.getInstance();
         if (mc.level == null || !mc.level.dimension().location().equals(incoming.dimension())) return;
         var entry = TrainPassengerClientState.accept(incoming.player(), incoming.vehicle(), incoming.session(),
-                incoming.sequence(), incoming.tick(), incoming.localX(), incoming.localZ(),
+                incoming.sequence(), incoming.tick(), incoming.localX(), incoming.floorY(), incoming.localZ(),
                 incoming.pose(), incoming.heightStep(), incoming.present());
         if (!incoming.present()) {
             if (mc.player != null && mc.player.getUUID().equals(incoming.player())
@@ -63,8 +63,6 @@ public final class TrainWalkingClient {
     }
 
     private static void acceptLocal(TrainPassengerStatePayload incoming, LocalPlayer player) {
-        // A walking session excludes the driving context; drop a stale driver snapshot for the same vehicle.
-        TrainDrivingClient.clear();
         boolean newSession = snapshot == null || !snapshot.session().equals(incoming.session());
         if (!newSession && incoming.sequence() < snapshot.sequence()) return;
         snapshot = incoming;

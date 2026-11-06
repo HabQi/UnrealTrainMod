@@ -76,7 +76,7 @@ public final class VehicleInteriorOverrides {
         if (json.has("enabled") && !GsonHelper.getAsBoolean(json, "enabled", true)) {
             return VehicleInteriorSpec.DISABLED;
         }
-        double floor = GsonHelper.getAsDouble(json, "floor", 0);
+        double floor = GsonHelper.getAsDouble(json, "floor", definition.interiorSpec().centerY());
         if (json.has("auto") && GsonHelper.getAsBoolean(json, "auto", false)) {
             return VehicleInteriorSpec.fromBounds(definition.bounds(), floor);
         }

@@ -6,6 +6,7 @@ package com.unrealtrainmod.client;
 
 import com.mojang.blaze3d.platform.InputConstants;
 import com.unrealtrainmod.client.gui.TrainDrivingOverlay;
+import com.unrealtrainmod.client.gui.TrainMonitorOverlay;
 import com.unrealtrainmod.entity.TrainEntity;
 import com.unrealtrainmod.network.TrackSyncEvent;
 import com.unrealtrainmod.network.payload.TrainControlInputPayload;
@@ -21,7 +22,6 @@ import net.minecraft.network.chat.Component;
 import net.neoforged.neoforge.client.event.CustomizeGuiOverlayEvent;
 import net.neoforged.neoforge.client.event.ClientPlayerNetworkEvent;
 import net.neoforged.neoforge.client.event.ClientTickEvent;
-import net.neoforged.neoforge.client.event.MovementInputUpdateEvent;
 import net.neoforged.neoforge.client.event.InputEvent;
 import net.neoforged.neoforge.client.event.RegisterKeyMappingsEvent;
 import net.neoforged.neoforge.client.event.RenderGuiEvent;
@@ -43,8 +43,8 @@ public final class TrainDrivingClient {
         }
         @Override public boolean conflicts(IKeyConflictContext other) { return other == this || other == KeyConflictContext.IN_GAME; }
     };
-    private static final KeyMapping POWER = key("power", GLFW.GLFW_KEY_S);
-    private static final KeyMapping BRAKE = key("brake", GLFW.GLFW_KEY_W);
+    private static final KeyMapping POWER = key("power", GLFW.GLFW_KEY_DOWN);
+    private static final KeyMapping BRAKE = key("brake", GLFW.GLFW_KEY_UP);
     private static final KeyMapping REVERSER = key("reverser", GLFW.GLFW_KEY_R);
     private static final KeyMapping EMERGENCY = key("emergency", GLFW.GLFW_KEY_F);
     private static final KeyMapping DOOR_LEFT = key("door_left", GLFW.GLFW_KEY_J);
@@ -97,10 +97,6 @@ public final class TrainDrivingClient {
         return cursorOwned && consoleVisible() && mc.isWindowActive() && !mc.isPaused();
     }
 
-    public static Component cursorHint() {
-        return Component.translatable(PREFIX + "console.cursor_hint", CURSOR.getTranslatedKeyMessage());
-    }
-
     public static Component controlHint() {
         var mc = Minecraft.getInstance();
         return Component.translatable(PREFIX + "help", POWER.getTranslatedKeyMessage(), BRAKE.getTranslatedKeyMessage(),
@@ -144,10 +140,9 @@ public final class TrainDrivingClient {
             sequence = incoming.sequence();
             TrainDrivingOverlay.clear();
         }
+        if (newSession || !snapshot.train().equals(incoming.train())) TrainMonitorOverlay.clear();
         snapshot = incoming;
         silence = 0;
-        // A driver control session means this player is not a walking passenger; drop any stale local point.
-        TrainWalkingClient.clearLocal();
         if (incoming.feedback() != TrainControlSyncPayload.Feedback.NONE && mc.player != null) {
             mc.player.displayClientMessage(Component.translatable(PREFIX
                     + incoming.feedback().name().toLowerCase(Locale.ROOT)), true);
@@ -165,6 +160,7 @@ public final class TrainDrivingClient {
         }
         if (usingCursor()) TrainDrivingOverlay.drag(mouseY());
         for (var key : new KeyMapping[] {POWER, BRAKE, REVERSER, EMERGENCY, DOOR_LEFT, DOOR_RIGHT, CURSOR}) while (key.consumeClick()) { }
+        if (riding()) TrainMonitorOverlay.tick(snapshot, silence > 20);
         if (riding() && ++heartbeat >= 10) send(Action.HEARTBEAT);
     }
 
@@ -256,22 +252,19 @@ public final class TrainDrivingClient {
     private static void door(VehicleDoor side) {
         var vehicle = riddenVehicle();
         if (vehicle == null) return;
-        boolean open = !vehicle.isDoorOpen(side);
+        boolean open = !vehicle.isDoorOpen(doorSide(side));
         send(side == VehicleDoor.LEFT
                 ? (open ? Action.DOOR_LEFT_OPEN : Action.DOOR_LEFT_CLOSE)
                 : (open ? Action.DOOR_RIGHT_OPEN : Action.DOOR_RIGHT_CLOSE));
     }
 
-    public static void movement(MovementInputUpdateEvent event) {
-        if (!riding()) return;
-        var input = event.getInput();
-        input.forwardImpulse = input.leftImpulse = 0;
-        input.up = input.down = input.left = input.right = input.jumping = false;
-        // Keep shiftKeyDown: the normal dismount packet ends the server session.
+    public static VehicleDoor doorSide(VehicleDoor side) {
+        return side.inFrame(snapshot.front().sign());
     }
 
     public static void render(RenderGuiEvent.Post event) {
-        if (consoleVisible()) TrainDrivingOverlay.render(event.getGuiGraphics(), snapshot,
+        if (!consoleVisible()) return;
+        TrainDrivingOverlay.render(event.getGuiGraphics(), snapshot,
                 event.getPartialTick().getGameTimeDeltaPartialTick(false),
                 usingCursor() ? mouseX() : -1, usingCursor() ? mouseY() : -1);
     }
@@ -310,6 +303,7 @@ public final class TrainDrivingClient {
         sequence = 0;
         silence = heartbeat = 0;
         TrainDrivingOverlay.clear();
+        TrainMonitorOverlay.clear();
         updateCursor();
     }
 
