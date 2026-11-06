@@ -28,6 +28,7 @@ import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.renderer.LightTexture;
 import net.minecraft.client.renderer.texture.OverlayTexture;
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
@@ -53,6 +54,7 @@ public final class ModelRenderQueue implements ModelDrawSink, AutoCloseable {
     private int[] sortScratch = new int[0], gpuOffset = new int[0];
     private float[] depth = new float[0];
     private int triangles;
+    private int lights;
     private boolean started, customShader, collectStats, statsFrameStarted;
     private ByteBufferBuilder fallbackBuffer;
 
@@ -78,6 +80,9 @@ public final class ModelRenderQueue implements ModelDrawSink, AutoCloseable {
     }
 
     public void resetStatistics() { stats.close(); statsFrameStarted = collectStats = false; }
+
+    @Override public int lights() { return lights; }
+    @Override public void lights(int value) { lights = value; }
 
     public void submit(LoadedModel model, PoseStack pose, int light) {
         for (var instance : model.instances()) submit(instance, instance.visibleParts(), pose, light);
@@ -108,8 +113,11 @@ public final class ModelRenderQueue implements ModelDrawSink, AutoCloseable {
         var snapshot = pose.copy();
         var gpu = source.gpu();
         for (var batch : selection.batches()) {
-            draws.add(new Draw(batch, customShader && gpu != null ? gpu.part(batch) : null, snapshot, light,
-                    directionalLighting));
+            if (!batch.lightLayer().enabled(lights)) continue;
+            boolean emissive = batch.lightLayer().emissive();
+            draws.add(new Draw(batch, customShader && gpu != null ? gpu.part(batch) : null, snapshot,
+                    emissive ? LightTexture.FULL_BRIGHT : light,
+                    !emissive && directionalLighting));
         }
         if (frameStats != null) frameStats.addEnqueue(System.nanoTime() - enqueueStart);
     }
@@ -294,42 +302,46 @@ public final class ModelRenderQueue implements ModelDrawSink, AutoCloseable {
     private void drawTranslucentPass() {
         if (ClientConfig.USE_STATIC_TRANSLUCENT_BATCHES.getAsBoolean()) {
             drawStaticTranslucent();
+            drawLightPass();
             return;
         }
         collectTriangles();
-        if (triangles == 0) return;
-        if (ClientConfig.SORT_TRANSLUCENT_TRIANGLES.getAsBoolean()) sortTriangles();
-        try (var state = new ModelRenderState(frontLighting)) {
-            prepareGpuIndices();
-            for (int start = 0; start < triangles;) {
-                int drawIndex = triangleDraw[order[start]];
-                var draw = draws.get(drawIndex);
-                int end = start + 1;
-                while (end < triangles && canMerge(draw, draws.get(triangleDraw[order[end]]))) end++;
-                int alphaPass = draw.batch().alphaPass(true);
-                state.use(ModelRenderTypes.get(draw.batch().texture(), draw.batch().doubleSided(), true, false), true, draw.batch().doubleSided());
-                if (draw.gpu() != null) {
-                    state.prepareGpu(draw.pose(), draw.light(), alphaPass, draw.directionalLighting(), modelView, projection);
-                    draw.gpu().mesh().draw(true, gpuOffset[start], (end - start) * 3);
-                } else {
-                    state.endGpu();
-                    drawFallback(state, draw, alphaPass, start, end, true);
+        if (triangles != 0) {
+            if (ClientConfig.SORT_TRANSLUCENT_TRIANGLES.getAsBoolean()) sortTriangles();
+            try (var state = new ModelRenderState(frontLighting)) {
+                prepareGpuIndices();
+                for (int start = 0; start < triangles;) {
+                    int drawIndex = triangleDraw[order[start]];
+                    var draw = draws.get(drawIndex);
+                    int end = start + 1;
+                    while (end < triangles && canMerge(draw, draws.get(triangleDraw[order[end]]))) end++;
+                    int alphaPass = draw.batch().alphaPass(true);
+                    state.use(ModelRenderTypes.get(draw.batch().texture(), draw.batch().doubleSided(), true, false), true, draw.batch().doubleSided());
+                    if (draw.gpu() != null) {
+                        state.prepareGpu(draw.pose(), draw.light(), alphaPass, draw.directionalLighting(), modelView, projection);
+                        draw.gpu().mesh().draw(true, gpuOffset[start], (end - start) * 3);
+                    } else {
+                        state.endGpu();
+                        drawFallback(state, draw, alphaPass, start, end, true);
+                    }
+                    if (collectStats) stats.translucentDraw(end - start);
+                    start = end;
                 }
-                if (collectStats) stats.translucentDraw(end - start);
-                start = end;
             }
         }
+        drawLightPass();
     }
 
     /** Submission-order comparison path: GPU draws reuse canonical IBO ranges without collecting triangles. */
     private void drawStaticTranslucent() {
         int start = 0;
-        while (start < draws.size() && draws.get(start).batch().category() == RenderCategory.CUTOUT) start++;
+        while (start < draws.size() && (draws.get(start).batch().category() == RenderCategory.CUTOUT
+                || draws.get(start).batch().isLightLayer())) start++;
         if (start == draws.size()) return;
         try (var state = new ModelRenderState(frontLighting)) {
             while (start < draws.size()) {
                 var draw = draws.get(start);
-                if (draw.batch().category() == RenderCategory.CUTOUT) {
+                if (draw.batch().category() == RenderCategory.CUTOUT || draw.batch().isLightLayer()) {
                     start++;
                     continue;
                 }
@@ -338,7 +350,7 @@ public final class ModelRenderQueue implements ModelDrawSink, AutoCloseable {
                 if (draw.gpu() != null) {
                     while (end < draws.size()) {
                         var next = draws.get(end);
-                        if (next.batch().category() == RenderCategory.CUTOUT || !canMerge(draw, next)
+                        if (next.batch().category() == RenderCategory.CUTOUT || next.batch().isLightLayer() || !canMerge(draw, next)
                                 || next.gpu().firstIndex() != draw.gpu().firstIndex() + count) break;
                         count += next.batch().indexCount();
                         end++;
@@ -360,6 +372,30 @@ public final class ModelRenderQueue implements ModelDrawSink, AutoCloseable {
         }
     }
 
+    /** Draw RTM light overlays in submission order, avoiding the global translucent triangle sort. */
+    private void drawLightPass() {
+        boolean any = false;
+        for (var draw : draws) if (draw.batch().isLightLayer()) { any = true; break; }
+        if (!any) return;
+        try (var state = new ModelRenderState(frontLighting)) {
+            for (var draw : draws) {
+                var batch = draw.batch();
+                if (!batch.isLightLayer()) continue;
+                int alphaPass = batch.alphaPass(true);
+                state.use(ModelRenderTypes.get(batch.texture(), batch.doubleSided(), true, false), true,
+                        batch.doubleSided());
+                if (draw.gpu() != null) {
+                    state.prepareGpu(draw.pose(), draw.light(), alphaPass, draw.directionalLighting(), modelView, projection);
+                    draw.gpu().mesh().draw(false, draw.gpu().firstIndex(), batch.indexCount());
+                } else {
+                    state.endGpu();
+                    drawFallback(state, draw, alphaPass, 0, batch.indexCount() / 3, false);
+                }
+                if (collectStats) stats.translucentDraw(batch.indexCount() / 3);
+            }
+        }
+    }
+
     /** Only adjacent triangles with the same alpha policy, GPU mesh and instance can join. */
     private static boolean canMerge(Draw first, Draw next) {
         if (first == next) return true;
@@ -375,7 +411,7 @@ public final class ModelRenderQueue implements ModelDrawSink, AutoCloseable {
         triangles = 0;
         for (int d = 0; d < draws.size(); d++) {
             var draw = draws.get(d);
-            if (draw.batch().category() == RenderCategory.CUTOUT) continue;
+            if (draw.batch().category() == RenderCategory.CUTOUT || draw.batch().isLightLayer()) continue;
             float[] centers = draw.batch().centers();
             ensureCapacity(Math.addExact(triangles, centers.length / 3));
             var viewPose = new Matrix4f(modelView).mul(draw.pose().pose());
@@ -490,6 +526,7 @@ public final class ModelRenderQueue implements ModelDrawSink, AutoCloseable {
         sortedMeshes.clear();
         triangles = 0;
         started = false;
+        lights = 0;
         statsFrameStarted = collectStats = false;
     }
 

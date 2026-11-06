@@ -62,6 +62,8 @@ public final class TrainEntity extends Entity {
             SynchedEntityData.defineId(TrainEntity.class, EntityDataSerializers.COMPOUND_TAG);
     private static final EntityDataAccessor<CompoundTag> RUNTIME_STATE =
             SynchedEntityData.defineId(TrainEntity.class, EntityDataSerializers.COMPOUND_TAG);
+    private static final EntityDataAccessor<Byte> LIGHTS =
+            SynchedEntityData.defineId(TrainEntity.class, EntityDataSerializers.BYTE);
     /** Legacy RTM advances a door by one unit per tick for {@code MAX_DOOR_MOVE = 60} ticks. */
     private static final int DOOR_MOVE_TICKS = 60;
     private TrainAnchor railAnchor;
@@ -92,6 +94,7 @@ public final class TrainEntity extends Entity {
         builder.define(RAIL_POSE, new CompoundTag());
         builder.define(DOOR_STATE, new CompoundTag());
         builder.define(RUNTIME_STATE, new CompoundTag());
+        builder.define(LIGHTS, (byte) 0);
     }
 
     public ResourceLocation getModelId() {
@@ -114,6 +117,17 @@ public final class TrainEntity extends Entity {
     }
 
     public VehicleRuntimeState runtimeState() { return runtimeState; }
+
+    /** Independent authored RTM front/tail texture layers; persisted and tracked for every observer. */
+    public int lights() { return entityData.get(LIGHTS); }
+    public boolean isHeadLightOn() { return (lights() & 1) != 0; }
+    public boolean isTailLightOn() { return (lights() & 2) != 0; }
+
+    public void setLight(boolean head, boolean enabled) {
+        if (level().isClientSide) return;
+        int bit = head ? 1 : 2;
+        entityData.set(LIGHTS, (byte) (enabled ? lights() | bit : lights() & ~bit));
+    }
 
     /** Server publication and lifecycle reset; equal values do not dirty tracking data. Never persisted in NBT. */
     public void setRuntimeState(VehicleRuntimeState state) {
@@ -361,6 +375,7 @@ public final class TrainEntity extends Entity {
     protected void readAdditionalSaveData(CompoundTag tag) {
         var id = ResourceLocation.tryParse(tag.getString("ModelId"));
         entityData.set(MODEL_ID, id == null ? "" : id.toString());
+        entityData.set(LIGHTS, (byte) (tag.getByte("Lights") & 3));
         railPose = motionStartPose = null;
         motionStartTick = Long.MIN_VALUE;
         poseRevision++;
@@ -417,6 +432,7 @@ public final class TrainEntity extends Entity {
     @Override
     protected void addAdditionalSaveData(CompoundTag tag) {
         tag.putString("ModelId", entityData.get(MODEL_ID));
+        tag.putByte("Lights", entityData.get(LIGHTS));
         tag.putBoolean("FrontCouplingEnabled", frontCouplingEnabled);
         tag.putBoolean("RearCouplingEnabled", rearCouplingEnabled);
         if (trainId != null) tag.putUUID("TrainId", trainId);

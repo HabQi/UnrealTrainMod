@@ -17,6 +17,7 @@ import com.unrealtrainmod.client.RenderCategory;
 import com.unrealtrainmod.client.renderer.RenderBatch;
 import com.unrealtrainmod.model.IndexedMesh;
 import com.unrealtrainmod.model.MaterialRenderMode;
+import com.unrealtrainmod.model.ModelLightLayer;
 import com.unrealtrainmod.model.importer.ModelImporter;
 import com.unrealtrainmod.resource.cache.ModelCache;
 import it.unimi.dsi.fastutil.ints.IntArrayList;
@@ -162,6 +163,35 @@ public final class ModelPreparer {
                     // Categories retain the same vertex/color arrays; upload these vertices only once.
                     var selectedMesh = new IndexedMesh(original.vertices(), original.colors(), selected.toIntArray());
                     batches.add(new RenderBatch(selectedMesh, texture, category, mode, doubleSided));
+                }
+                if (binding != null && binding.lights() != null) {
+                    int[] emissiveColors = null;
+                    for (var layer : List.of(ModelLightLayer.OFF, ModelLightLayer.HEAD, ModelLightLayer.TAIL)) {
+                        var asset = binding.lights().texture(layer);
+                        if (asset == null) continue;
+                        var lightTexture = textures.load(asset);
+                        var selected = new IntArrayList();
+                        for (int i = 0; i < indices.length; i += 3) {
+                            if (lightTexture.alpha().classify(original.vertices(), original.colors(),
+                                    indices[i], indices[i + 1], indices[i + 2], true, MaterialRenderMode.TRANSLUCENT) != null) {
+                                selected.add(indices[i]); selected.add(indices[i + 1]); selected.add(indices[i + 2]);
+                            }
+                        }
+                        if (selected.isEmpty()) continue;
+                        int[] colors = original.colors();
+                        if (layer.emissive()) {
+                            if (emissiveColors == null) {
+                                emissiveColors = colors.clone();
+                                for (int i = 0; i < emissiveColors.length; i++) {
+                                    emissiveColors[i] = (colors[i] & 0xffffff)
+                                            | Math.round((colors[i] >>> 24) * 0.8f) << 24;
+                                }
+                            }
+                            colors = emissiveColors;
+                        }
+                        batches.add(RenderBatch.light(new IndexedMesh(original.vertices(), colors, selected.toIntArray()),
+                                lightTexture.id(), doubleSided, layer));
+                    }
                 }
             }
             parts.add(new ModelPart(index, part.name(), part.visible(), batches));

@@ -32,14 +32,18 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.util.GsonHelper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /** Converts RTM vehicle configurations without publishing catalogs. */
 final class RtmVehicleAdapter {
+    private static final Logger LOGGER = LoggerFactory.getLogger(RtmVehicleAdapter.class);
     private final Map<ResourceLocation, VehicleDefinition> definitions;
     private final Map<PackageAsset, ModelBounds> boundsCache = new HashMap<>();
     private final LoadReport report;
@@ -370,9 +374,35 @@ final class RtmVehicleAdapter {
             if (texture.size() < 2) throw new IOException("Expected material name and texture path");
             String material = texture.get(0).getAsString();
             var image = archive.resolve(prefix, texture.get(1).getAsString());
-            boolean alphaBlend = texture.size() > 2 && List.of(texture.get(2).getAsString().split(","))
-                    .stream().anyMatch(flag -> flag.strip().equals("AlphaBlend"));
-            textures.put(material, new ModelTexture(image, alphaBlend));
+            var flags = texture.size() > 2 ? Arrays.stream(texture.get(2).getAsString().split(","))
+                    .map(String::strip).toList() : List.<String>of();
+            ModelTexture.Lights lights = null;
+            if (flags.contains("Light")) {
+                if (texture.size() > 6) throw new IOException(model + ": at most three light textures are supported");
+                var layers = new PackageAsset[3];
+                for (int layer = 0; layer < layers.length; layer++) {
+                    if (texture.size() > 3) {
+                        if (layer + 3 < texture.size()) {
+                            layers[layer] = archive.resolve(prefix, texture.get(layer + 3).getAsString());
+                        }
+                    } else if (flags.contains("OneTex")) {
+                        layers[layer] = image;
+                    } else {
+                        String path = texture.get(1).getAsString();
+                        int dot = path.lastIndexOf('.');
+                        String lightPath = (dot <= path.lastIndexOf('/') ? path : path.substring(0, dot))
+                                + "_light" + layer + ".png";
+                        try {
+                            layers[layer] = archive.resolve(prefix, lightPath);
+                        } catch (IOException exception) {
+                            LOGGER.warn("RTM {} material '{}': ignoring missing light layer {}: {}",
+                                    asset, material, layer, lightPath);
+                        }
+                    }
+                }
+                lights = new ModelTexture.Lights(layers[0], layers[1], layers[2]);
+            }
+            textures.put(material, new ModelTexture(image, flags.contains("AlphaBlend"), lights));
         }
         return new ModelSource(asset, textures, readMaterialRenderModes(json, model), smoothing, cullFaces,
                 ModelSource.Format.MQO, ModelSource.MQO_SCALE, renderer);

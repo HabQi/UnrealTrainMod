@@ -8,7 +8,10 @@ import com.unrealtrainmod.UnrealTrainMod;
 import com.unrealtrainmod.entity.TrainEntity;
 import com.unrealtrainmod.network.payload.TrainControlInputPayload;
 import com.unrealtrainmod.network.payload.TrainControlSyncPayload;
+import com.unrealtrainmod.network.payload.TrainRouteProfile;
 import com.unrealtrainmod.network.payload.TrainControlSyncPayload.Feedback;
+import com.unrealtrainmod.track.TrackSegment;
+import com.unrealtrainmod.track.assembly.TrackAssemblyInstance;
 import com.unrealtrainmod.vehicle.VehicleDoor;
 import com.unrealtrainmod.vehicle.VehicleCatalog;
 import java.util.ArrayList;
@@ -168,6 +171,14 @@ public final class TrainDriverManager {
                 var side = left ? VehicleDoor.LEFT : VehicleDoor.RIGHT;
                 ((TrainEntity) session.player.getVehicle()).setDoorOpen(side.inFrame(session.front.sign()), open);
             }
+            case HEAD_LIGHT_ON, HEAD_LIGHT_OFF, TAIL_LIGHT_ON, TAIL_LIGHT_OFF -> {
+                controlChange = false;
+                boolean head = action == TrainControlInputPayload.Action.HEAD_LIGHT_ON
+                        || action == TrainControlInputPayload.Action.HEAD_LIGHT_OFF;
+                boolean enabled = action == TrainControlInputPayload.Action.HEAD_LIGHT_ON
+                        || action == TrainControlInputPayload.Action.TAIL_LIGHT_ON;
+                ((TrainEntity) session.player.getVehicle()).setLight(head, enabled);
+            }
             case HEARTBEAT -> { }
         }
         if (controlChange && feedback == Feedback.NONE) train.setControl(TrainControlProfile.control(power, brake, reverser, emergency));
@@ -240,7 +251,7 @@ public final class TrainDriverManager {
                 close(session);
                 session.player.displayClientMessage(Component.translatable("item.unrealtrainmod.key.coupling_overflow", MAX_DRIVERS), true);
             } else {
-                session.train = combined;
+                session.setTrain(combined);
                 send(session, true, Feedback.NONE);
                 session.player.displayClientMessage(Component.translatable("item.unrealtrainmod.crowbar.coupled"), true);
             }
@@ -261,7 +272,7 @@ public final class TrainDriverManager {
             if (drivers.isEmpty()) component.setControl(parked);
             else component.startManual(parked);
             for (var session : drivers) {
-                session.train = component;
+                session.setTrain(component);
                 send(session, true, Feedback.NONE);
             }
         }
@@ -290,14 +301,26 @@ public final class TrainDriverManager {
 
     void closeAll() { for (var session : List.copyOf(sessions.values())) close(session); }
 
+    void trackChanged(TrackSegment segment) {
+        for (var session : sessions.values()) session.monitorPath.trackChanged(segment);
+    }
+
+    void assemblyChanged(TrackAssemblyInstance assembly) {
+        for (var session : sessions.values()) session.monitorPath.assemblyChanged(assembly);
+    }
+
     private void send(TrainDriverSession session, boolean open, Feedback feedback) {
         var train = session.train;
         int direction = session.direction();
+        int monitorDirection = session.updateMonitorDirection();
+        var routeProfile = open ? manager.routeProfile(session, monitorDirection) : TrainRouteProfile.EMPTY;
         PacketDistributor.sendToPlayer(session.player, new TrainControlSyncPayload(session.id, level.dimension().location(),
                 train.id(), session.vehicle, session.front, open, session.sequence, TrainControlProfile.powerNotch(train.control()),
                 TrainControlProfile.brakeNotch(train.control()),
                 train.control().reverser().inFrame(direction), train.control().emergencyBrake(),
                 direction * train.actualSpeed(), direction * train.dynamics().acceleration(), direction * train.dynamics().grade(),
+                train.monitorEpoch(), monitorDirection * train.monitorDistance(), monitorDirection,
+                routeProfile,
                 direction * train.dynamics().tractionForce(), train.dynamics().brakeForce(),
                 train.stopReason(), feedback));
     }

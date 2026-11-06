@@ -16,13 +16,28 @@ public final class TrainDriverSession {
     final TrainCarEnd front;
     long sequence;
     int silentTicks;
+    int monitorDirection;
+    final TrainMonitorPath monitorPath = new TrainMonitorPath();
 
     TrainDriverSession(ServerPlayer player, TrainConsist train, UUID vehicle, TrainCarEnd front) {
         this.player = player;
         this.train = train;
         this.vehicle = vehicle;
         this.front = front;
+        monitorDirection = direction();
     }
 
     int direction() { return train.member(vehicle).direction() * front.sign(); }
+
+    void setTrain(TrainConsist value) {
+        monitorDirection *= train.member(vehicle).direction() * value.member(vehicle).direction();
+        train = value;
+        monitorPath.invalidate();
+    }
+
+    int updateMonitorDirection() {
+        if (train.actualSpeed() != 0) monitorDirection = train.actualSpeed() > 0 ? 1 : -1;
+        else if (train.control().reverser().direction() != 0) monitorDirection = train.control().reverser().direction();
+        return monitorDirection;
+    }
 }

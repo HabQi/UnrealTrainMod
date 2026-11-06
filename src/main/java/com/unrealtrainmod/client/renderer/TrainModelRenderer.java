@@ -47,6 +47,8 @@ public final class TrainModelRenderer {
                                TrainEntity entity, float partialTick, PoseStack pose, int light) {
         var stats = queue.statistics();
         long submitStart = stats == null ? 0L : System.nanoTime();
+        int previousLights = queue.lights();
+        queue.lights(entity == null ? 0 : entity.lights());
         try {
             for (var instance : model.instances()) {
                 long poseStart = stats == null ? 0L : System.nanoTime();
@@ -83,6 +85,7 @@ public final class TrainModelRenderer {
                 }
             }
         } finally {
+            queue.lights(previousLights);
             if (stats != null) stats.addSubmission(System.nanoTime() - submitStart);
         }
     }

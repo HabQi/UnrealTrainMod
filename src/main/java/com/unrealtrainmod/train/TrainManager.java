@@ -5,6 +5,8 @@
 package com.unrealtrainmod.train;
 
 import com.unrealtrainmod.entity.TrainEntity;
+import com.unrealtrainmod.network.payload.TrainRouteProfile;
+import com.unrealtrainmod.track.TrackConnection;
 import com.unrealtrainmod.track.TrackGraph;
 import com.unrealtrainmod.track.TrackGraphException;
 import com.unrealtrainmod.track.TrackSegmentChange;
@@ -74,10 +76,7 @@ public final class TrainManager {
     private final Consumer<TrackSegmentChange> listener = this::trackChanged;
     private final Map<UUID, Long> assemblyRevisions = new HashMap<>();
     private final Consumer<TrackAssemblyInstance> assemblyListener = this::assemblyChanged;
-    private final Consumer<TrackAssemblyInstance> assemblyRemoveListener = assembly -> {
-        reservations.removeAssembly(assembly);
-        assemblyRevisions.remove(assembly.id());
-    };
+    private final Consumer<TrackAssemblyInstance> assemblyRemoveListener = this::assemblyRemoved;
 
     private record CarCandidate(TrainCarState member, TrainEntity entity, double progress,
                                 VehiclePose pose, TrainAnchor anchor, AABB bounds) {}
@@ -290,6 +289,30 @@ public final class TrainManager {
             if (segment != null) intervals.add(new TrackOccupancyManager.Interval(segment.id(), 0, segment.geometry().getLength()));
         }
         return intervals;
+    }
+
+    TrainRouteProfile routeProfile(TrainDriverSession session, int direction) {
+        var train = session.train;
+        if (train.routeDirty() || train.window() == null || train.window().refreshRequested()) {
+            session.monitorPath.invalidate();
+            return TrainRouteProfile.EMPTY;
+        }
+        var car = train.member(session.vehicle);
+        var spec = VehicleCatalog.find(car.modelId()).motionSpec();
+        double reference = TrainMotion.carProgress(train.progress(), car.offset(),
+                VehiclePoseSolver.range(train.route().getLength(), spec, car.direction()));
+        var cursor = train.sampler().locate(reference);
+        int index = cursor.segmentIndex();
+        double local = cursor.distance();
+        // Match the sampler's outgoing-side convention when travelling backwards at a joint.
+        if (direction < 0 && local == 0 && index > 0) {
+            index--;
+            local = train.route().segmentLength(index);
+        }
+        var connection = train.route().connections().get(index);
+        var seed = new TrackConnection(connection.segmentId(), direction > 0 ? connection.fromStart() : !connection.fromStart());
+        if (direction < 0) local = train.route().segmentLength(index) - local;
+        return session.monitorPath.profile(graph, train, seed, local, direction);
     }
 
     /** No info(), graph(), recovery, reservations or world-loading queries belong to this path. */
@@ -786,7 +809,9 @@ public final class TrainManager {
     }
 
     private void commit(TrainConsist train, Candidate candidate, List<TrackOccupancyManager.Interval> intervals, boolean publish) {
+        double movement = candidate.progress() - train.progress();
         saveCandidate(train, candidate, intervals);
+        train.recordMovement(movement);
         for (var car : candidate.cars()) {
             car.entity().setRailAnchor(car.anchor());
             car.entity().advanceRailPose(car.pose());
@@ -1286,6 +1311,7 @@ public final class TrainManager {
 
     private void trackChanged(TrackSegmentChange change) {
         var segment = change.segment();
+        drivers.trackChanged(segment);
         for (var train : trains.values()) {
             if (change.type() == TrackSegmentChange.Type.REMOVED
                     && (occupancy.occupies(train.id(), segment.id()) || (train.window() != null && train.window().occupies(segment.id(), train)))) {
@@ -1301,6 +1327,7 @@ public final class TrainManager {
         reservations.indexAssembly(assembly);
         Long previous = assemblyRevisions.put(assembly.id(), assembly.revision());
         if (previous == null || previous == assembly.revision()) return;
+        drivers.assemblyChanged(assembly);
         for (var train : trains.values()) {
             if (train.routeDirty() || assembly.ports().values().stream().noneMatch(port -> train.usesNode(port.nodeId()))) continue;
             boolean occupiedPathClosed = !train.window().occupiedPathsEnabled(graph, train);
@@ -1309,6 +1336,12 @@ public final class TrainManager {
                 stop(train, StopReason.TURNOUT_ROUTE_UNAVAILABLE);
             } else train.window().requestRefresh();
         }
+    }
+
+    private void assemblyRemoved(TrackAssemblyInstance assembly) {
+        drivers.assemblyChanged(assembly);
+        reservations.removeAssembly(assembly);
+        assemblyRevisions.remove(assembly.id());
     }
 
     public void refreshTurnoutOccupancy() {

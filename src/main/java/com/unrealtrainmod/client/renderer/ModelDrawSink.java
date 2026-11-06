@@ -12,6 +12,9 @@ import com.unrealtrainmod.client.renderer.instancing.InstancingStats;
 
 /** Model commands are independent of the view and the eventual drawing backend. */
 public interface ModelDrawSink {
+    int lights();
+    void lights(int value);
+
     void submitGeometry(LoadedModel.Source source, PartSelection selection, PoseStack.Pose pose,
                         int light, boolean directionalLighting);
 

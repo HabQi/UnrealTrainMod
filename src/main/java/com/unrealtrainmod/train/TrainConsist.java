@@ -37,6 +37,8 @@ public final class TrainConsist {
     private TrainControlState control;
     private final TrainDynamicsState dynamics = new TrainDynamicsState();
     private boolean routeDirty = true;
+    private UUID monitorEpoch = UUID.randomUUID();
+    private double monitorDistance;
     private StopReason stopReason = StopReason.STOPPED;
 
     TrainConsist(UUID id, List<TrainCarState> cars, double configuredSpeed) {
@@ -80,6 +82,9 @@ public final class TrainConsist {
     public boolean running() { return actualSpeed() != 0; }
     public TrainControlState control() { return control; }
     public TrainDynamicsState dynamics() { return dynamics; }
+    UUID monitorEpoch() { return monitorEpoch; }
+    double monitorDistance() { return monitorDistance; }
+    void recordMovement(double distance) { monitorDistance += distance; }
     boolean simulationActive() { return simulationActive; }
     boolean commandControlled() { return commandControlled; }
     double commandTarget() { return commandTarget; }
@@ -154,5 +159,7 @@ public final class TrainConsist {
     void clearRoute() {
         window = null;
         routeDirty = true;
+        monitorEpoch = UUID.randomUUID();
+        monitorDistance = 0;
     }
 }

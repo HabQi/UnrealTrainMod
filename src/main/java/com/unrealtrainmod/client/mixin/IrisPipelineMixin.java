@@ -4,6 +4,7 @@
  */
 package com.unrealtrainmod.client.mixin;
 
+import com.unrealtrainmod.client.compat.iris.IrisVehicleReprojection;
 import com.unrealtrainmod.client.texture.MaterialTexture;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Pseudo;
@@ -15,7 +16,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 @Mixin(targets = "net.irisshaders.iris.pipeline.IrisRenderingPipeline", remap = false)
 public abstract class IrisPipelineMixin {
     @Inject(method = "destroy", at = @At("HEAD"))
-    private void unrealtrainmod$releasePbr(CallbackInfo callback) {
+    private void unrealtrainmod$releaseResources(CallbackInfo callback) {
+        IrisVehicleReprojection.reset();
         MaterialTexture.invalidatePbr();
     }
 }

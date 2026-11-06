@@ -8,11 +8,25 @@ import com.unrealtrainmod.client.RenderCategory;
 import com.unrealtrainmod.client.StaticModelShader;
 import com.unrealtrainmod.model.IndexedMesh;
 import com.unrealtrainmod.model.MaterialRenderMode;
+import com.unrealtrainmod.model.ModelLightLayer;
 import net.minecraft.resources.ResourceLocation;
 
 /** firstIndex/indexCount address mesh indices, not bytes. A null mode retains the legacy package policy. */
 public record RenderBatch(IndexedMesh mesh, int firstIndex, int indexCount, ResourceLocation texture, RenderCategory category,
-                          MaterialRenderMode mode, boolean doubleSided, float[] centers) {
+                          MaterialRenderMode mode, boolean doubleSided, float[] centers, ModelLightLayer lightLayer) {
+    public RenderBatch(IndexedMesh mesh, int firstIndex, int indexCount, ResourceLocation texture,
+                       RenderCategory category, MaterialRenderMode mode, boolean doubleSided, float[] centers) {
+        this(mesh, firstIndex, indexCount, texture, category, mode, doubleSided, centers, ModelLightLayer.BASE);
+    }
+
+    public static RenderBatch light(IndexedMesh mesh, ResourceLocation texture, boolean doubleSided, ModelLightLayer layer) {
+        return new RenderBatch(mesh, 0, mesh.indices().length, texture, RenderCategory.BLEND,
+                MaterialRenderMode.TRANSLUCENT, doubleSided,
+                triangleCenters(mesh, 0, mesh.indices().length, RenderCategory.BLEND), layer);
+    }
+
+    public boolean isLightLayer() { return lightLayer != ModelLightLayer.BASE; }
+
     public RenderBatch(IndexedMesh mesh, ResourceLocation texture, RenderCategory category,
                        MaterialRenderMode mode, boolean doubleSided) {
         this(mesh, 0, mesh.indices().length, texture, category, mode, doubleSided);

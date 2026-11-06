@@ -16,6 +16,7 @@ import com.unrealtrainmod.train.TrainControlState.Reverser;
 import com.unrealtrainmod.train.TrainConsist.StopReason;
 import com.unrealtrainmod.vehicle.VehicleDoor;
 import java.util.Locale;
+import java.util.UUID;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
 import net.minecraft.network.chat.Component;
@@ -54,6 +55,9 @@ public final class TrainDrivingClient {
     private static long sequence;
     private static int silence, heartbeat;
     private static boolean cursorOwned;
+    /** Client-side target used only while the authoritative entity data is in flight. */
+    private static UUID pendingLightVehicle;
+    private static int pendingLightMask = -1, pendingLightTicks;
 
     private TrainDrivingClient() {}
 
@@ -86,6 +90,44 @@ public final class TrainDrivingClient {
     }
 
     public static TrainControlSyncPayload state() { return riding() ? snapshot : null; }
+
+    public static boolean headLightOn() { return (displayedLightMask() & 1) != 0; }
+    public static boolean tailLightOn() { return (displayedLightMask() & 2) != 0; }
+
+    /** Send an explicit target while allowing rapid clicks to build on the last local target. */
+    public static void toggleLight(boolean head) {
+        var vehicle = riddenVehicle();
+        if (vehicle == null) return;
+        int actual = vehicle.lights() & 3;
+        if (!vehicle.getUUID().equals(pendingLightVehicle)) {
+            pendingLightVehicle = vehicle.getUUID();
+            pendingLightMask = actual;
+        }
+        int bit = head ? 1 : 2;
+        int next = pendingLightMask ^ bit;
+        pendingLightMask = next;
+        pendingLightTicks = 0;
+        boolean enabled = (next & bit) != 0;
+        send(head ? (enabled ? Action.HEAD_LIGHT_ON : Action.HEAD_LIGHT_OFF)
+                : (enabled ? Action.TAIL_LIGHT_ON : Action.TAIL_LIGHT_OFF));
+    }
+
+    private static int displayedLightMask() {
+        var vehicle = riddenVehicle();
+        if (vehicle == null) return 0;
+        int actual = vehicle.lights() & 3;
+        if (!vehicle.getUUID().equals(pendingLightVehicle)) {
+            pendingLightVehicle = null;
+            pendingLightMask = -1;
+            return actual;
+        }
+        if (pendingLightMask == actual) {
+            pendingLightVehicle = null;
+            pendingLightMask = -1;
+            return actual;
+        }
+        return pendingLightMask;
+    }
 
     public static boolean consoleVisible() {
         var mc = Minecraft.getInstance();
@@ -136,12 +178,16 @@ public final class TrainDrivingClient {
             return;
         }
         boolean newSession = snapshot == null || !snapshot.session().equals(incoming.session());
-        if (newSession) {
+        boolean newVehicle = snapshot != null && !snapshot.vehicle().equals(incoming.vehicle());
+        if (newSession || newVehicle) {
             sequence = incoming.sequence();
             TrainDrivingOverlay.clear();
+            pendingLightVehicle = null;
+            pendingLightMask = -1;
         }
         if (newSession || !snapshot.train().equals(incoming.train())) TrainMonitorOverlay.clear();
         snapshot = incoming;
+        TrainMonitorOverlay.accept(incoming, silence > 20);
         silence = 0;
         if (incoming.feedback() != TrainControlSyncPayload.Feedback.NONE && mc.player != null) {
             mc.player.displayClientMessage(Component.translatable(PREFIX
@@ -159,8 +205,11 @@ public final class TrainDrivingClient {
             return;
         }
         if (usingCursor()) TrainDrivingOverlay.drag(mouseY());
+        if (pendingLightMask >= 0 && ++pendingLightTicks > 40) {
+            pendingLightVehicle = null;
+            pendingLightMask = -1;
+        }
         for (var key : new KeyMapping[] {POWER, BRAKE, REVERSER, EMERGENCY, DOOR_LEFT, DOOR_RIGHT, CURSOR}) while (key.consumeClick()) { }
-        if (riding()) TrainMonitorOverlay.tick(snapshot, silence > 20);
         if (riding() && ++heartbeat >= 10) send(Action.HEARTBEAT);
     }
 
@@ -302,6 +351,9 @@ public final class TrainDrivingClient {
         snapshot = null;
         sequence = 0;
         silence = heartbeat = 0;
+        pendingLightVehicle = null;
+        pendingLightMask = -1;
+        pendingLightTicks = 0;
         TrainDrivingOverlay.clear();
         TrainMonitorOverlay.clear();
         updateCursor();

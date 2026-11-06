@@ -15,13 +15,30 @@ public final class IrisVertices {
     private final Vector3f position = new Vector3f(), normal = new Vector3f();
 
     public void vertex(VertexConsumer target, IndexedMesh mesh, int index, PoseStack.Pose pose, int light, boolean opaque) {
+        vertex(target, mesh, index, pose, light, opaque, 1.0f);
+    }
+
+    public void lightVertex(VertexConsumer target, IndexedMesh mesh, int index, PoseStack.Pose pose, int light) {
+        vertex(target, mesh, index, pose, light, false, IrisGeometryCache.LIGHT_COLOR_SCALE);
+    }
+
+    private void vertex(VertexConsumer target, IndexedMesh mesh, int index, PoseStack.Pose pose, int light,
+                        boolean opaque, float colorScale) {
         int offset = index * 8;
         float[] v = mesh.vertices();
         pose.pose().transformPosition(position.set(v[offset], v[offset + 1], v[offset + 2]));
         pose.normal().transform(normal.set(v[offset + 5], v[offset + 6], v[offset + 7])).normalize();
         int color = mesh.colors()[index];
+        if (colorScale != 1.0f) color = scaleRgb(color, colorScale);
         target.addVertex(position.x, position.y, position.z).setColor(opaque ? color | 0xff000000 : color)
                 .setUv(v[offset + 3], v[offset + 4]).setOverlay(OverlayTexture.NO_OVERLAY).setLight(light)
                 .setNormal(normal.x, normal.y, normal.z);
+    }
+
+    private static int scaleRgb(int color, float scale) {
+        int red = Math.round(((color >>> 16) & 0xff) * scale);
+        int green = Math.round(((color >>> 8) & 0xff) * scale);
+        int blue = Math.round((color & 0xff) * scale);
+        return color & 0xff000000 | red << 16 | green << 8 | blue;
     }
 }

@@ -98,6 +98,7 @@ final class TrainRouteWindow {
 
     TrackRoute route() { return route; }
     TrackPathSampler sampler() { return sampler; }
+
     TrainTurnoutMovement turnoutMovement(TrackGraph graph) {
         if (turnoutMovement == null) turnoutMovement = new TrainTurnoutMovement(graph, route);
         return turnoutMovement;

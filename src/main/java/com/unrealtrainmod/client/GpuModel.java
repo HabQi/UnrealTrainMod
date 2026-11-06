@@ -19,6 +19,7 @@ import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.IdentityHashMap;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import org.lwjgl.opengl.GL11;
@@ -30,6 +31,7 @@ import org.lwjgl.system.MemoryUtil;
 /** Shared static vertices and canonical indices; only sorted triangle indices change during a scene. */
 public final class GpuModel implements AutoCloseable {
     public record Part(Mesh mesh, int firstIndex) {}
+    private record VertexSource(float[] vertices, int[] colors) {}
 
     private final Map<RenderBatch, Part> parts;
     private final List<Mesh> meshes;
@@ -51,13 +53,14 @@ public final class GpuModel implements AutoCloseable {
 
     public static GpuModel upload(List<RenderBatch> prepared) {
         RenderSystem.assertOnRenderThread();
-        var groups = new IdentityHashMap<float[], List<RenderBatch>>();
+        var groups = new HashMap<VertexSource, List<RenderBatch>>();
         var ordered = new ArrayList<List<RenderBatch>>();
         for (var batch : prepared) {
-            var group = groups.get(batch.mesh().vertices());
+            var key = new VertexSource(batch.mesh().vertices(), batch.mesh().colors());
+            var group = groups.get(key);
             if (group == null) {
                 group = new ArrayList<>();
-                groups.put(batch.mesh().vertices(), group);
+                groups.put(key, group);
                 ordered.add(group);
             }
             group.add(batch);

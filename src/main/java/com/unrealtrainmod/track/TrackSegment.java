@@ -18,6 +18,10 @@ public final class TrackSegment {
     private final TrackGeometry geometry;
     private final TrackChunkBounds chunkBounds;
     private final String modelId;
+    private Profile profile;
+
+    /** Midpoint approximation in this segment's start-to-end direction; positive radius is displayed as left/up. */
+    public record Profile(double grade, double radius) {}
 
     TrackSegment(UUID id, UUID startNodeId, UUID endNodeId, TrackGeometry geometry, TrackChunkBounds chunkBounds, String modelId) {
         this.id = id;
@@ -33,6 +37,16 @@ public final class TrackSegment {
     public UUID endNodeId() { return endNodeId; }
     public TrackGeometry geometry() { return geometry; }
     public String modelId() { return modelId; }
+    public Profile profile() {
+        if (profile == null) {
+            var pose = geometry.sample(geometry.getLength() / 2);
+            var tangent = pose.tangent();
+            double grade = 1000 * tangent.y() / Math.hypot(tangent.x(), tangent.z());
+            double curvature = pose.curvature();
+            profile = new Profile(grade, Math.abs(curvature) < 1e-7 ? 0 : 1 / curvature);
+        }
+        return profile;
+    }
     public Type type() {
         return TrackGeometryDefinition.horizontal(geometry) instanceof BezierTrackGeometry ? Type.BEZIER : Type.STRAIGHT;
     }

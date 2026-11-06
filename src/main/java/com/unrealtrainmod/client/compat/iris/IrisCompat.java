@@ -112,6 +112,7 @@ public final class IrisCompat {
             IrisModelRenderer.clear();
             LoggerFactory.getLogger(IrisCompat.class).info("World rendering backend: {}", active ? "Iris" : "native");
         }
+        IrisVehicleReprojection.beginFrame();
         IrisGeometryCache.beginFrame();
         TrackWorldRenderer.beginFrame();
         com.unrealtrainmod.client.texture.PbrLoadQueue.beginFrame(active);

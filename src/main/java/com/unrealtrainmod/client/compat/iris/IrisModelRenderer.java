@@ -21,23 +21,32 @@ import java.util.IdentityHashMap;
 import java.util.List;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.MultiBufferSource;
+import net.minecraft.client.renderer.LightTexture;
 import net.minecraft.world.entity.Entity;
 import org.joml.Matrix4f;
 
 /** One local command snapshot per entity/frame; GPU geometry is independent of entity and view. */
 public final class IrisModelRenderer {
     private record Command(RenderBatch batch, PoseStack.Pose pose, int light) {}
-    private record Prepared(IrisBatch material, PoseStack.Pose pose, Matrix4f view, int light, IrisGeometryCache.Mesh gpu) {}
+    private record Prepared(IrisBatch material, PoseStack.Pose pose, Matrix4f view, int light,
+                            IrisGeometryCache.Mesh solidGpu, IrisGeometryCache.Mesh lightGpu) {}
     private static final class Snapshot implements ModelDrawSink {
         private final List<Command> commands = new ArrayList<>();
         private final List<Prepared> prepared = new ArrayList<>();
         private final SortBuffer sorted = new SortBuffer();
         private boolean ready, poseReady;
         private VehiclePose vehiclePose;
+        private int lights;
+        @Override public int lights() { return lights; }
+        @Override public void lights(int value) { lights = value; }
         @Override public void submitGeometry(LoadedModel.Source source, PartSelection selection,
                                              PoseStack.Pose pose, int light, boolean directionalLighting) {
             var local = pose.copy();
-            for (var batch : selection.batches()) commands.add(new Command(batch, local, light));
+            for (var batch : selection.batches()) {
+                if (!batch.lightLayer().enabled(lights)) continue;
+                commands.add(new Command(batch, local, batch.lightLayer().emissive()
+                        ? LightTexture.FULL_BRIGHT : light));
+            }
         }
     }
     /** Stable ascending view-Z sort; no objects are allocated per triangle. */
@@ -94,7 +103,8 @@ public final class IrisModelRenderer {
             }
             prepare(snapshot, viewPose, shadow);
             IrisRenderStats.prepare(start);
-            draw(snapshot, buffers, shadow);
+            boolean temporal = IrisVehicleReprojection.capture(train, viewPose, shadow);
+            draw(snapshot, buffers, shadow, temporal);
         }
     }
 
@@ -108,7 +118,7 @@ public final class IrisModelRenderer {
             snapshot.submit(instance, selection, new PoseStack(), light);
             prepare(snapshot, pose, shadow);
             IrisRenderStats.prepare(start);
-            draw(snapshot, buffers, shadow);
+            draw(snapshot, buffers, shadow, false);
         }
         return true;
     }
@@ -121,30 +131,39 @@ public final class IrisModelRenderer {
             var posed = new PoseStack();
             posed.last().pose().set(viewPose.last().pose()).mul(command.pose().pose());
             posed.last().normal().set(viewPose.last().normal()).mul(command.pose().normal());
-            var gpu = material.solidCount == 0 || !IrisGeometryCache.supportsPose(posed.last().pose()) ? null : IrisGeometryCache.requestVehicle(
+            boolean supported = IrisGeometryCache.supportsPose(posed.last().pose());
+            var solidGpu = material.solidCount == 0 || !supported ? null : IrisGeometryCache.requestVehicle(
                     material.solidMesh, material.firstSolid, material.solidCount, material.forceOpaque);
+            var lightGpu = material.batch.isLightLayer() && supported ? IrisGeometryCache.requestVehicleLight(
+                    material.batch.mesh(), material.batch.firstIndex(), material.batch.indexCount()) : null;
             if (material.solidCount != 0) material.solidType();
             snapshot.prepared.add(new Prepared(material, posed.last(),
-                    new Matrix4f(RenderSystem.getModelViewMatrix()).mul(posed.last().pose()), command.light(), gpu));
+                    new Matrix4f(RenderSystem.getModelViewMatrix()).mul(posed.last().pose()), command.light(), solidGpu, lightGpu));
         }
     }
 
-    private static void draw(Snapshot snapshot, MultiBufferSource buffers, boolean shadow) {
+    private static void draw(Snapshot snapshot, MultiBufferSource buffers, boolean shadow, boolean temporal) {
         long start = IrisRenderStats.clock();
         // Complete the direct drawing range before any BufferSource getBuffer() can flush a wrapped batch.
         boolean cached = false;
-        for (var draw : snapshot.prepared) if (draw.gpu() != null) { cached = true; break; }
+        for (var draw : snapshot.prepared) if (draw.solidGpu() != null || draw.lightGpu() != null) { cached = true; break; }
         if (cached) try (var scope = IrisDrawScope.entity()) {
-            for (var draw : snapshot.prepared) if (draw.gpu() != null) {
-                scope.drawCached(draw.gpu(), draw.material().solidType(), draw.view(), RenderSystem.getProjectionMatrix(), draw.light());
+            for (var draw : snapshot.prepared) if (draw.solidGpu() != null) {
+                scope.drawCached(draw.solidGpu(), draw.material().solidType(temporal), draw.view(), RenderSystem.getProjectionMatrix(), draw.light());
                 IrisRenderStats.gpu(draw.material().solidCount / 3);
+            }
+            for (var draw : snapshot.prepared) if (draw.lightGpu() != null) {
+                var material = draw.material();
+                scope.drawCached(draw.lightGpu(), material.translucentType(0, temporal), draw.view(),
+                        RenderSystem.getProjectionMatrix(), draw.light());
+                IrisRenderStats.lightGpu(material.batch.indexCount() / 3);
             }
         }
         var writer = new IrisVertices();
         for (var draw : snapshot.prepared) {
             var material = draw.material();
-            if (material.solidCount == 0 || draw.gpu() != null) continue;
-            var target = buffers.getBuffer(material.solidType());
+            if (material.solidCount == 0 || draw.solidGpu() != null) continue;
+            var target = buffers.getBuffer(material.solidType(temporal));
             for (int i = material.firstSolid; i < material.firstSolid + material.solidCount; i++) {
                 writer.vertex(target, material.solidMesh, material.solidMesh.indices()[i], draw.pose(), draw.light(), material.forceOpaque);
             }
@@ -158,7 +177,7 @@ public final class IrisModelRenderer {
         for (int d = 0; d < snapshot.prepared.size(); d++) {
             var draw = snapshot.prepared.get(d);
             var batch = draw.material().batch;
-            if (batch.category() == RenderCategory.CUTOUT) continue;
+            if (batch.category() == RenderCategory.CUTOUT || batch.isLightLayer()) continue;
             float[] centers = batch.centers();
             var m = draw.view();
             for (int i = 0; i < centers.length; i += 3) sorted.add(d, i / 3,
@@ -172,11 +191,30 @@ public final class IrisModelRenderer {
             var draw = snapshot.prepared.get(sorted.command[index]);
             var material = draw.material(); var batch = material.batch;
             int triangle = sorted.triangle[index], offset = batch.firstIndex() + triangle * 3;
-            var target = buffers.getBuffer(material.translucentType(triangle));
+            var target = buffers.getBuffer(material.translucentType(triangle, temporal));
             for (int corner = 0; corner < 3; corner++) writer.vertex(target, batch.mesh(),
                     batch.mesh().indices()[offset + corner], draw.pose(), draw.light(), false);
         }
         IrisRenderStats.buffered(sorted.count);
+        IrisRenderStats.submit(start);
+        drawLightLayers(snapshot, buffers, temporal);
+    }
+
+    /** RTM light overlays use stable submission order; ordinary translucent triangles remain sorted above. */
+    private static void drawLightLayers(Snapshot snapshot, MultiBufferSource buffers, boolean temporal) {
+        long start = IrisRenderStats.clock();
+        var writer = new IrisVertices();
+        for (var draw : snapshot.prepared) {
+            var material = draw.material();
+            var batch = material.batch;
+            if (!batch.isLightLayer()) continue;
+            if (draw.lightGpu() != null) continue;
+            var target = buffers.getBuffer(material.translucentType(0, temporal));
+            for (int i = batch.firstIndex(); i < batch.firstIndex() + batch.indexCount(); i++) {
+                writer.lightVertex(target, batch.mesh(), batch.mesh().indices()[i], draw.pose(), draw.light());
+            }
+            IrisRenderStats.lightBuffered(batch.indexCount() / 3);
+        }
         IrisRenderStats.submit(start);
     }
 
@@ -196,6 +234,7 @@ public final class IrisModelRenderer {
     }
 
     public static void clear() {
+        IrisVehicleReprojection.reset();
         ENTITIES.values().forEach(VehicleScriptManager::releasePreview);
         ENTITIES.clear();
         IrisRenderStats.reset();

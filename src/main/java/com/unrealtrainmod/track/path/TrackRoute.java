@@ -109,6 +109,27 @@ public final class TrackRoute {
 
     private static Growth extendEnd(TrackGraph graph, TrackConnection current, ArrayDeque<TrackConnection> steps,
                                      Set<UUID> visited, boolean append, UUID cutNode, double distance, TrackTraversalContext context) {
+        return extendEnd(graph, current, steps, visited, append, cutNode, distance, context, Integer.MAX_VALUE);
+    }
+
+    /** Read-only, forward-prioritized preview with a hard segment budget, including repeated ring occurrences. */
+    public static Extension preview(TrackGraph graph, TrackConnection seed, double before, double after, int limit) {
+        if (limit < 1 || !Double.isFinite(before) || before < 0 || !Double.isFinite(after) || after < 0) {
+            throw new IllegalArgumentException("Invalid route preview budget");
+        }
+        var steps = new ArrayDeque<>(List.of(seed));
+        if (!TrackTransitionResolver.isRouteEnabled(graph, List.of(seed))) {
+            throw new IllegalArgumentException("Route preview starts on a closed path");
+        }
+        var end = extendEnd(graph, seed, steps, null, true, null, after, TrackTraversalContext.STRICT, limit - 1);
+        var start = extendEnd(graph, reversed(seed), steps, null, false, null, before,
+                TrackTraversalContext.STRICT, limit - steps.size());
+        return new Extension(of(graph, List.copyOf(steps)), start.count(), start.boundary(), end.boundary());
+    }
+
+    private static Growth extendEnd(TrackGraph graph, TrackConnection current, ArrayDeque<TrackConnection> steps,
+                                     Set<UUID> visited, boolean append, UUID cutNode, double distance,
+                                     TrackTraversalContext context, int limit) {
         var owner = graph.assemblyForSegment(current.segmentId());
         var run = new ArrayList<TrackConnection>();
         if (owner != null) {
@@ -122,7 +143,7 @@ public final class TrackRoute {
         }
         double length = 0;
         int count = 0;
-        while (length < distance) {
+        while (length < distance && count < limit) {
             var segment = graph.segment(current.segmentId());
             UUID exit = current.fromStart() ? segment.endNodeId() : segment.startNodeId();
             if (exit.equals(cutNode)) return new Growth(count, true);
