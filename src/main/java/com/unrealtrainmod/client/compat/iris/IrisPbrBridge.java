@@ -6,7 +6,6 @@ package com.unrealtrainmod.client.compat.iris;
 
 import com.unrealtrainmod.client.texture.MaterialTexture;
 import com.unrealtrainmod.client.texture.PbrSource;
-import com.unrealtrainmod.client.texture.PbrStats;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.reflect.Proxy;
@@ -57,7 +56,6 @@ public final class IrisPbrBridge {
     }
 
     private static void load(MaterialTexture texture, Object consumer) throws Throwable {
-        long start = System.nanoTime();
         AbstractTexture normal = null, specular = null;
         try {
             normal = texture.auxiliary(PbrSource.Channel.NORMAL, normalDefault);
@@ -68,7 +66,15 @@ public final class IrisPbrBridge {
             if (normal != null) normal.close();
             if (specular != null) specular.close();
             throw exception;
-        } finally { PbrStats.loaded(start); }
+        }
+    }
+
+    static void prewarm(MaterialTexture texture) {
+        if (invalidate == null) return;
+        var normal = texture.auxiliary(PbrSource.Channel.NORMAL, normalDefault);
+        var specular = texture.auxiliary(PbrSource.Channel.SPECULAR, specularDefault);
+        if (normal != null) normal.close();
+        if (specular != null) specular.close();
     }
 
     public static void invalidate(int id) {

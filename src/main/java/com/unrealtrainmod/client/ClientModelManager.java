@@ -43,6 +43,13 @@ public final class ClientModelManager extends SimplePreparableReloadListener<Pre
     private ClientModelManager() {}
     public LoadedModel model(ResourceLocation id) { return id == null ? null : models.get(id); }
 
+    public void prewarmIris() {
+        if (!com.unrealtrainmod.client.compat.iris.IrisPrewarmer.scheduled()) {
+            com.unrealtrainmod.client.compat.iris.IrisPrewarmer.schedule(sources.values());
+        }
+        com.unrealtrainmod.client.compat.iris.IrisPrewarmer.step();
+    }
+
     @Override
     protected PreparedReload prepare(ResourceManager resources, ProfilerFiller profiler) {
         return ModelPreparer.prepare(VehicleCatalog.all());

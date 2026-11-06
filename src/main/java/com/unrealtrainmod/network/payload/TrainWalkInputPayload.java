@@ -11,9 +11,10 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
-/** A direction intent in the vehicle-local walking plane; the server owns step length and limits. */
+/** One walking step in the vehicle-local plane, consumed once in sequence by the server. */
 public record TrainWalkInputPayload(UUID session, long sequence, float localX, float localZ)
         implements CustomPacketPayload {
+    public static final int MAX_PENDING_INPUTS = 20;
     public static final Type<TrainWalkInputPayload> TYPE = new Type<>(
             ResourceLocation.fromNamespaceAndPath(UnrealTrainMod.MODID, "train_walk_input"));
     public static final StreamCodec<RegistryFriendlyByteBuf, TrainWalkInputPayload> STREAM_CODEC = StreamCodec.of(

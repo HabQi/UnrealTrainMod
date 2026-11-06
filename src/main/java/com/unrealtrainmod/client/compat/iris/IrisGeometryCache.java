@@ -78,36 +78,63 @@ public final class IrisGeometryCache {
     }
 
     public static Mesh request(IndexedMesh mesh, int first, int count, boolean opaque) {
+        return request(mesh, first, count, opaque, false);
+    }
+
+    /** A vehicle miss builds once now, avoiding repeated full CPU submissions in both views while queued. */
+    public static Mesh requestVehicle(IndexedMesh mesh, int first, int count, boolean opaque) {
+        return request(mesh, first, count, opaque, true);
+    }
+
+    private static Mesh request(IndexedMesh mesh, int first, int count, boolean opaque, boolean immediate) {
         var key = new Key(mesh, first, count, opaque);
         var entry = ENTRIES.get(key);
+        boolean hit = entry != null && entry.gpu != null;
         if (entry == null) {
             entry = new Entry(key);
             ENTRIES.put(key, entry);
-            PENDING.addLast(entry);
+            if (immediate) build(entry);
+            else PENDING.addLast(entry);
         }
         entry.requestedFrame = frame;
-        IrisRenderStats.cache(entry.gpu != null);
+        IrisRenderStats.cache(hit);
         return entry.gpu;
     }
 
-    /** Runs after world submission. Misses continue drawing through the CPU path until ready. */
+    /** Only invoked in menus. Admission is bounded; on-demand world entries retain the full soft limit. */
+    static boolean prewarm(IndexedMesh mesh, int first, int count, boolean opaque) {
+        var key = new Key(mesh, first, count, opaque);
+        var entry = ENTRIES.get(key);
+        if (entry != null) return entry.gpu != null;
+        if (bytes + (long)count * IrisCompat.entityVertexSize() > LIMIT / 2) return false;
+        entry = new Entry(key);
+        ENTRIES.put(key, entry);
+        build(entry);
+        return entry.gpu != null;
+    }
+
+    private static void build(Entry entry) {
+        long begun = System.nanoTime();
+        try {
+            entry.gpu = upload(entry.key);
+            bytes += entry.gpu.bytes;
+            peakBytes = Math.max(peakBytes, bytes);
+            windowBytes += entry.gpu.bytes;
+        } catch (RuntimeException exception) {
+            LoggerFactory.getLogger(IrisGeometryCache.class).warn("Cannot cache Iris geometry; keeping CPU submission", exception);
+        }
+        windowNanos += System.nanoTime() - begun;
+        windowBuilds++;
+    }
+
+    /** Runs after world submission for queued rigid track parts; their CPU fallback remains until ready. */
     public static void endFrame() {
         long start = System.nanoTime();
         int built = 0;
         while (!PENDING.isEmpty() && built < 4 && System.nanoTime() - start < 2_000_000L) {
             var entry = PENDING.removeFirst();
             if (entry.requestedFrame < frame - 1) { ENTRIES.remove(entry.key); continue; }
-            long begun = System.nanoTime();
-            try {
-                entry.gpu = upload(entry.key);
-                bytes += entry.gpu.bytes;
-                peakBytes = Math.max(peakBytes, bytes);
-                windowBytes += entry.gpu.bytes;
-            } catch (RuntimeException exception) {
-                LoggerFactory.getLogger(IrisGeometryCache.class).warn("Cannot cache Iris geometry; keeping CPU submission", exception);
-            }
-            windowNanos += System.nanoTime() - begun;
-            windowBuilds++;
+            build(entry);
             built++;
         }
         if (bytes > LIMIT) {
@@ -137,7 +164,7 @@ public final class IrisGeometryCache {
         int[] identity = IrisCompat.currentIdentity();
         var buffer = new VertexBuffer(VertexBuffer.Usage.STATIC);
         try (var storage = new ByteBufferBuilder(Math.max(256,
-                Math.multiplyExact(key.count, DefaultVertexFormat.NEW_ENTITY.getVertexSize())))) {
+                Math.multiplyExact(key.count, IrisCompat.entityVertexSize())))) {
             IrisCompat.restoreTrackIdentity(new int[3]);
             var builder = new BufferBuilder(storage, VertexFormat.Mode.TRIANGLES, DefaultVertexFormat.NEW_ENTITY);
             var v = key.mesh.vertices(); var colors = key.mesh.colors(); var indices = key.mesh.indices();
@@ -169,5 +196,6 @@ public final class IrisGeometryCache {
         bytes = peakBytes = windowBytes = windowBuilds = windowNanos = 0;
         lastLog = System.nanoTime();
         IrisBatch.clear();
+        IrisPrewarmer.clear();
     }
 }

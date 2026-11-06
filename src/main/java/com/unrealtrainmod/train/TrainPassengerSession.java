@@ -4,6 +4,8 @@
  */
 package com.unrealtrainmod.train;
 
+import com.unrealtrainmod.network.payload.TrainWalkInputPayload;
+import java.util.ArrayDeque;
 import java.util.UUID;
 import net.minecraft.server.level.ServerPlayer;
 
@@ -18,9 +20,7 @@ final class TrainPassengerSession {
     double localZ;
     long acceptedSequence;
     long appliedSequence;
-    int inputAge = Integer.MAX_VALUE;
-    float inputX;
-    float inputZ;
+    final ArrayDeque<TrainWalkInputPayload> inputs = new ArrayDeque<>();
     PassengerPose pose = PassengerPose.STANDING;
     int heightStep;
     /** Set while vanilla is still choosing the dismount position, so the personal local point remains readable. */

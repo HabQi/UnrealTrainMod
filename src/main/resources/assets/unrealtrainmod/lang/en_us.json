@@ -455,9 +455,9 @@
   "gui.unrealtrainmod.monitor.waiting": "Waiting for sync",
   "gui.unrealtrainmod.monitor.now": "Now",
   "gui.unrealtrainmod.monitor.speed_axis": "SPEED",
-  "gui.unrealtrainmod.monitor.position": "POSITION",
-  "gui.unrealtrainmod.monitor.gradient": "GRADE",
-  "gui.unrealtrainmod.monitor.track": "TRACK"
+  "gui.unrealtrainmod.monitor.track": "TRACK",
+  "gui.unrealtrainmod.monitor.section": "PROFILE",
+  "gui.unrealtrainmod.monitor.curve": "CURVE"
   ,"gui.unrealtrainmod.monitor.speed_short": "SPD"
   ,"gui.unrealtrainmod.monitor.limit_short": "LIM"
   ,"gui.unrealtrainmod.monitor.distance_short": "DST"

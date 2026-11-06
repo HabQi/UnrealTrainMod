@@ -30,7 +30,6 @@ import net.neoforged.neoforge.network.handling.IPayloadContext;
 /** Vehicle-local walking sessions; driver entries never touch manual controls or driver limits. */
 public final class TrainPassengerManager {
     public static final int MAX_PASSENGERS = 32;
-    private static final int INPUT_REPEAT_TICKS = 2;
 
     private final ServerLevel level;
     private final TrainManager manager;
@@ -146,18 +145,13 @@ public final class TrainPassengerManager {
     private void input(ServerPlayer player, TrainWalkInputPayload payload) {
         var session = sessions.get(player.getUUID());
         if (session == null || session.player != player || !session.session.equals(payload.session())
-                || !valid(session) || payload.sequence() <= session.acceptedSequence) return;
+                || !valid(session) || payload.sequence() != session.acceptedSequence + 1
+                || session.inputs.size() >= TrainWalkInputPayload.MAX_PENDING_INPUTS) return;
         float x = payload.localX(), z = payload.localZ();
         if (!Float.isFinite(x) || !Float.isFinite(z)) return;
-        double length = Math.hypot(x, z);
-        if (length > 1) {
-            x /= length;
-            z /= length;
-        }
         session.acceptedSequence = payload.sequence();
-        session.inputX = x;
-        session.inputZ = z;
-        session.inputAge = 0;
+        // TrainWalkStep applies the same direction normalization as client prediction.
+        session.inputs.addLast(payload);
     }
 
     /** Applies one bounded walking step per normal server tick, after the final committed vehicle pose. */
@@ -170,15 +164,15 @@ public final class TrainPassengerManager {
                 continue;
             }
             var entity = (TrainEntity) session.player.getVehicle();
-            if (session.inputAge < INPUT_REPEAT_TICKS) {
+            var input = session.inputs.pollFirst();
+            if (input != null) {
                 var spec = enabledSpec(entity);
                 var point = TrainWalkStep.move(spec, session.localX, session.localZ,
-                        session.inputX, session.inputZ);
+                        input.localX(), input.localZ());
                 session.localX = point.x();
                 session.localZ = point.z();
+                session.appliedSequence = input.sequence();
             }
-            if (session.inputAge < Integer.MAX_VALUE) session.inputAge++;
-            session.appliedSequence = session.acceptedSequence;
             entity.positionRider(session.player);
         }
         for (var session : failed) close(session);

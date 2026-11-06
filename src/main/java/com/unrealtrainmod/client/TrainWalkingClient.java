@@ -15,7 +15,6 @@ import com.unrealtrainmod.vehicle.VehicleCatalog;
 import com.unrealtrainmod.vehicle.VehicleInteriorSpec;
 import java.util.ArrayDeque;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.world.entity.player.Player;
 import net.neoforged.neoforge.client.event.ClientPlayerNetworkEvent;
 import net.neoforged.neoforge.client.event.ClientTickEvent;
@@ -25,8 +24,8 @@ import net.neoforged.neoforge.network.PacketDistributor;
 
 /** Local walking prediction, input consumption and camera-facing local point maintenance. */
 public final class TrainWalkingClient {
-    private static final int MAX_PENDING = 20;
-    private static final double SMOOTHING = 0.5;
+    private static final double CORRECTION_DECAY = 0.5;
+    private static final double OBSERVER_SMOOTHING = 0.5;
     private static final double SNAP_DISTANCE = 1.5;
     private static final int SILENCE_LIMIT = 60;
     private record Pending(long sequence, float x, float z) {}
@@ -34,11 +33,11 @@ public final class TrainWalkingClient {
     private static final ArrayDeque<Pending> pending = new ArrayDeque<>();
     private static TrainPassengerStatePayload snapshot;
     private static long sequence;
-    private static double baseX, baseZ, predictedX, predictedZ, renderX, renderZ, lastRenderX, lastRenderZ;
+    private static double predictedX, predictedZ, renderX, renderZ, lastRenderX, lastRenderZ;
+    private static double correctionX, correctionZ;
     private static float inputX, inputZ;
     private static float mountBodyYaw;
     private static boolean mountYawSet;
-    private static boolean sentStop = true;
     private static int silence;
 
     private TrainWalkingClient() {}
@@ -59,31 +58,29 @@ public final class TrainWalkingClient {
         }
         if (entry == null) return;
         if (mc.player == null || !mc.player.getUUID().equals(incoming.player())) return;
-        acceptLocal(incoming, mc.player);
+        acceptLocal(incoming);
     }
 
-    private static void acceptLocal(TrainPassengerStatePayload incoming, LocalPlayer player) {
+    private static void acceptLocal(TrainPassengerStatePayload incoming) {
         boolean newSession = snapshot == null || !snapshot.session().equals(incoming.session());
-        if (!newSession && incoming.sequence() < snapshot.sequence()) return;
         snapshot = incoming;
         silence = 0;
-        baseX = incoming.localX();
-        baseZ = incoming.localZ();
         if (newSession) {
             pending.clear();
             sequence = incoming.sequence();
-            predictedX = renderX = baseX;
-            predictedZ = renderZ = baseZ;
+            predictedX = renderX = incoming.localX();
+            predictedZ = renderZ = incoming.localZ();
             lastRenderX = renderX;
             lastRenderZ = renderZ;
-            sentStop = true;
+            correctionX = correctionZ = 0;
             var vehicle = train();
             mountYawSet = vehicle != null;
             mountBodyYaw = mountYawSet ? vehicle.getYRot() : 0;
         } else {
+            double oldX = predictedX, oldZ = predictedZ;
             pending.removeIf(input -> input.sequence() <= incoming.sequence());
-            predictedX = baseX;
-            predictedZ = baseZ;
+            predictedX = incoming.localX();
+            predictedZ = incoming.localZ();
             var train = train();
             var spec = train == null ? null : spec(train);
             if (spec != null && spec.enabled()) {
@@ -93,15 +90,10 @@ public final class TrainWalkingClient {
                     predictedZ = point.z();
                 }
             }
-            if (Math.hypot(predictedX - renderX, predictedZ - renderZ) > SNAP_DISTANCE) {
-                renderX = predictedX;
-                renderZ = predictedZ;
-                lastRenderX = renderX;
-                lastRenderZ = renderZ;
-            }
+            // Preserve the displayed point; decay only the reconciliation error during client ticks.
+            correctionX += oldX - predictedX;
+            correctionZ += oldZ - predictedZ;
         }
-        TrainPassengerClientState.setLocal(player.getUUID(), incoming.vehicle(), incoming.session(),
-                predictedX, predictedZ, renderX, renderZ);
     }
 
     /** Captures WASD after vanilla input refresh, then clears horizontal movement and jumping. */
@@ -176,32 +168,35 @@ public final class TrainWalkingClient {
             return;
         }
         if (mc.screen != null) inputX = inputZ = 0;
-        boolean moving = inputX != 0 || inputZ != 0;
-        if (moving || !sentStop) {
-            if (pending.size() >= MAX_PENDING) pending.removeFirst();
+        var spec = spec(train);
+        boolean moving = (inputX != 0 || inputZ != 0) && spec != null && spec.enabled()
+                && pending.size() < TrainWalkInputPayload.MAX_PENDING_INPUTS;
+        if (moving) {
             sequence++;
             PacketDistributor.sendToServer(new TrainWalkInputPayload(snapshot.session(), sequence, inputX, inputZ));
             pending.add(new Pending(sequence, inputX, inputZ));
-            sentStop = !moving;
-        }
-        var spec = spec(train);
-        if (spec != null && spec.enabled() && moving) {
             var point = TrainWalkStep.move(spec, predictedX, predictedZ, inputX, inputZ);
             predictedX = point.x();
             predictedZ = point.z();
         }
         TrainPassengerClientState.beginLocal(mc.player.getUUID(), train.getUUID(), snapshot.session());
-        double dx = predictedX - renderX, dz = predictedZ - renderZ;
-        boolean snapped = Math.hypot(dx, dz) > SNAP_DISTANCE;
+        boolean snapped = Math.hypot(correctionX, correctionZ) > SNAP_DISTANCE;
         if (snapped) {
-            renderX = predictedX;
-            renderZ = predictedZ;
+            correctionX = correctionZ = 0;
         } else {
-            renderX += dx * SMOOTHING;
-            renderZ += dz * SMOOTHING;
+            correctionX *= CORRECTION_DECAY;
+            correctionZ *= CORRECTION_DECAY;
+        }
+        renderX = predictedX + correctionX;
+        renderZ = predictedZ + correctionZ;
+        if (spec != null && spec.enabled()) {
+            renderX = spec.clampX(renderX);
+            renderZ = spec.clampZ(renderZ);
+            correctionX = renderX - predictedX;
+            correctionZ = renderZ - predictedZ;
         }
         TrainPassengerClientState.setLocal(mc.player.getUUID(), train.getUUID(), snapshot.session(),
-                predictedX, predictedZ, renderX, renderZ);
+                predictedX, predictedZ, renderX, renderZ, snapped);
         train.positionRider(mc.player);
         if (snapshot.pose() != PassengerPose.LYING) {
             double moved = snapped ? 0 : Math.hypot(renderX - lastRenderX, renderZ - lastRenderZ);
@@ -242,8 +237,8 @@ public final class TrainWalkingClient {
                 oldX = entry.renderX;
                 oldZ = entry.renderZ;
             } else {
-                entry.renderX += dx * SMOOTHING;
-                entry.renderZ += dz * SMOOTHING;
+                entry.renderX += dx * OBSERVER_SMOOTHING;
+                entry.renderZ += dz * OBSERVER_SMOOTHING;
             }
             if (player.getVehicle() instanceof TrainEntity train && train.getUUID().equals(entry.vehicle)) {
                 train.positionRider(player);
@@ -284,9 +279,9 @@ public final class TrainWalkingClient {
         snapshot = null;
         pending.clear();
         sequence = 0;
-        baseX = baseZ = predictedX = predictedZ = renderX = renderZ = lastRenderX = lastRenderZ = 0;
+        predictedX = predictedZ = renderX = renderZ = lastRenderX = lastRenderZ = 0;
         inputX = inputZ = 0;
-        sentStop = true;
+        correctionX = correctionZ = 0;
         silence = 0;
         mountBodyYaw = 0;
         mountYawSet = false;
@@ -301,15 +296,7 @@ public final class TrainWalkingClient {
     public static void clonePlayer(ClientPlayerNetworkEvent.Clone event) { clear(); }
 
     public static void clear() {
-        snapshot = null;
-        pending.clear();
-        sequence = 0;
-        baseX = baseZ = predictedX = predictedZ = renderX = renderZ = lastRenderX = lastRenderZ = 0;
-        inputX = inputZ = 0;
-        sentStop = true;
-        silence = 0;
-        mountBodyYaw = 0;
-        mountYawSet = false;
+        clearLocal();
         TrainPassengerClientState.clear();
     }
 }

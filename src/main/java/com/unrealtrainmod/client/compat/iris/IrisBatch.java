@@ -63,6 +63,15 @@ final class IrisBatch {
         return solidType;
     }
 
+    void prewarmTypes() {
+        solidType();
+        if (batch.category() == RenderCategory.CUTOUT) return;
+        int firstSolidTriangle = split.nextSetBit(0);
+        if (firstSolidTriangle >= 0) translucentType(firstSolidTriangle);
+        int firstOtherTriangle = split.nextClearBit(0);
+        if (firstOtherTriangle < batch.indexCount() / 3) translucentType(firstOtherTriangle);
+    }
+
     RenderType translucentType(int triangle) {
         if (split.get(triangle)) {
             if (blendType == null) blendType = IrisRenderTypes.get(

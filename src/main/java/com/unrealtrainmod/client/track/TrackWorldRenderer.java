@@ -81,8 +81,10 @@ public final class TrackWorldRenderer {
     private static BuildBudget frameBudget = new BuildBudget(null);
     private static int frameUploads = UPLOADS_PER_FRAME;
     private static double frameTime = Double.NaN;
+    private static long frame;
 
     public static void beginFrame() {
+        frame++;
         frameBudget = new BuildBudget(null);
         frameUploads = UPLOADS_PER_FRAME;
         frameTime = Double.NaN;
@@ -164,12 +166,16 @@ public final class TrackWorldRenderer {
                 boolean scriptedCustom = entry.data.definition() == TrackAssemblyDefinition.CUSTOM
                         && model != null && model.scripted();
                 boolean inView = event.getFrustum().isVisible(entry.broadBounds());
-                if (scriptedCustom && !entry.scriptAttempted && inView && budget.available()) {
+                if (scriptedCustom && !entry.scriptAttempted && !entry.scriptFailed && inView
+                        && entry.scriptPrepareFrame != frame && budget.available()) {
+                    entry.scriptPrepareFrame = frame;
                     long start = System.nanoTime();
                     var anchor = entry.data.geometry().ports().get("A").position();
+                    String phase = entry.assemblyScript == null ? "turnoutScriptInit"
+                            : entry.staticSnapshot == null ? "turnoutStaticCapture" : "turnoutDynamicCapture";
                     try { prepareAssemblyScript(entry, model, time); }
                     finally { budget.finished(start, entry.data.modelId(), entry.data.id(),
-                            (int)Math.floor(anchor.x() / 16), (int)Math.floor(anchor.z() / 16), "turnoutScriptInit"); }
+                            (int)Math.floor(anchor.x() / 16), (int)Math.floor(anchor.z() / 16), phase); }
                 }
                 if (entry.scriptFailed) entry.clearScriptMeshes();
                 if (scriptedCustom && !entry.scriptFailed) {
@@ -277,23 +283,31 @@ public final class TrackWorldRenderer {
     }
 
     private static void prepareAssemblyScript(ClientTrackCache.AssemblyEntry entry, ClientRailModelManager.Model model, double time) {
-        entry.scriptAttempted = true;
         if (model.script() == null) {
+            entry.scriptAttempted = true;
             entry.scriptFailed = true;
             LOGGER.warn("Turnout {} has an unavailable rail script; using native appearance", entry.data.id());
             return;
         }
         try {
-            entry.assemblyScript = model.script().newAssembly(entry.data);
-            entry.staticSnapshot = entry.assemblyScript.captureAssemblyStatic(entry.animation.position(time),
-                    model.scaleForGauge(entry.data.gauge()), model.period());
-            if (entry.staticSnapshot == null) { entry.scriptFailed = true; return; }
+            if (entry.assemblyScript == null) {
+                entry.assemblyScript = model.script().newAssembly(entry.data);
+                return;
+            }
+            if (entry.staticSnapshot == null) {
+                entry.staticSnapshot = entry.assemblyScript.captureAssemblyStatic(entry.animation.position(time),
+                        model.scaleForGauge(entry.data.gauge()), model.period());
+                if (entry.staticSnapshot == null) { entry.scriptAttempted = true; entry.scriptFailed = true; }
+                return;
+            }
             var a = entry.data.geometry().ports().get("A").position();
             var anchor = BlockPos.containing(a.x(), a.y() + 0.0625, a.z());
             entry.parts = new RailPartRenderer(new TrackVector(
                     anchor.getX(), anchor.getY(), anchor.getZ()), Math.floor(a.y() / 16) * 16);
+            entry.scriptAttempted = true;
             entry.captureDynamic(time);
         } catch (IOException | RuntimeException | LinkageError exception) {
+            entry.scriptAttempted = true;
             entry.scriptFailed = true;
             if (entry.assemblyScript != null) entry.assemblyScript.close();
             LOGGER.warn("Cannot initialise rail script for turnout {}; using native appearance: {}",

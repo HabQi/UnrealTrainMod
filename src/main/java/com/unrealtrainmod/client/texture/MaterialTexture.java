@@ -12,7 +12,7 @@ import java.util.Set;
 import net.minecraft.client.renderer.texture.AbstractTexture;
 import net.minecraft.client.renderer.texture.DynamicTexture;
 
-/** Retains base pixels for alpha masks; auxiliary pixels and shaders are never retained here. */
+/** Retains base pixels for alpha masks; derived textures share demand-loaded auxiliary channels. */
 public final class MaterialTexture extends DynamicTexture {
     private static final Set<MaterialTexture> OWNED = Collections.newSetFromMap(new IdentityHashMap<>());
     private final PbrMaterial material;
@@ -28,6 +28,7 @@ public final class MaterialTexture extends DynamicTexture {
         try {
             IrisPbrBridge.invalidate(id);
             OWNED.add(this);
+            if (material != null) material.retain();
         } catch (RuntimeException | Error exception) { super.close(); throw exception; }
     }
 
@@ -41,9 +42,23 @@ public final class MaterialTexture extends DynamicTexture {
         for (var texture : OWNED) IrisPbrBridge.invalidate(texture.id);
     }
 
+    public static void releasePbr() {
+        invalidatePbr();
+        var materials = Collections.newSetFromMap(new IdentityHashMap<PbrMaterial, Boolean>());
+        for (var texture : OWNED) if (texture.material != null) materials.add(texture.material);
+        materials.forEach(PbrMaterial::clear);
+    }
+
+    static void invalidatePbr(PbrMaterial material) {
+        for (var texture : OWNED) if (texture.material == material) IrisPbrBridge.invalidate(texture.id);
+    }
+
     @Override public void close() {
-        OWNED.remove(this);
+        if (!OWNED.remove(this)) return;
         try { IrisPbrBridge.invalidate(id); }
-        finally { super.close(); }
+        finally {
+            try { if (material != null) material.release(); }
+            finally { super.close(); }
+        }
     }
 }

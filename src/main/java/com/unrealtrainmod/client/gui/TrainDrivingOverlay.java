@@ -25,6 +25,7 @@ public final class TrainDrivingOverlay {
     private static final int GAP = 4, HEIGHT = 70, DOOR_WIDTH = 22;
     private static final int MONITOR_HEIGHT = 170;
     private static final int HANDLE_TOP = 16, HANDLE_BOTTOM = 55;
+    /** Preserve the compact layout while snapping glyphs to whole framebuffer pixels. */
     private static final float TEXT_SCALE = 0.8F;
     private static TrainControlSyncPayload displayed;
     private static Language language;
@@ -150,20 +151,18 @@ public final class TrainDrivingOverlay {
         int scaleY = cy + radius / 2 + 3;
         label(graphics, font, Component.literal("0"), cx - radius - 3, scaleY, 8, MUTED);
         String limit = Integer.toString(maximum);
-        label(graphics, font, Component.literal(limit), cx + radius + 3 - (int) (font.width(limit) * TEXT_SCALE),
+        float unitScale = textScale();
+        label(graphics, font, Component.literal(limit), cx + radius + 3 - (int) (font.width(limit) * unitScale),
                 scaleY, 24, MUTED);
         int speedWidth = font.width(speed);
-        float unitScale = TEXT_SCALE;
         int unitWidth = (int) Math.ceil(font.width("km/h") * unitScale);
-        float scale = Math.min(1.5F, (box.width - unitWidth - 16) / (float) speedWidth);
+        float guiScale = (float) Minecraft.getInstance().getWindow().getGuiScale();
+        float desiredScale = Math.min(1.5F, (box.width - unitWidth - 16) / (float) speedWidth);
+        float scale = Math.max(1, (int) Math.floor(desiredScale * guiScale)) / guiScale;
         float readingWidth = speedWidth * scale + 4 + unitWidth;
         float readingX = cx - readingWidth / 2;
         int readingY = box.y + box.height - 15;
-        graphics.pose().pushPose();
-        graphics.pose().translate(readingX, readingY, 0);
-        graphics.pose().scale(scale, scale, 1);
-        graphics.drawString(font, speed, 0, 0, TEXT, false);
-        graphics.pose().popPose();
+        drawText(graphics, font, speed, readingX, readingY, scale, TEXT);
         label(graphics, font, Component.literal("km/h"), (int) (readingX + speedWidth * scale + 4),
                 readingY + (int) ((scale - unitScale) * font.lineHeight), unitWidth, MUTED);
     }
@@ -179,9 +178,10 @@ public final class TrainDrivingOverlay {
     private static void telemetry(GuiGraphics graphics, Font font, Box box) {
         panel(graphics, box, PANEL);
         String[] keys = {"acceleration", "grade", "traction", "brake_force"};
+        float scale = textScale();
         for (int i = 0; i < keys.length; i++) {
             int y = box.y + 7 + i * 14;
-            int valueWidth = (int) Math.ceil(font.width(values[i]) * TEXT_SCALE);
+            int valueWidth = (int) Math.ceil(font.width(values[i]) * scale);
             label(graphics, font, text(keys[i]), box.x + 5, y, box.width - valueWidth - 14, MUTED);
             label(graphics, font, values[i], box.x + box.width - valueWidth - 5, y, valueWidth, TEXT);
         }
@@ -204,7 +204,7 @@ public final class TrainDrivingOverlay {
         graphics.fill(cx - 10, position - 2, cx + 11, position + 3, state.emergency() ? RED : TEXT);
         graphics.fill(cx - 5, position - 1, cx + 6, position + 1, color);
         String notch = state.emergency() && !power ? "EB" : value == 0 ? "0" : (power ? "P" : "B") + value;
-        int notchWidth = (int) Math.ceil(font.width(notch) * TEXT_SCALE);
+        int notchWidth = (int) Math.ceil(font.width(notch) * textScale());
         label(graphics, font, text(power ? "power_handle" : "brake_handle"), box.x + 4, box.y + 5,
                 box.width - notchWidth - 11, MUTED);
         label(graphics, font, Component.literal(notch), box.x + box.width - notchWidth - 4, box.y + 5, notchWidth, color);
@@ -234,12 +234,14 @@ public final class TrainDrivingOverlay {
         panel(graphics, box, box.contains(mouseX, mouseY) ? 0xFF293E4A : PANEL);
         int color = open ? AMBER : GREEN;
         var characters = text(side == VehicleDoor.LEFT ? "left_door" : "right_door").getString().codePoints().toArray();
-        int y = box.y + (box.height - characters.length * 8) / 2;
+        float scale = textScale();
+        int lineHeight = Math.max(8, (int) Math.ceil(font.lineHeight * scale));
+        int y = box.y + (box.height - characters.length * lineHeight) / 2;
         for (int character : characters) {
             var glyph = Component.literal(Character.toString(character));
-            int glyphWidth = (int) Math.ceil(font.width(glyph) * TEXT_SCALE);
+            int glyphWidth = (int) Math.ceil(font.width(glyph) * scale);
             label(graphics, font, glyph, box.x + (box.width - glyphWidth) / 2, y, glyphWidth, color);
-            y += 8;
+            y += lineHeight;
         }
         int barX = side == VehicleDoor.LEFT ? box.x + 2 : box.x + box.width - 4;
         graphics.fill(barX, box.y + 2, barX + 2, box.y + box.height - 2, EDGE);
@@ -251,7 +253,7 @@ public final class TrainDrivingOverlay {
                                int color, double mouseX, double mouseY) {
         panel(graphics, box, enabled && box.contains(mouseX, mouseY) ? 0xFF293E4A : 0xFF1A2834);
         graphics.fill(box.x + 3, box.y + 4, box.x + 5, box.y + box.height - 4, enabled ? color : EDGE);
-        label(graphics, font, title, box.x + 9, box.y + (box.height - (int) Math.ceil(font.lineHeight * TEXT_SCALE)) / 2,
+        label(graphics, font, title, box.x + 9, box.y + (box.height - (int) Math.ceil(font.lineHeight * textScale())) / 2,
                 box.width - 13, enabled ? TEXT : MUTED);
     }
 
@@ -261,12 +263,28 @@ public final class TrainDrivingOverlay {
     }
 
     private static void label(GuiGraphics graphics, Font font, Component value, int x, int y, int width, int color) {
-        String visible = font.plainSubstrByWidth(value.getString(), Math.max(0, (int) (width / TEXT_SCALE)));
+        float scale = textScale();
+        String visible = font.plainSubstrByWidth(value.getString(), Math.max(0, (int) (width / scale)));
+        drawText(graphics, font, visible, x, y, scale, color);
+    }
+
+    private static void drawText(GuiGraphics graphics, Font font, String value,
+                                 float x, float y, float scale, int color) {
+        float guiScale = (float) Minecraft.getInstance().getWindow().getGuiScale();
         graphics.pose().pushPose();
-        graphics.pose().translate(x, y, 0);
-        graphics.pose().scale(TEXT_SCALE, TEXT_SCALE, 1);
-        graphics.drawString(font, visible, 0, 0, color, false);
-        graphics.pose().popPose();
+        try {
+            graphics.pose().translate(Math.round(x * guiScale) / guiScale, Math.round(y * guiScale) / guiScale, 0);
+            graphics.pose().scale(scale, scale, 1);
+            graphics.drawString(font, value, 0, 0, color, false);
+        } finally {
+            graphics.pose().popPose();
+        }
+    }
+
+    /** Returns the compact text scale as an integer number of framebuffer pixels. */
+    private static float textScale() {
+        float guiScale = (float) Minecraft.getInstance().getWindow().getGuiScale();
+        return Math.max(1, Math.round(TEXT_SCALE * guiScale)) / guiScale;
     }
 
     private static void tooltip(GuiGraphics graphics, Font font, Layout layout, TrainControlSyncPayload state,

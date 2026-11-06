@@ -88,7 +88,7 @@ public final class TrainMonitorOverlay {
         private void drawMonitor(TrainControlSyncPayload state, int width, int height, boolean hovered) {
             panel(0, 0, width, height);
             int railWidth = Math.max(22, Math.min(28, width / 9));
-            int graphLeft = 24, graphRight = width - railWidth - 4;
+            int graphRight = width - railWidth - 4;
             int lowerHeight = Math.min(36, Math.max(30, height / 5));
             int graphBottom = height - lowerHeight - 2;
             int lowerTop = graphBottom + 2, lowerBottom = height - 3;
@@ -99,13 +99,15 @@ public final class TrainMonitorOverlay {
             int trackHeight = pixel(lowerBottom) - pixel(lowerSplit + 2);
             int fittingScale = Math.min(trackWidth / font.width(text("track")), trackHeight / font.lineHeight);
             fontScale = Math.max(1, Math.min(preferredScale, fittingScale));
+            int sideLabelWidth = Math.max(font.width(text("section")), font.width(text("curve"))) * fontScale;
+            int graphLeft = Math.max(24, 3 + (int) Math.ceil((sideLabelWidth + 4) / pixelsPerUnit));
             int headerRows = text("speed_short").getString().split("\n").length;
             int headerMinimum = 5 + (int) Math.ceil((headerRows * font.lineHeight + 2) * fontScale / pixelsPerUnit);
             int topHeight = Math.max(Math.round(height * 0.14F), headerMinimum);
             int graphTop = topHeight + 2;
             drawStatusHeader(3, 3, width - 6, topHeight - 5, state);
             drawMainGraph(graphLeft, graphTop, graphRight, graphBottom);
-            drawLowerBands(3, lowerTop, graphRight + 3, lowerBottom, lowerSplit, state);
+            drawLowerBands(graphLeft, lowerTop, graphRight + 3, lowerBottom, lowerSplit, state);
             drawSideRail(graphRight + 3, graphTop, width - 3, graphBottom);
             if (hovered) outline(0, 0, width, height, 0xFF62DFE0);
         }
@@ -174,15 +176,20 @@ public final class TrainMonitorOverlay {
             }
             vertical(currentX, top, bottom, YELLOW);
             drawText(text("speed_axis").getString(), left + 4, top + 3, GREEN);
-            drawText(text("position").getString(), currentX - 24, bottom - 13, YELLOW);
         }
 
         private void drawLowerBands(int left, int top, int right, int bottom, int split, TrainControlSyncPayload state) {
             panel(left, top, right - left, bottom - top);
             horizontal(left, split, right - 1, BLUE);
-            drawText(text("gradient").getString(), left + 3, top + 2, TEXT);
-            drawText(text("track").getString(), left + 3, split + 2, TEXT);
             drawText(number(state.grade() * 1000, 1) + "‰", right - 32, top + 2, YELLOW);
+            drawSideLabel(text("section").getString(), 3, top, left - 3, split - top, TEXT);
+            drawSideLabel(text("curve").getString(), 3, split, left - 3, bottom - split, TEXT);
+        }
+
+        private void drawSideLabel(String value, int x, int y, int width, int height, int color) {
+            int left = pixel(x), top = pixel(y);
+            drawTextPixels(value, left + (pixel(x + width) - left - font.width(value) * fontScale) / 2,
+                    top + (pixel(y + height) - top - font.lineHeight * fontScale) / 2, color);
         }
 
         private void drawSideRail(int left, int top, int right, int bottom) {

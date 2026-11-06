@@ -448,9 +448,9 @@
   "gui.unrealtrainmod.monitor.waiting": "等待同步",
   "gui.unrealtrainmod.monitor.now": "现在",
   "gui.unrealtrainmod.monitor.speed_axis": "速度",
-  "gui.unrealtrainmod.monitor.position": "当前位置",
-  "gui.unrealtrainmod.monitor.gradient": "坡度曲线",
-  "gui.unrealtrainmod.monitor.track": "道床曲线"
+  "gui.unrealtrainmod.monitor.track": "道床曲线",
+  "gui.unrealtrainmod.monitor.section": "断面",
+  "gui.unrealtrainmod.monitor.curve": "曲线"
   ,"gui.unrealtrainmod.monitor.speed_short": "速\n度"
   ,"gui.unrealtrainmod.monitor.limit_short": "限\n速"
   ,"gui.unrealtrainmod.monitor.distance_short": "距\n离"

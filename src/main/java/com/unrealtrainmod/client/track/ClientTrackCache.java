@@ -275,6 +275,7 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
         RailPartRenderer parts;
         RailScriptRuntime assemblyScript;
         boolean scriptAttempted, scriptFailed;
+        long scriptPrepareFrame = -1;
         boolean missingReported;
         AssemblyEntry(TrackAssemblyInstance data) {
             this.data = data;
@@ -321,7 +322,7 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
         }
 
         void captureDynamic(double time) {
-            if (assemblyScript == null || scriptFailed || captureTick == INSTANCE.ticks) return;
+            if (!scriptAttempted || assemblyScript == null || scriptFailed || captureTick == INSTANCE.ticks) return;
             float movement = animation.position(time);
             if (currentSnapshot != null && movement == capturedMovement) return;
             captureTick = INSTANCE.ticks;
@@ -360,6 +361,7 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
             assemblyScript = null;
             scriptAttempted = false;
             scriptFailed = false;
+            scriptPrepareFrame = -1;
         }
     }
 

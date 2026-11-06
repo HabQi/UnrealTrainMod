@@ -53,7 +53,7 @@ public final class TrainPassengerClientState {
 
     private TrainPassengerClientState() {}
 
-    /** Returns the accepted entry, or null when the snapshot is stale or marks a removal. */
+    /** Updates authoritative targets and posture; render history advances only during client ticks. */
     public static Entry accept(UUID player, UUID vehicle, UUID session, long sequence, long tick,
                                double x, double floorY, double z, PassengerPose pose, int heightStep, boolean present) {
         var current = ENTRIES.get(player);
@@ -65,7 +65,7 @@ public final class TrainPassengerClientState {
         }
         if (current != null) {
             if (current.session.equals(session)) {
-                if (sequence < current.sequence) return null;
+                if (sequence < current.sequence || tick < current.tick) return null;
             } else if (tick < current.tick) {
                 return null;
             }
@@ -81,12 +81,6 @@ public final class TrainPassengerClientState {
         current.targetZ = z;
         current.pose = pose;
         current.heightStep = heightStep;
-        if (Math.hypot(x - current.renderX, z - current.renderZ) > 1.5) {
-            current.renderX = x;
-            current.renderZ = z;
-            current.prevRenderX = x;
-            current.prevRenderZ = z;
-        }
         current.idle = 0;
         return current;
     }
@@ -99,14 +93,14 @@ public final class TrainPassengerClientState {
         entry.prevRenderZ = entry.renderZ;
     }
 
-    /** The local player's prediction replaces both the target and the rendered point. */
+    /** Commits local prediction; only an explicit large correction resets interpolation history. */
     public static void setLocal(UUID player, UUID vehicle, UUID session, double targetX, double targetZ,
-                                double renderX, double renderZ) {
+                                double renderX, double renderZ, boolean snap) {
         var entry = ENTRIES.get(player);
         if (entry == null || !entry.vehicle.equals(vehicle) || !entry.session.equals(session)) return;
         entry.targetX = targetX;
         entry.targetZ = targetZ;
-        if (Math.hypot(renderX - entry.renderX, renderZ - entry.renderZ) > 1.5) {
+        if (snap) {
             entry.prevRenderX = renderX;
             entry.prevRenderZ = renderZ;
         }

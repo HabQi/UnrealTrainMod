@@ -121,7 +121,7 @@ public final class IrisModelRenderer {
             var posed = new PoseStack();
             posed.last().pose().set(viewPose.last().pose()).mul(command.pose().pose());
             posed.last().normal().set(viewPose.last().normal()).mul(command.pose().normal());
-            var gpu = material.solidCount == 0 || !IrisGeometryCache.supportsPose(posed.last().pose()) ? null : IrisGeometryCache.request(
+            var gpu = material.solidCount == 0 || !IrisGeometryCache.supportsPose(posed.last().pose()) ? null : IrisGeometryCache.requestVehicle(
                     material.solidMesh, material.firstSolid, material.solidCount, material.forceOpaque);
             if (material.solidCount != 0) material.solidType();
             snapshot.prepared.add(new Prepared(material, posed.last(),
