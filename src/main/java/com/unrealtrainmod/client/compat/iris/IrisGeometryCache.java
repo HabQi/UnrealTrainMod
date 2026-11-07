@@ -25,7 +25,7 @@ import org.joml.Matrix4f;
 /** Local geometry only. Light, identity, view matrices and shaders never belong to this cache. */
 public final class IrisGeometryCache {
     private static final long LIMIT = 256L * 1024 * 1024;
-    private static final long LIGHT_LIMIT = 32L * 1024 * 1024;
+    private static final long LIGHT_SOFT_LIMIT = 64L * 1024 * 1024;
     /** Helian's emissive surface multiplies the tagged color by its PBR brightness term. */
     static final float LIGHT_COLOR_SCALE = 0.55f;
     private record Key(IndexedMesh mesh, int first, int count, boolean opaque, boolean light) {}
@@ -58,7 +58,8 @@ public final class IrisGeometryCache {
 
     private static final LinkedHashMap<Key, Entry> ENTRIES = new LinkedHashMap<>(64, 0.75f, true);
     private static final ArrayDeque<Entry> PENDING = new ArrayDeque<>();
-    private static long frame, bytes, lightBytes, peakBytes, windowBytes, windowBuilds, windowNanos, lastLog = System.nanoTime();
+    private static long frame, bytes, lightBytes, peakBytes, windowBytes, windowBuilds, windowNanos,
+            windowLightEvictions, lastLog = System.nanoTime();
 
     private IrisGeometryCache() {}
     public static long frame() { return frame; }
@@ -90,7 +91,27 @@ public final class IrisGeometryCache {
         return request(mesh, first, count, opaque, true, false);
     }
 
-    /** Vehicle light overlays use a separate bounded budget so they cannot evict the body working set. */
+    /** Static items share local geometry across hand, entity and shadow views. */
+    public static Mesh requestItem(IndexedMesh mesh, int first, int count) {
+        return request(mesh, first, count, false, true, false);
+    }
+
+    public static void releaseMesh(IndexedMesh mesh) {
+        var iterator = ENTRIES.values().iterator();
+        while (iterator.hasNext()) {
+            var entry = iterator.next();
+            if (entry.key.mesh != mesh) continue;
+            PENDING.remove(entry);
+            if (entry.gpu != null) {
+                bytes -= entry.gpu.bytes;
+                if (entry.key.light) lightBytes -= entry.gpu.bytes;
+                entry.gpu.close();
+            }
+            iterator.remove();
+        }
+    }
+
+    /** Lights have their own soft budget; the active working set must not fall back to CPU for lack of space. */
     public static Mesh requestVehicleLight(IndexedMesh mesh, int first, int count) {
         return request(mesh, first, count, false, true, true);
     }
@@ -103,8 +124,8 @@ public final class IrisGeometryCache {
             entry = new Entry(key);
             ENTRIES.put(key, entry);
             if (immediate) {
-                if (!light || admitLight(entry)) build(entry);
-                else ENTRIES.remove(key);
+                if (light) trimLights((long)count * IrisCompat.entityVertexSize());
+                build(entry);
             } else PENDING.addLast(entry);
         }
         entry.requestedFrame = frame;
@@ -151,27 +172,27 @@ public final class IrisGeometryCache {
             built++;
         }
         long baseBytes = bytes - lightBytes;
-        if (baseBytes > LIMIT || lightBytes > LIGHT_LIMIT) {
+        if (baseBytes > LIMIT) {
             var iterator = ENTRIES.values().iterator();
-            while ((baseBytes > LIMIT || lightBytes > LIGHT_LIMIT) && iterator.hasNext()) {
+            while (baseBytes > LIMIT && iterator.hasNext()) {
                 var entry = iterator.next();
-                if (entry.gpu == null || entry.requestedFrame >= frame - 1) continue;
-                if (entry.key.light ? lightBytes <= LIGHT_LIMIT : baseBytes <= LIMIT) continue;
+                if (entry.gpu == null || entry.key.light || entry.requestedFrame >= frame - 1) continue;
                 bytes -= entry.gpu.bytes;
-                if (entry.key.light) lightBytes -= entry.gpu.bytes;
-                else baseBytes -= entry.gpu.bytes;
+                baseBytes -= entry.gpu.bytes;
                 entry.gpu.close();
                 iterator.remove();
             }
         }
+        trimLights(0);
         if (System.nanoTime() - lastLog >= 5_000_000_000L) {
             if (ClientConfig.LOG_VEHICLE_INSTANCING_STATS.getAsBoolean() || ClientConfig.LOG_TRACK_RENDER_STATS.getAsBoolean()) {
                 LoggerFactory.getLogger("UnrealTrainMod/Iris").info(
-                        "Iris geometry cache: resident={}B lightResident={}B peak={}B softLimit={}B lightLimit={}B pending={} builds={} upload={}B buildCpu={}ms",
-                        bytes, lightBytes, peakBytes, LIMIT, LIGHT_LIMIT, PENDING.size(), windowBuilds, windowBytes, windowNanos / 1_000_000.0);
+                        "Iris geometry cache: resident={}B lightResident={}B peak={}B softLimit={}B lightSoftLimit={}B lightOverBudget={}B lightEvictions={} pending={} builds={} upload={}B buildCpu={}ms",
+                        bytes, lightBytes, peakBytes, LIMIT, LIGHT_SOFT_LIMIT, Math.max(0L, lightBytes - LIGHT_SOFT_LIMIT),
+                        windowLightEvictions, PENDING.size(), windowBuilds, windowBytes, windowNanos / 1_000_000.0);
             }
             lastLog = System.nanoTime();
-            windowBytes = windowBuilds = windowNanos = 0;
+            windowBytes = windowBuilds = windowNanos = windowLightEvictions = 0;
         }
     }
 
@@ -208,25 +229,19 @@ public final class IrisGeometryCache {
         }
     }
 
-    private static boolean admitLight(Entry entry) {
-        long estimate = (long)entry.key.count * IrisCompat.entityVertexSize();
-        return makeRoomForLight(estimate);
-    }
-
-    /** Release stale light entries before rejecting a visible replacement for lack of free budget. */
-    private static boolean makeRoomForLight(long estimate) {
-        if (lightBytes + estimate <= LIGHT_LIMIT && bytes + estimate <= LIMIT + LIGHT_LIMIT) return true;
+    /** Evict idle lights in LRU order; current/previous-frame meshes may exceed the soft budget. */
+    private static void trimLights(long incomingBytes) {
+        if (lightBytes + incomingBytes <= LIGHT_SOFT_LIMIT) return;
         var iterator = ENTRIES.values().iterator();
-        while (iterator.hasNext()
-                && (lightBytes + estimate > LIGHT_LIMIT || bytes + estimate > LIMIT + LIGHT_LIMIT)) {
+        while (iterator.hasNext() && lightBytes + incomingBytes > LIGHT_SOFT_LIMIT) {
             var candidate = iterator.next();
             if (candidate.gpu == null || !candidate.key.light || candidate.requestedFrame >= frame - 1) continue;
             bytes -= candidate.gpu.bytes;
             lightBytes -= candidate.gpu.bytes;
             candidate.gpu.close();
             iterator.remove();
+            windowLightEvictions++;
         }
-        return lightBytes + estimate <= LIGHT_LIMIT && bytes + estimate <= LIMIT + LIGHT_LIMIT;
     }
 
     private static int scaleRgb(int color) {
@@ -239,7 +254,7 @@ public final class IrisGeometryCache {
     public static void clear() {
         ENTRIES.values().forEach(entry -> { if (entry.gpu != null) entry.gpu.close(); });
         ENTRIES.clear(); PENDING.clear();
-        bytes = lightBytes = peakBytes = windowBytes = windowBuilds = windowNanos = 0;
+        bytes = lightBytes = peakBytes = windowBytes = windowBuilds = windowNanos = windowLightEvictions = 0;
         lastLog = System.nanoTime();
         IrisBatch.clear();
         IrisPrewarmer.clear();

@@ -1,0 +1,16 @@
+# Baked colors are supplied by the item model texture variable.
+
+newmtl Brushed_brass
+Kd 1.0 1.0 1.0
+d 1.0
+map_Kd #texture
+
+newmtl Dark_ink
+Kd 1.0 1.0 1.0
+d 1.0
+map_Kd #texture
+
+newmtl Recessed_brass
+Kd 1.0 1.0 1.0
+d 1.0
+map_Kd #texture

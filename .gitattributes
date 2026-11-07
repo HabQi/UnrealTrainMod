@@ -6,5 +6,6 @@ src/generated/**/*.json text eol=lf
 
 # Store model and texture assets in Git LFS.
 *.mqo filter=lfs diff=lfs merge=lfs -text linguist-generated=true
+*.mqoz filter=lfs diff=lfs merge=lfs -text linguist-generated=true
 *.obj filter=lfs diff=lfs merge=lfs -text linguist-generated=true
 *.png filter=lfs diff=lfs merge=lfs -text

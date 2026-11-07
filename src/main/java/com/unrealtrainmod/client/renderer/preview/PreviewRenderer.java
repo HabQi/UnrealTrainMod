@@ -106,6 +106,37 @@ public final class PreviewRenderer implements AutoCloseable {
         });
     }
 
+    /** Square item framing: one model unit fills the slot; retain all transparent margins. */
+    public NativeImage captureItem(int size, Consumer<PoseStack> drawScene) {
+        return renderScene(size, size, true, () -> {
+            RenderSystem.setProjectionMatrix(new Matrix4f().ortho(-0.5f, 0.5f, -0.5f, 0.5f, 0.05f, 20),
+                    VertexSorting.DISTANCE_TO_ORIGIN);
+            var pose = new PoseStack();
+            pose.translate(0, 0, -10);
+            drawScene.accept(pose);
+            int rowLength = GL11.glGetInteger(GL11.GL_PACK_ROW_LENGTH);
+            int skipRows = GL11.glGetInteger(GL11.GL_PACK_SKIP_ROWS);
+            int skipPixels = GL11.glGetInteger(GL11.GL_PACK_SKIP_PIXELS);
+            var pixels = new NativeImage(size, size, false);
+            try {
+                GlStateManager._pixelStore(GL11.GL_PACK_ROW_LENGTH, 0);
+                GlStateManager._pixelStore(GL11.GL_PACK_SKIP_ROWS, 0);
+                GlStateManager._pixelStore(GL11.GL_PACK_SKIP_PIXELS, 0);
+                RenderSystem.bindTexture(target.getColorTextureId());
+                pixels.downloadTexture(0, false);
+                pixels.flipY();
+                return pixels;
+            } catch (RuntimeException | Error exception) {
+                pixels.close();
+                throw exception;
+            } finally {
+                GlStateManager._pixelStore(GL11.GL_PACK_ROW_LENGTH, rowLength);
+                GlStateManager._pixelStore(GL11.GL_PACK_SKIP_ROWS, skipRows);
+                GlStateManager._pixelStore(GL11.GL_PACK_SKIP_PIXELS, skipPixels);
+            }
+        });
+    }
+
     private static PoseStack perspectivePose(ModelBounds bounds, PreviewCamera camera, int width, int height) {
         float radius = bounds.radius();
         float aspect = (float)width / height;

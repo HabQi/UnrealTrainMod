@@ -8,12 +8,13 @@ import com.mojang.blaze3d.platform.NativeImage;
 import com.unrealtrainmod.client.model.TextureLoader;
 import com.unrealtrainmod.resource.PackageAsset;
 import java.io.IOException;
+import java.util.BitSet;
 import java.util.EnumSet;
 import java.util.List;
 import org.slf4j.LoggerFactory;
 
 /** Reload-local descriptions only; decoded auxiliary pixels never remain in a source. */
-public sealed interface PbrSource permits PbrSource.Files, PbrSource.Atlas {
+public sealed interface PbrSource permits PbrSource.Files, PbrSource.Atlas, PbrSource.LightMerge {
     enum Channel {
         NORMAL("_n.png"), SPECULAR("_s.png");
         final String suffix;
@@ -31,7 +32,6 @@ public sealed interface PbrSource permits PbrSource.Files, PbrSource.Atlas {
         private final EnumSet<Channel> failed = EnumSet.noneOf(Channel.class);
 
         Files(FileKey key) { this.key = key; }
-        public FileKey key() { return key; }
         private PackageAsset asset(Channel channel) { return channel == Channel.NORMAL ? key.normal() : key.specular(); }
         @Override public boolean has(Channel channel) { return asset(channel) != null; }
 
@@ -79,6 +79,43 @@ public sealed interface PbrSource permits PbrSource.Files, PbrSource.Atlas {
         } catch (RuntimeException | Error exception) {
             result.close();
             throw exception;
+        }
+    }
+
+    /** Retains only source descriptions and the base merge's immutable pixel-selection mask. */
+    record LightMerge(int width, int height, PbrSource head, PbrSource tail, BitSet tailPixels) implements PbrSource {
+        @Override public boolean has(Channel channel) {
+            return (head != null && head.has(channel)) || (tail != null && tail.has(channel));
+        }
+
+        @Override public NativeImage read(Channel channel, int defaultPixel) {
+            NativeImage merged = null;
+            try (var front = readAligned(head, channel, defaultPixel);
+                 var back = readAligned(tail, channel, defaultPixel)) {
+                if (front == null && back == null) return null;
+                merged = new NativeImage(width, height, false);
+                for (int y = 0; y < height; y++) {
+                    int offset = y * width;
+                    for (int x = 0; x < width; x++) {
+                        var source = tailPixels.get(offset + x) ? back : front;
+                        merged.setPixelRGBA(x, y, source == null ? defaultPixel : source.getPixelRGBA(x, y));
+                    }
+                }
+                return merged;
+            } catch (RuntimeException | Error exception) {
+                if (merged != null) merged.close();
+                throw exception;
+            }
+        }
+
+        private NativeImage readAligned(PbrSource source, Channel channel, int defaultPixel) {
+            var image = source == null ? null : source.read(channel, defaultPixel);
+            if (image == null || (image.getWidth() == width && image.getHeight() == height)) return image;
+            try {
+                return resize(image, width, height);
+            } finally {
+                image.close();
+            }
         }
     }
 

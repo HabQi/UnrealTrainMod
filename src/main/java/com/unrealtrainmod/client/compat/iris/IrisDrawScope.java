@@ -41,11 +41,13 @@ public final class IrisDrawScope implements AutoCloseable {
     private final Map<Integer, int[]> constants = new LinkedHashMap<>();
     private RenderType activeType;
 
-    public IrisDrawScope() { this(false); }
-    public static IrisDrawScope entity() { return new IrisDrawScope(true); }
+    public IrisDrawScope() { this(false, false); }
+    public static IrisDrawScope entity() { return new IrisDrawScope(true, false); }
+    /** HandRenderer already owns the hand phase and projection; do not wrap it as an entity pass. */
+    public static IrisDrawScope hand() { return new IrisDrawScope(false, true); }
     public static IrisDrawScope current() { return current; }
 
-    private IrisDrawScope(boolean entity) {
+    private IrisDrawScope(boolean entity, boolean hand) {
         this.entity = entity;
         RenderSystem.backupGlState(state);
         GL11.glGetIntegerv(GL11.GL_VIEWPORT, viewport);
@@ -56,8 +58,8 @@ public final class IrisDrawScope implements AutoCloseable {
         }
         RenderSystem.activeTexture(activeTexture);
         identity = IrisCompat.currentIdentity();
-        drawIdentity = entity ? identity : new int[3];
-        if (!entity) IrisCompat.restoreTrackIdentity(drawIdentity);
+        drawIdentity = entity || hand ? identity : new int[3];
+        if (!entity && !hand) IrisCompat.restoreTrackIdentity(drawIdentity);
         current = this;
     }
 

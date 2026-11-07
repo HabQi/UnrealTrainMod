@@ -16,6 +16,8 @@ import com.unrealtrainmod.client.ClientThumbnailManager;
 import com.unrealtrainmod.client.PlacedModelRenderer;
 import com.unrealtrainmod.client.TrainEntityRenderer;
 import com.unrealtrainmod.client.StaticModelShader;
+import com.unrealtrainmod.client.item.CachedItemRenderer;
+import com.unrealtrainmod.client.item.CachedObjLoader;
 import com.unrealtrainmod.client.gui.ActivationWarningOverlay;
 import com.unrealtrainmod.client.gui.TrainDebugOverlay;
 import com.unrealtrainmod.client.network.ClientPayloadHandlers;
@@ -44,11 +46,33 @@ import net.neoforged.neoforge.client.event.EntityRenderersEvent;
 import net.neoforged.neoforge.client.event.RegisterClientReloadListenersEvent;
 import net.neoforged.neoforge.client.event.RegisterShadersEvent;
 import net.neoforged.neoforge.client.event.RegisterKeyMappingsEvent;
+import net.neoforged.neoforge.client.event.ModelEvent;
+import net.neoforged.neoforge.client.extensions.common.IClientItemExtensions;
+import net.neoforged.neoforge.client.extensions.common.RegisterClientExtensionsEvent;
 
 // This class will not load on dedicated servers. Accessing client side code from here is safe.
 @Mod(value = UnrealTrainMod.MODID, dist = Dist.CLIENT)
 @EventBusSubscriber(modid = UnrealTrainMod.MODID, value = Dist.CLIENT)
 public class UnrealTrainModClient {
+    @SubscribeEvent
+    static void registerItemGeometry(ModelEvent.RegisterGeometryLoaders event) {
+        event.register(ClientModelManager.id("cached_obj"), new CachedObjLoader());
+    }
+
+    @SubscribeEvent
+    static void registerItemExtensions(RegisterClientExtensionsEvent event) {
+        event.registerItem(new IClientItemExtensions() {
+            @Override
+            public net.minecraft.client.renderer.BlockEntityWithoutLevelRenderer getCustomRenderer() {
+                return CachedItemRenderer.get();
+            }
+        }, UnrealTrainMod.TRACK_WRENCH, UnrealTrainMod.HACKSAW, UnrealTrainMod.CROWBAR,
+                UnrealTrainMod.VEHICLE_MOVER, UnrealTrainMod.KEY);
+    }
+
+    @SubscribeEvent
+    static void onItemModelsBaked(ModelEvent.BakingCompleted event) { CachedItemRenderer.invalidate(); }
+
     @SubscribeEvent
     static void registerDrivingKeys(RegisterKeyMappingsEvent event) { TrainDrivingClient.registerKeys(event); }
 
@@ -133,6 +157,7 @@ public class UnrealTrainModClient {
         NeoForge.EVENT_BUS.addListener(VehicleScriptManager::onLogout);
         NeoForge.EVENT_BUS.addListener(ClientThumbnailManager.INSTANCE::onFramePre);
         NeoForge.EVENT_BUS.addListener(ClientThumbnailManager.INSTANCE::onFramePost);
+        NeoForge.EVENT_BUS.addListener(CachedItemRenderer::onFramePost);
         NeoForge.EVENT_BUS.addListener(TrainModelRenderer::onRenderStage);
         NeoForge.EVENT_BUS.addListener(ClientTrackCache.INSTANCE::onSync);
         NeoForge.EVENT_BUS.addListener(ClientTrackCache.INSTANCE::onLevelLoad);
@@ -160,6 +185,7 @@ public class UnrealTrainModClient {
         TrainPoseClient.clear();
         VehicleScriptManager.clear();
         ClientThumbnailManager.INSTANCE.close();
+        CachedItemRenderer.invalidate();
         ClientModelManager.INSTANCE.close();
         TrainModelRenderer.closeWorld();
         ClientTrackCache.INSTANCE.close();

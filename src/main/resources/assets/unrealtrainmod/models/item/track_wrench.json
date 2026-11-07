@@ -1,156 +1,26 @@
 {
   "parent": "minecraft:block/block",
+  "loader": "unrealtrainmod:cached_obj",
+  "model": "unrealtrainmod:models/item/track_wrench.obj",
+  "automatic_culling": false,
+  "flip_v": true,
+  "emissive_ambient": false,
   "textures": {
-    "particle": "minecraft:block/iron_block",
-    "metal": "minecraft:block/iron_block"
+    "texture": "unrealtrainmod:item/track_wrench",
+    "particle": "unrealtrainmod:item/track_wrench"
   },
-  "elements": [
-    {
-      "from": [
-        7,
-        2,
-        7
-      ],
-      "to": [
-        9,
-        10,
-        9
-      ],
-      "faces": {
-        "north": {
-          "texture": "#metal"
-        },
-        "south": {
-          "texture": "#metal"
-        },
-        "east": {
-          "texture": "#metal"
-        },
-        "west": {
-          "texture": "#metal"
-        },
-        "up": {
-          "texture": "#metal"
-        },
-        "down": {
-          "texture": "#metal"
-        }
-      }
-    },
-    {
-      "from": [
-        5,
-        9,
-        7
-      ],
-      "to": [
-        11,
-        11,
-        9
-      ],
-      "faces": {
-        "north": {
-          "texture": "#metal"
-        },
-        "south": {
-          "texture": "#metal"
-        },
-        "east": {
-          "texture": "#metal"
-        },
-        "west": {
-          "texture": "#metal"
-        },
-        "up": {
-          "texture": "#metal"
-        },
-        "down": {
-          "texture": "#metal"
-        }
-      }
-    },
-    {
-      "from": [
-        4,
-        10,
-        7
-      ],
-      "to": [
-        6,
-        14,
-        9
-      ],
-      "faces": {
-        "north": {
-          "texture": "#metal"
-        },
-        "south": {
-          "texture": "#metal"
-        },
-        "east": {
-          "texture": "#metal"
-        },
-        "west": {
-          "texture": "#metal"
-        },
-        "up": {
-          "texture": "#metal"
-        },
-        "down": {
-          "texture": "#metal"
-        }
-      }
-    },
-    {
-      "from": [
-        10,
-        10,
-        7
-      ],
-      "to": [
-        12,
-        14,
-        9
-      ],
-      "faces": {
-        "north": {
-          "texture": "#metal"
-        },
-        "south": {
-          "texture": "#metal"
-        },
-        "east": {
-          "texture": "#metal"
-        },
-        "west": {
-          "texture": "#metal"
-        },
-        "up": {
-          "texture": "#metal"
-        },
-        "down": {
-          "texture": "#metal"
-        }
-      }
-    }
-  ],
   "gui_light": "front",
   "display": {
     "gui": {
       "rotation": [
-        0,
-        0,
-        -40
-      ],
-      "translation": [
-        0,
-        0,
-        0
+        15,
+        -25,
+        -35
       ],
       "scale": [
-        1.1,
-        1.1,
-        1.1
+        1.35,
+        1.35,
+        1.35
       ]
     },
     "thirdperson_righthand": {
@@ -219,6 +89,30 @@
         0.8,
         0.8,
         0.8
+      ]
+    },
+    "ground": {
+      "translation": [
+        0,
+        2,
+        0
+      ],
+      "scale": [
+        0.6,
+        0.6,
+        0.6
+      ]
+    },
+    "fixed": {
+      "rotation": [
+        0,
+        180,
+        0
+      ],
+      "scale": [
+        1.1,
+        1.1,
+        1.1
       ]
     }
   }

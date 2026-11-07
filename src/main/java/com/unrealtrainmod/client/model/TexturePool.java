@@ -10,27 +10,30 @@ import org.slf4j.LoggerFactory;
 import com.mojang.blaze3d.platform.NativeImage;
 import com.unrealtrainmod.UnrealTrainMod;
 import com.unrealtrainmod.resource.PackageAsset;
+import com.unrealtrainmod.resource.ResourceIds;
 import com.unrealtrainmod.client.texture.PbrDiscovery;
 import com.unrealtrainmod.client.texture.PbrSource;
 import com.unrealtrainmod.client.texture.PreparedTexture;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.BitSet;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import net.minecraft.resources.ResourceLocation;
 
 /** Reload-local pixel sharing. Only canonical images are owned and transferred for upload. */
 final class TexturePool implements AutoCloseable {
     private static final Logger LOGGER = LoggerFactory.getLogger(TexturePool.class);
-    record Entry(ResourceLocation id, NativeImage image, TextureAlpha alpha, PbrSource.Files pbr) {}
+    record Entry(ResourceLocation id, NativeImage image, TextureAlpha alpha, PbrSource pbr) {}
     private record PixelKey(int width, int height, long hash) {}
+    private record LightPair(ResourceLocation head, ResourceLocation tail) {}
 
     private final Map<PackageAsset, Entry> assets = new HashMap<>();
     private final Map<PixelKey, List<Entry>> pixels = new HashMap<>();
+    private final Map<LightPair, Entry> lightPairs = new HashMap<>();
     private final Map<ResourceLocation, PreparedTexture> images = new HashMap<>();
     private final PbrDiscovery pbr = new PbrDiscovery();
     private int atlasPages;
@@ -54,8 +57,8 @@ final class TexturePool implements AutoCloseable {
             var key = new PixelKey(image.getWidth(), image.getHeight(), hash);
             var candidates = pixels.computeIfAbsent(key, ignored -> new ArrayList<>());
             for (var candidate : candidates) {
-                if (Objects.equals(auxiliary == null ? null : auxiliary.key(), candidate.pbr() == null ? null : candidate.pbr().key())
-                        && samePixels(image, candidate.image())) {
+                // PbrDiscovery interns file sources by their complete FileKey within this reload.
+                if (auxiliary == candidate.pbr() && samePixels(image, candidate.image())) {
                     assets.put(asset, candidate);
                     return candidate;
                 }
@@ -65,6 +68,58 @@ final class TexturePool implements AutoCloseable {
             retained = true;
             candidates.add(entry);
             assets.put(asset, entry);
+            return entry;
+        } finally {
+            if (!retained) image.close();
+        }
+    }
+
+    /** Build the dual-light surface once; the selected RGBA pixel is never blended with the other source. */
+    Entry mergeLights(Entry head, Entry tail) {
+        if (head == null) return tail;
+        if (tail == null || head.id().equals(tail.id())) return head;
+        var key = new LightPair(head.id(), tail.id());
+        var cached = lightPairs.get(key);
+        if (cached != null) return cached;
+        var front = head.image(); var back = tail.image();
+        int width = Math.max(front.getWidth(), back.getWidth());
+        int height = Math.max(front.getHeight(), back.getHeight());
+        var image = new NativeImage(width, height, false);
+        boolean retained = false;
+        try {
+            // Only the PBR description needs the one-bit source selection after base-image preparation.
+            var tailPixels = head.pbr() == null && tail.pbr() == null ? null
+                    : new BitSet(Math.multiplyExact(width, height));
+            int[] frontColumns = new int[width], backColumns = new int[width];
+            for (int x = 0; x < width; x++) {
+                frontColumns[x] = (int)((x + 0.5) * front.getWidth() / width);
+                backColumns[x] = (int)((x + 0.5) * back.getWidth() / width);
+            }
+            int constantMask = TextureAlpha.pixelMask(Math.max(front.getPixelRGBA(0, 0) >>> 24,
+                    back.getPixelRGBA(0, 0) >>> 24));
+            for (int y = 0; y < height; y++) {
+                int frontRow = (int)((y + 0.5) * front.getHeight() / height);
+                int backRow = (int)((y + 0.5) * back.getHeight() / height);
+                int offset = y * width;
+                for (int x = 0; x < width; x++) {
+                    int frontPixel = front.getPixelRGBA(frontColumns[x], frontRow);
+                    int backPixel = back.getPixelRGBA(backColumns[x], backRow);
+                    boolean useTail = (backPixel >>> 24) > (frontPixel >>> 24);
+                    int pixel = useTail ? backPixel : frontPixel;
+                    if ((pixel >>> 24) == 0) pixel = 0;
+                    image.setPixelRGBA(x, y, pixel);
+                    if (useTail && tailPixels != null) tailPixels.set(offset + x);
+                    if (constantMask >= 0 && TextureAlpha.pixelMask(pixel >>> 24) != constantMask) constantMask = -1;
+                }
+            }
+            var auxiliary = tailPixels == null ? null
+                    : new PbrSource.LightMerge(width, height, head.pbr(), tail.pbr(), tailPixels);
+            var id = ResourceLocation.fromNamespaceAndPath(UnrealTrainMod.MODID, "textures/vehicle_lights/"
+                    + ResourceIds.hash("alpha_max_head_tie_v1\0" + head.id() + "\0" + tail.id()));
+            var entry = new Entry(id, image, new TextureAlpha(image, constantMask), auxiliary);
+            images.put(id, new PreparedTexture(image, auxiliary));
+            retained = true;
+            lightPairs.put(key, entry);
             return entry;
         } finally {
             if (!retained) image.close();
@@ -106,9 +161,9 @@ final class TexturePool implements AutoCloseable {
         }
         long pixelCount = images.values().stream().mapToLong(texture -> (long)texture.image().getWidth() * texture.image().getHeight()).sum();
         pbr.log("vehicles");
-        LOGGER.info("Prepared vehicle textures: {} assets -> {} unique source images; {} atlas pages; "
+        LOGGER.info("Prepared vehicle textures: {} assets -> {} unique source images; {} merged light textures; {} atlas pages; "
                         + "{} retained for upload, {} pixels ({} RGBA bytes)",
-                assets.size(), unique, atlasPages, images.size(), pixelCount, pixelCount * Integer.BYTES);
+                assets.size(), unique, lightPairs.size(), atlasPages, images.size(), pixelCount, pixelCount * Integer.BYTES);
         var transferred = new HashMap<>(images);
         images.clear();
         return transferred;

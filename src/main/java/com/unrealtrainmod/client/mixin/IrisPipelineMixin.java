@@ -5,6 +5,7 @@
 package com.unrealtrainmod.client.mixin;
 
 import com.unrealtrainmod.client.compat.iris.IrisVehicleReprojection;
+import com.unrealtrainmod.client.compat.iris.IrisGeometryCache;
 import com.unrealtrainmod.client.texture.MaterialTexture;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Pseudo;
@@ -18,6 +19,7 @@ public abstract class IrisPipelineMixin {
     @Inject(method = "destroy", at = @At("HEAD"))
     private void unrealtrainmod$releaseResources(CallbackInfo callback) {
         IrisVehicleReprojection.reset();
+        IrisGeometryCache.clear();
         MaterialTexture.invalidatePbr();
     }
 }

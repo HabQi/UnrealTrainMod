@@ -16,7 +16,7 @@ public record ModelTexture(PackageAsset asset, boolean alphaBlend, Lights lights
                 case OFF -> off;
                 case HEAD -> head;
                 case TAIL -> tail;
-                case BASE -> throw new IllegalArgumentException("Base texture is not a light layer");
+                case BASE, BOTH -> throw new IllegalArgumentException("Layer has no source light texture: " + layer);
             };
         }
     }

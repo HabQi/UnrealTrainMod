@@ -1,0 +1,26 @@
+# Baked colors are supplied by the item model texture variable.
+
+newmtl 01_Forged_satin_steel
+Kd 1.0 1.0 1.0
+d 1.0
+map_Kd #texture
+
+newmtl 02_Charcoal_rubber
+Kd 1.0 1.0 1.0
+d 1.0
+map_Kd #texture
+
+newmtl 03_Rail_safety_yellow
+Kd 1.0 1.0 1.0
+d 1.0
+map_Kd #texture
+
+newmtl 04_Laser_marking
+Kd 1.0 1.0 1.0
+d 1.0
+map_Kd #texture
+
+newmtl 05_Warm_grey_print
+Kd 1.0 1.0 1.0
+d 1.0
+map_Kd #texture

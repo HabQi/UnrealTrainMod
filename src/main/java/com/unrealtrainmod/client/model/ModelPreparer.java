@@ -23,6 +23,7 @@ import com.unrealtrainmod.resource.cache.ModelCache;
 import it.unimi.dsi.fastutil.ints.IntArrayList;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.EnumMap;
 import java.util.HashSet;
@@ -165,11 +166,18 @@ public final class ModelPreparer {
                     batches.add(new RenderBatch(selectedMesh, texture, category, mode, doubleSided));
                 }
                 if (binding != null && binding.lights() != null) {
-                    int[] emissiveColors = null;
+                    var lightTextures = new EnumMap<ModelLightLayer, TexturePool.Entry>(ModelLightLayer.class);
                     for (var layer : List.of(ModelLightLayer.OFF, ModelLightLayer.HEAD, ModelLightLayer.TAIL)) {
                         var asset = binding.lights().texture(layer);
-                        if (asset == null) continue;
-                        var lightTexture = textures.load(asset);
+                        if (asset != null) lightTextures.put(layer, textures.load(asset));
+                    }
+                    var combined = textures.mergeLights(lightTextures.get(ModelLightLayer.HEAD), lightTextures.get(ModelLightLayer.TAIL));
+                    if (combined != null) lightTextures.put(ModelLightLayer.BOTH, combined);
+                    int[] emissiveColors = null;
+                    var lightMeshes = new ArrayList<IndexedMesh>(4);
+                    for (var lightEntry : lightTextures.entrySet()) {
+                        var layer = lightEntry.getKey();
+                        var lightTexture = lightEntry.getValue();
                         var selected = new IntArrayList();
                         for (int i = 0; i < indices.length; i += 3) {
                             if (lightTexture.alpha().classify(original.vertices(), original.colors(),
@@ -189,8 +197,20 @@ public final class ModelPreparer {
                             }
                             colors = emissiveColors;
                         }
-                        batches.add(RenderBatch.light(new IndexedMesh(original.vertices(), colors, selected.toIntArray()),
-                                lightTexture.id(), doubleSided, layer));
+                        int[] lightIndices = selected.toIntArray();
+                        IndexedMesh lightMesh = null;
+                        // Single/dual-light textures can differ while their static geometry and alpha are identical.
+                        for (var candidate : lightMeshes) {
+                            if (candidate.colors() == colors && Arrays.equals(candidate.indices(), lightIndices)) {
+                                lightMesh = candidate;
+                                break;
+                            }
+                        }
+                        if (lightMesh == null) {
+                            lightMesh = new IndexedMesh(original.vertices(), colors, lightIndices);
+                            lightMeshes.add(lightMesh);
+                        }
+                        batches.add(RenderBatch.light(lightMesh, lightTexture.id(), doubleSided, layer));
                     }
                 }
             }

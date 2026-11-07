@@ -21,23 +21,23 @@ public final class ClientConfig {
                     "Ignored while useStaticTranslucentBatches is enabled.",
                     "Overlapping translucent surfaces may blend incorrectly when disabled.")
             .translation("unrealtrainmod.configuration.sortTranslucentTriangles")
-            .define("sortTranslucentTriangles", true);
+            .define("sortTranslucentTriangles", false);
 
     public static final ModConfigSpec.BooleanValue USE_STATIC_TRANSLUCENT_BATCHES = BUILDER
             .comment("Draw vehicle translucent batches directly from static indices in submission order.",
                     "Skips triangle collection, depth calculation, sorting and dynamic index uploads on the GPU path.",
                     "Overrides sortTranslucentTriangles; overlapping translucent surfaces may blend incorrectly.")
             .translation("unrealtrainmod.configuration.useStaticTranslucentBatches")
-            .define("useStaticTranslucentBatches", false);
+            .define("useStaticTranslucentBatches", true);
 
     public static final ModConfigSpec.BooleanValue USE_VEHICLE_INSTANCING = BUILDER
             .comment("Draw instanced vehicle CUTOUT batches with one indexed instanced draw per shared mesh range.",
-                    "Disabled by default for side-by-side comparison with the normal GPU draw path.",
+                    "Enabled by default; disable for side-by-side comparison with the normal GPU draw path.",
                     "Only affects vehicle CUTOUT requests; MIXED, BLEND and CPU fallback keep their existing rules.",
                     "Requires OpenGL 3.3 and the instanced model shader; otherwise the normal path is used automatically.",
                     "Takes effect immediately without reloading models or restarting the game.")
             .translation("unrealtrainmod.configuration.useVehicleInstancing")
-            .define("useVehicleInstancing", false);
+            .define("useVehicleInstancing", true);
 
     public static final ModConfigSpec.BooleanValue LOG_VEHICLE_INSTANCING_STATS = BUILDER
             .comment("Log five-second vehicle render windows for world and preview queues separately.",
@@ -49,6 +49,14 @@ public final class ClientConfig {
                     "Disabling skips counters/timing and releases queries at the next vehicle queue frame.")
             .translation("unrealtrainmod.configuration.logVehicleInstancingStats")
             .define("logVehicleInstancingStats", false);
+
+    public static final ModConfigSpec.BooleanValue LOG_ITEM_RENDER_STATS = BUILDER
+            .comment("Log five-second static item rendering windows for GUI, hand and world contexts.",
+                    "Reports screenshot hits/generation, native/Iris GPU draws, triangles, standard fallbacks and CPU submission time.",
+                    "Also splits paths and fallback reasons by display context and main/shadow view.",
+                    "Screenshot generation includes readback/upload; these counters are not GPU timings or full-frame measurements.")
+            .translation("unrealtrainmod.configuration.logItemRenderStats")
+            .define("logItemRenderStats", false);
 
     public static final ModConfigSpec.BooleanValue USE_TRACK_RENDER_STATE_CACHE = BUILDER
             .comment("Reuse render type, shader program, samplers and direction lights across consecutive track draws.",

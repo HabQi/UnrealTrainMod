@@ -43,6 +43,7 @@ public final class ModelRenderQueue implements ModelDrawSink, AutoCloseable {
     }
     private final String scene;
     private final boolean frontLighting;
+    private final boolean vehicleScene;
     private final List<Draw> draws = new ArrayList<>();
     private final IdentityHashMap<GpuModel.Mesh, Boolean> sortedMeshes = new IdentityHashMap<>();
     private final IdentityHashMap<GpuModel.Mesh, Boolean> instancedMeshes = new IdentityHashMap<>();
@@ -66,13 +67,14 @@ public final class ModelRenderQueue implements ModelDrawSink, AutoCloseable {
     public ModelRenderQueue(String scene, boolean frontLighting) {
         this.scene = scene;
         this.frontLighting = frontLighting;
+        this.vehicleScene = scene.equals("world") || scene.equals("preview");
     }
 
     /** Latch the diagnostic switch before submission so pose, script and enqueue scopes share one frame. */
     public InstancingStats statistics() {
         if (!statsFrameStarted) {
             statsFrameStarted = true;
-            collectStats = ClientConfig.LOG_VEHICLE_INSTANCING_STATS.getAsBoolean();
+            collectStats = vehicleScene && ClientConfig.LOG_VEHICLE_INSTANCING_STATS.getAsBoolean();
             if (collectStats) stats.beginFrame();
             else stats.close();
         }
@@ -101,6 +103,12 @@ public final class ModelRenderQueue implements ModelDrawSink, AutoCloseable {
     /** Script lighting is captured per draw; existing geometry submissions keep directional lighting. */
     public void submitGeometry(LoadedModel.Source source, PartSelection selection, PoseStack.Pose pose, int light,
                                boolean directionalLighting) {
+        submitBatches(source.gpu(), selection.batches(), pose, light, directionalLighting);
+    }
+
+    /** Static geometry submission without a vehicle definition or named-part selection. */
+    public void submitBatches(GpuModel gpu, List<RenderBatch> batches, PoseStack.Pose pose, int light,
+                              boolean directionalLighting) {
         RenderSystem.assertOnRenderThread();
         var frameStats = statistics();
         long enqueueStart = frameStats == null ? 0L : System.nanoTime();
@@ -111,8 +119,7 @@ public final class ModelRenderQueue implements ModelDrawSink, AutoCloseable {
             started = true;
         }
         var snapshot = pose.copy();
-        var gpu = source.gpu();
-        for (var batch : selection.batches()) {
+        for (var batch : batches) {
             if (!batch.lightLayer().enabled(lights)) continue;
             boolean emissive = batch.lightLayer().emissive();
             draws.add(new Draw(batch, customShader && gpu != null ? gpu.part(batch) : null, snapshot,
@@ -276,7 +283,7 @@ public final class ModelRenderQueue implements ModelDrawSink, AutoCloseable {
     }
 
     private boolean instancingEnabled() {
-        return ClientConfig.USE_VEHICLE_INSTANCING.getAsBoolean() && customShader && InstancedModelShader.usable();
+        return vehicleScene && ClientConfig.USE_VEHICLE_INSTANCING.getAsBoolean() && customShader && InstancedModelShader.usable();
     }
 
     public void drawTranslucent() {

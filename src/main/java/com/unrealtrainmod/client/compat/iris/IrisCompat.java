@@ -13,6 +13,7 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.culling.Frustum;
 import net.minecraft.client.renderer.RenderStateShard;
 import net.minecraft.client.renderer.RenderType;
+import net.minecraft.client.renderer.MultiBufferSource;
 import java.util.IdentityHashMap;
 import net.neoforged.fml.ModList;
 import net.neoforged.neoforge.client.event.RenderFrameEvent;
@@ -23,7 +24,8 @@ import org.slf4j.LoggerFactory;
 /** The optional Iris boundary. No Iris classes are linked when the mod is absent. */
 public final class IrisCompat {
     private static MethodHandle inUse, shadowPass, modelView, projection, frustum;
-    private static MethodHandle wrapEntity;
+    private static MethodHandle wrapEntity, handActive, originalBuffer;
+    private static Class<?> bufferWrapper;
     private static final IdentityHashMap<RenderType, RenderType> ENTITY_TYPES = new IdentityHashMap<>();
     private static final MethodHandle[] getIdentity = new MethodHandle[3], setIdentity = new MethodHandle[3];
     private static boolean initialized, active;
@@ -54,6 +56,10 @@ public final class IrisCompat {
                 setIdentity[i] = lookup.unreflect(capturedClass.getMethod(setters[i], int.class)).bindTo(captured);
             }
             var wrapper = Class.forName("net.irisshaders.iris.layer.OuterWrappedRenderType");
+            bufferWrapper = Class.forName("net.irisshaders.iris.layer.BufferSourceWrapper");
+            originalBuffer = lookup.unreflect(bufferWrapper.getMethod("getOriginal"));
+            var handClass = Class.forName("net.irisshaders.iris.pathways.HandRenderer");
+            handActive = lookup.unreflect(handClass.getMethod("isActive")).bindTo(handClass.getField("INSTANCE").get(null));
             var shard = Class.forName("net.irisshaders.iris.layer.EntityRenderStateShard").getField("INSTANCE").get(null);
             wrapEntity = MethodHandles.insertArguments(lookup.unreflect(wrapper.getMethod("wrapExactlyOnce",
                     String.class, RenderType.class, RenderStateShard.class)), 2, shard).bindTo("utm:cached_entity");
@@ -64,6 +70,28 @@ public final class IrisCompat {
     }
 
     public static boolean active() { return active; }
+
+    public static boolean handPass() {
+        if (!active) return false;
+        try { return (boolean)handActive.invoke(); }
+        catch (Throwable exception) { throw new IllegalStateException("Cannot read Iris hand state", exception); }
+    }
+
+    /** Only unwrap Iris's known forwarding layer; retain the underlying source's own flush policy. */
+    static MultiBufferSource.BufferSource itemBuffer(MultiBufferSource buffers) {
+        try {
+            while (bufferWrapper.isInstance(buffers)) buffers = (MultiBufferSource)originalBuffer.invoke(buffers);
+        } catch (Throwable exception) { throw new IllegalStateException("Cannot unwrap Iris item buffers", exception); }
+        return buffers instanceof MultiBufferSource.BufferSource source ? source : null;
+    }
+
+    static void flushItemBuffer(MultiBufferSource.BufferSource source) {
+        // Deferred batches can change CapturedRenderingState while they are submitted.
+        int[] identity = currentIdentity();
+        try { source.endBatch(); }
+        finally { restoreTrackIdentity(identity); }
+    }
+
     static int entityVertexSize() { return entityFormat.getVertexSize(); }
 
     static int[] currentIdentity() {
