@@ -103,7 +103,7 @@ public final class IrisModelRenderer {
             }
             prepare(snapshot, viewPose, shadow);
             IrisRenderStats.prepare(start);
-            boolean temporal = IrisVehicleReprojection.capture(train, viewPose, shadow);
+            int temporal = IrisVehicleReprojection.capture(train, viewPose, shadow);
             draw(snapshot, buffers, shadow, temporal);
         }
     }
@@ -118,7 +118,7 @@ public final class IrisModelRenderer {
             snapshot.submit(instance, selection, new PoseStack(), light);
             prepare(snapshot, pose, shadow);
             IrisRenderStats.prepare(start);
-            draw(snapshot, buffers, shadow, false);
+            draw(snapshot, buffers, shadow, 0);
         }
         return true;
     }
@@ -142,7 +142,7 @@ public final class IrisModelRenderer {
         }
     }
 
-    private static void draw(Snapshot snapshot, MultiBufferSource buffers, boolean shadow, boolean temporal) {
+    private static void draw(Snapshot snapshot, MultiBufferSource buffers, boolean shadow, int temporal) {
         long start = IrisRenderStats.clock();
         // Complete the direct drawing range before any BufferSource getBuffer() can flush a wrapped batch.
         boolean cached = false;
@@ -201,7 +201,7 @@ public final class IrisModelRenderer {
     }
 
     /** RTM light overlays use stable submission order; ordinary translucent triangles remain sorted above. */
-    private static void drawLightLayers(Snapshot snapshot, MultiBufferSource buffers, boolean temporal) {
+    private static void drawLightLayers(Snapshot snapshot, MultiBufferSource buffers, int temporal) {
         long start = IrisRenderStats.clock();
         var writer = new IrisVertices();
         for (var draw : snapshot.prepared) {

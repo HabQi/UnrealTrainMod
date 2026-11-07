@@ -93,7 +93,7 @@ public final class ClientModelManager extends SimplePreparableReloadListener<Pre
                     }
                 }
                 uploaded.put(entry.getKey(), new LoadedModel.Source(source.parts(), source.visibleParts(),
-                        source.bodyParts(), source.actionParts(), source.partsByName(), source.componentParts(), gpu));
+                        source.bodyParts(), source.actionParts(), source.partsByName(), source.componentParts(), source.irParts(), gpu));
             }
             var loaded = new HashMap<ResourceLocation, LoadedModel>();
             for (var vehicle : prepared.vehicles()) {
@@ -110,7 +110,7 @@ public final class ClientModelManager extends SimplePreparableReloadListener<Pre
                             }
                             return new LoadedModel.Instance(source, instance, selection);
                         }).toList();
-                loaded.put(vehicle.id(), new LoadedModel(instances, vehicle.bounds()));
+                loaded.put(vehicle.id(), new LoadedModel(instances, vehicle.bounds(), vehicle.irControlDefaults()));
             }
             sources = Map.copyOf(uploaded);
             textures = Set.copyOf(registered);
@@ -136,6 +136,7 @@ public final class ClientModelManager extends SimplePreparableReloadListener<Pre
         TrainModelRenderer.clearWorld();
         TrainModelRenderer.resetStatistics();
         VehicleScriptManager.clear();
+        com.unrealtrainmod.client.renderer.IrModelRenderer.clear();
         ScriptDiagnostics.clear();
         models = Map.of();
         releaseSources(sources);

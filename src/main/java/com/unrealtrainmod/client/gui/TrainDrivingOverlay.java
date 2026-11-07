@@ -4,6 +4,9 @@
  */
 package com.unrealtrainmod.client.gui;
 
+import static com.unrealtrainmod.client.gui.DrivingGuiGeometry.fill;
+import static com.unrealtrainmod.client.gui.DrivingGuiGeometry.renderOutline;
+
 import com.mojang.math.Axis;
 import com.unrealtrainmod.client.TrainDrivingClient;
 import com.unrealtrainmod.network.payload.TrainControlInputPayload.Action;
@@ -120,23 +123,28 @@ public final class TrainDrivingOverlay {
     public static void render(GuiGraphics graphics, TrainControlSyncPayload state, float partialTick,
                               double mouseX, double mouseY) {
         refresh(state);
-        var font = Minecraft.getInstance().font;
-        var layout = layout();
-        var desk = layout.desk;
-        graphics.fill(desk.x - 2, desk.y - 2, desk.x + desk.width + 2, desk.y + desk.height + 2, 0x66000000);
-        panel(graphics, desk, BACKGROUND);
-        graphics.fill(desk.x + 1, desk.y + 1, desk.x + desk.width - 1, desk.y + 3, EDGE);
-        speedometer(graphics, font, layout.speed, state);
-        var monitor = layout.monitor;
-        TrainMonitorOverlay.render(graphics, state, monitor.x, monitor.y,
-                layout.monitorCanvasWidth, MONITOR_HEIGHT, layout.monitorScale, !monitorExpanded, monitor.contains(mouseX, mouseY));
-        if (layout.data.width > 0) telemetry(graphics, font, layout.data);
-        handle(graphics, font, layout.brake(), false, state, mouseX, mouseY);
-        handle(graphics, font, layout.power(), true, state, mouseX, mouseY);
-        switches(graphics, font, layout, state, mouseX, mouseY);
-        door(graphics, font, layout.leftDoor(), VehicleDoor.LEFT, partialTick, mouseX, mouseY);
-        door(graphics, font, layout.rightDoor(), VehicleDoor.RIGHT, partialTick, mouseX, mouseY);
-        tooltip(graphics, font, layout, state, partialTick, mouseX, mouseY);
+        graphics.flush();
+        try {
+            var font = Minecraft.getInstance().font;
+            var layout = layout();
+            var desk = layout.desk;
+            fill(graphics, desk.x - 2, desk.y - 2, desk.x + desk.width + 2, desk.y + desk.height + 2, 0x66000000);
+            panel(graphics, desk, BACKGROUND);
+            fill(graphics, desk.x + 1, desk.y + 1, desk.x + desk.width - 1, desk.y + 3, EDGE);
+            speedometer(graphics, font, layout.speed, state);
+            var monitor = layout.monitor;
+            TrainMonitorOverlay.render(graphics, state, monitor.x, monitor.y,
+                    layout.monitorCanvasWidth, MONITOR_HEIGHT, layout.monitorScale, !monitorExpanded, monitor.contains(mouseX, mouseY));
+            if (layout.data.width > 0) telemetry(graphics, font, layout.data);
+            handle(graphics, font, layout.brake(), false, state, mouseX, mouseY);
+            handle(graphics, font, layout.power(), true, state, mouseX, mouseY);
+            switches(graphics, font, layout, state, mouseX, mouseY);
+            door(graphics, font, layout.leftDoor(), VehicleDoor.LEFT, partialTick, mouseX, mouseY);
+            door(graphics, font, layout.rightDoor(), VehicleDoor.RIGHT, partialTick, mouseX, mouseY);
+            tooltip(graphics, font, layout, state, partialTick, mouseX, mouseY);
+        } finally {
+            graphics.flush();
+        }
     }
 
     private static void speedometer(GuiGraphics graphics, Font font, Box box, TrainControlSyncPayload state) {
@@ -151,7 +159,7 @@ public final class TrainDrivingOverlay {
                     tick / 12.0 <= velocity / maximum ? CYAN : EDGE);
         }
         radialLine(graphics, cx, cy, 0, radius - 9, (float) (150 + 240 * velocity / maximum), CYAN);
-        graphics.fill(cx - 2, cy - 2, cx + 3, cy + 3, TEXT);
+        fill(graphics, cx - 2, cy - 2, cx + 3, cy + 3, TEXT);
         int scaleY = cy + radius / 2 + 3;
         label(graphics, font, Component.literal("0"), cx - radius - 3, scaleY, 8, MUTED);
         String limit = Integer.toString(maximum);
@@ -173,10 +181,13 @@ public final class TrainDrivingOverlay {
 
     private static void radialLine(GuiGraphics graphics, int x, int y, int from, int to, float angle, int color) {
         graphics.pose().pushPose();
-        graphics.pose().translate(x, y, 0);
-        graphics.pose().mulPose(Axis.ZP.rotationDegrees(angle));
-        graphics.fill(from, 0, to, 1, color);
-        graphics.pose().popPose();
+        try {
+            graphics.pose().translate(x, y, 0);
+            graphics.pose().mulPose(Axis.ZP.rotationDegrees(angle));
+            fill(graphics, from, 0, to, 1, color);
+        } finally {
+            graphics.pose().popPose();
+        }
     }
 
     private static void telemetry(GuiGraphics graphics, Font font, Box box) {
@@ -198,15 +209,15 @@ public final class TrainDrivingOverlay {
         int count = power ? TrainControlProfile.POWER_NOTCHES : TrainControlProfile.BRAKE_NOTCHES;
         int color = state.emergency() ? RED : power ? CYAN : AMBER;
         int cx = box.x + box.width / 2, top = box.y + HANDLE_TOP, bottom = box.y + HANDLE_BOTTOM;
-        graphics.fill(cx - 2, top, cx + 3, bottom + 1, EDGE);
+        fill(graphics, cx - 2, top, cx + 3, bottom + 1, EDGE);
         for (int i = 0; i <= count; i++) {
             int y = handlePosition(box, i, count);
-            graphics.fill(cx - 7, y, cx + 8, y + 1, i <= value ? color : EDGE);
+            fill(graphics, cx - 7, y, cx + 8, y + 1, i <= value ? color : EDGE);
         }
         int position = handlePosition(box, value, count);
-        graphics.fill(cx - 11, position - 3, cx + 12, position + 4, 0xFF05090E);
-        graphics.fill(cx - 10, position - 2, cx + 11, position + 3, state.emergency() ? RED : TEXT);
-        graphics.fill(cx - 5, position - 1, cx + 6, position + 1, color);
+        fill(graphics, cx - 11, position - 3, cx + 12, position + 4, 0xFF05090E);
+        fill(graphics, cx - 10, position - 2, cx + 11, position + 3, state.emergency() ? RED : TEXT);
+        fill(graphics, cx - 5, position - 1, cx + 6, position + 1, color);
         String notch = state.emergency() && !power ? "EB" : value == 0 ? "0" : (power ? "P" : "B") + value;
         int notchWidth = (int) Math.ceil(font.width(notch) * textScale());
         label(graphics, font, text(power ? "power_handle" : "brake_handle"), box.x + 4, box.y + 5,
@@ -228,7 +239,7 @@ public final class TrainDrivingOverlay {
                 !state.emergency() || state.speed() == 0, RED, mouseX, mouseY);
         lightButton(graphics, font, layout.headLight(), true, TrainDrivingClient.headLightOn(), mouseX, mouseY);
         lightButton(graphics, font, layout.tailLight(), false, TrainDrivingClient.tailLightOn(), mouseX, mouseY);
-        if (state.emergency()) graphics.renderOutline(layout.emergency().x, layout.emergency().y,
+        if (state.emergency()) renderOutline(graphics, layout.emergency().x, layout.emergency().y,
                 layout.emergency().width, layout.emergency().height, RED);
     }
 
@@ -236,7 +247,7 @@ public final class TrainDrivingOverlay {
                                     double mouseX, double mouseY) {
         button(graphics, font, box, text(head ? "head_light" : "tail_light"), true,
                 on ? (head ? AMBER : RED) : MUTED, mouseX, mouseY);
-        if (on) graphics.renderOutline(box.x, box.y, box.width, box.height, head ? AMBER : RED);
+        if (on) renderOutline(graphics, box.x, box.y, box.width, box.height, head ? AMBER : RED);
     }
 
     private static void door(GuiGraphics graphics, Font font, Box box, VehicleDoor side, float partialTick,
@@ -257,23 +268,23 @@ public final class TrainDrivingOverlay {
             y += lineHeight;
         }
         int barX = side == VehicleDoor.LEFT ? box.x + 2 : box.x + box.width - 4;
-        graphics.fill(barX, box.y + 2, barX + 2, box.y + box.height - 2, EDGE);
+        fill(graphics, barX, box.y + 2, barX + 2, box.y + box.height - 2, EDGE);
         int progress = Math.round((box.height - 4) * vehicle.doorMovement(vehicleSide, partialTick));
-        graphics.fill(barX, box.y + box.height - 2 - progress, barX + 2, box.y + box.height - 2, AMBER);
+        fill(graphics, barX, box.y + box.height - 2 - progress, barX + 2, box.y + box.height - 2, AMBER);
     }
 
     private static void button(GuiGraphics graphics, Font font, Box box, Component title, boolean enabled,
                                int color, double mouseX, double mouseY) {
         panel(graphics, box, enabled && box.contains(mouseX, mouseY) ? 0xFF293E4A : 0xFF1A2834);
-        graphics.fill(box.x + 3, box.y + 4, box.x + 5, box.y + box.height - 4, enabled ? color : EDGE);
+        fill(graphics, box.x + 3, box.y + 4, box.x + 5, box.y + box.height - 4, enabled ? color : EDGE);
         float scale = Math.min(textScale(), (box.width - 13F) / Math.max(1, font.width(title)));
         drawText(graphics, font, title.getString(), box.x + 9,
                 box.y + (box.height - font.lineHeight * scale) / 2, scale, enabled ? TEXT : MUTED);
     }
 
     private static void panel(GuiGraphics graphics, Box box, int color) {
-        graphics.fill(box.x, box.y, box.x + box.width, box.y + box.height, color);
-        graphics.renderOutline(box.x, box.y, box.width, box.height, EDGE);
+        fill(graphics, box.x, box.y, box.x + box.width, box.y + box.height, color);
+        renderOutline(graphics, box.x, box.y, box.width, box.height, EDGE);
     }
 
     private static void label(GuiGraphics graphics, Font font, Component value, int x, int y, int width, int color) {
@@ -284,6 +295,7 @@ public final class TrainDrivingOverlay {
 
     private static void drawText(GuiGraphics graphics, Font font, String value,
                                  float x, float y, float scale, int color) {
+        graphics.flush();
         float guiScale = (float) Minecraft.getInstance().getWindow().getGuiScale();
         graphics.pose().pushPose();
         try {
@@ -329,8 +341,11 @@ public final class TrainDrivingOverlay {
         } else if (layout.rightDoor().contains(mouseX, mouseY)) {
             tip = doorHint(VehicleDoor.RIGHT, partialTick);
         }
-        if (tip != null) graphics.renderTooltip(font, font.split(tip,
-                Math.min(320, Minecraft.getInstance().getWindow().getGuiScaledWidth() - 16)), (int) mouseX, (int) mouseY);
+        if (tip != null) {
+            graphics.flush();
+            graphics.renderTooltip(font, font.split(tip,
+                    Math.min(320, Minecraft.getInstance().getWindow().getGuiScaledWidth() - 16)), (int) mouseX, (int) mouseY);
+        }
     }
 
     private static Component doorHint(VehicleDoor side, float partialTick) {

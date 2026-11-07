@@ -5,6 +5,9 @@
 package com.unrealtrainmod.resource.cache;
 
 import com.unrealtrainmod.compat.ir.IrModelLoader;
+import com.unrealtrainmod.compat.ir.IrModelComponent;
+import com.unrealtrainmod.track.geometry.TrackVector;
+import com.unrealtrainmod.vehicle.VehiclePartRole;
 import com.unrealtrainmod.model.IndexedMesh;
 import com.unrealtrainmod.model.ModelBounds;
 import com.unrealtrainmod.model.ModelData;
@@ -29,10 +32,12 @@ public final class ModelCacheCodecs {
     private ModelCacheCodecs() {}
 
     /** Material names retain diagnostics for unused authored materials; RTM bindings are never cached. */
-    public record VehicleGeometry(ModelMesh mesh, List<String> materialNames, Map<String, ModelTexture> textures) {
+    public record VehicleGeometry(ModelMesh mesh, List<String> materialNames, Map<String, ModelTexture> textures,
+                                  List<IrModelComponent> irComponents) {
         public VehicleGeometry {
             materialNames = List.copyOf(materialNames);
             textures = Map.copyOf(textures);
+            irComponents = List.copyOf(irComponents);
         }
     }
 
@@ -63,13 +68,68 @@ public final class ModelCacheCodecs {
         int count = input.count(4);
         var names = new ArrayList<String>(count);
         for (int i = 0; i < count; i++) names.add(input.text());
-        return new VehicleGeometry(mesh, names, textures(input, asset));
+        return new VehicleGeometry(mesh, names, textures(input, asset), irComponents(input));
     }, (output, value) -> {
         mesh(output, value.mesh());
         output.writeInt(value.materialNames().size());
         for (var name : value.materialNames()) text(output, name);
         textures(output, value.textures());
+        irComponents(output, value.irComponents());
     });
+
+    private static List<IrModelComponent> irComponents(Reader input) throws IOException {
+        int count = input.count(96);
+        var result = new ArrayList<IrModelComponent>(count);
+        var roles = VehiclePartRole.values();
+        var kinds = IrModelComponent.Kind.values();
+        for (int i = 0; i < count; i++) {
+            String key = input.text();
+            int role = input.readUnsignedByte(), kind = input.readUnsignedByte();
+            require(role < roles.length && kind < kinds.length, "Invalid IR component type");
+            int objectCount = input.count(4);
+            require(objectCount > 0, "Empty IR component");
+            var objects = new ArrayList<String>(objectCount);
+            for (int n = 0; n < objectCount; n++) objects.add(input.text());
+            String group = input.text();
+            var pivot = vector(input);
+            var axis = vector(input);
+            float degrees = input.number();
+            var translation = vector(input);
+            float offset = input.number();
+            boolean invert = input.readBoolean(), hide = input.readBoolean();
+            float diameter = input.number();
+            require(kinds[kind] != IrModelComponent.Kind.WHEEL || diameter > 0, "Invalid IR wheel diameter");
+            result.add(new IrModelComponent(key, roles[role], kinds[kind], objects, group, pivot, axis,
+                    degrees, translation, offset, invert, hide, diameter));
+        }
+        return List.copyOf(result);
+    }
+
+    private static void irComponents(DataOutputStream output, List<IrModelComponent> components) throws IOException {
+        output.writeInt(components.size());
+        for (var component : components) {
+            text(output, component.key());
+            output.writeByte(component.role().ordinal()); output.writeByte(component.kind().ordinal());
+            output.writeInt(component.objects().size());
+            for (var name : component.objects()) text(output, name);
+            text(output, component.controlGroup());
+            vector(output, component.pivot()); vector(output, component.axis());
+            output.writeFloat(component.degrees()); vector(output, component.translation());
+            output.writeFloat(component.offset());
+            output.writeBoolean(component.invert()); output.writeBoolean(component.hide());
+            output.writeFloat(component.diameter());
+        }
+    }
+
+    private static TrackVector vector(Reader input) throws IOException {
+        double x = input.readDouble(), y = input.readDouble(), z = input.readDouble();
+        require(Double.isFinite(x) && Double.isFinite(y) && Double.isFinite(z), "Non-finite IR component vector");
+        return new TrackVector(x, y, z);
+    }
+
+    private static void vector(DataOutputStream output, TrackVector value) throws IOException {
+        output.writeDouble(value.x()); output.writeDouble(value.y()); output.writeDouble(value.z());
+    }
 
     @FunctionalInterface
     private interface Decoder<T> { T read(Reader input, PackageAsset asset) throws IOException; }

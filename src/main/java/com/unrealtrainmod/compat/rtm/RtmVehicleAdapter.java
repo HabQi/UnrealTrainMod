@@ -127,7 +127,7 @@ final class RtmVehicleAdapter {
             var definition = new VehicleDefinition(id, name, config, RtmButtonTexture.read(json, archive, prefix, config),
                     GsonHelper.getAsString(json, "trainType", ""), parts, bounds,
                     readMotionSpec(json, bounds, bogiePositions), VehiclePerformanceSpec.DEFAULT,
-                    readInteriorSpec(json, bounds, name));
+                    readInteriorSpec(json, bounds, name), Map.of());
             definitions.put(id, definition);
             report.registered(LoadReport.Kind.RTM_VEHICLE);
         } catch (IOException | RuntimeException exception) {

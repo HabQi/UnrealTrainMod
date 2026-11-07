@@ -86,9 +86,10 @@ public final class IrModelLoader {
         }
     }
 
-    /** Cargo volumes and explicitly hidden controls are retained for named-part callers, but not drawn by default. */
+    /** Recognised controls evaluate HIDE dynamically; unsupported hidden objects retain static visibility. */
     public static boolean isVisible(String name) {
-        return !name.contains("CARGO_ITEMS_") && !name.contains("CARGO_FILL_") && !HIDDEN.matcher(name).find();
+        return !name.contains("CARGO_ITEMS_") && !name.contains("CARGO_FILL_")
+                && (!HIDDEN.matcher(name).find() || IrModelComponents.isControl(name));
     }
 
     private static String findTexture(PackageArchive archive, PackageAsset model, String path) {

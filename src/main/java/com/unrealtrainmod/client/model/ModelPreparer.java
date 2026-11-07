@@ -11,7 +11,8 @@ import com.unrealtrainmod.model.ModelSource;
 import com.unrealtrainmod.vehicle.VehicleActions;
 import com.unrealtrainmod.vehicle.VehicleDefinition;
 import com.unrealtrainmod.vehicle.VehiclePartRole;
-import com.unrealtrainmod.compat.ir.IrBogieGroups;
+import com.unrealtrainmod.compat.ir.IrModelComponent;
+import com.unrealtrainmod.compat.ir.IrModelComponents;
 import com.unrealtrainmod.client.texture.PreparedTexture;
 import com.unrealtrainmod.client.RenderCategory;
 import com.unrealtrainmod.client.renderer.RenderBatch;
@@ -41,6 +42,8 @@ public final class ModelPreparer {
     public record PreparedReload(Map<ModelSource, PreparedModel> sources,
                                  List<VehicleDefinition> vehicles, Map<ResourceLocation, PreparedTexture> images) {}
 
+    private record ClassifiedSource(List<ModelPart> parts, List<IrModelComponent> irComponents) {}
+
     private ModelPreparer() {}
 
     /** Accumulates across objects so each source/material emits one classification summary. */
@@ -58,9 +61,15 @@ public final class ModelPreparer {
     }
 
     public static PreparedReload prepare(List<VehicleDefinition> definitions) {
-        var classified = new LinkedHashMap<ModelSource, List<ModelPart>>();
+        var classified = new LinkedHashMap<ModelSource, ClassifiedSource>();
         var failed = new HashSet<ModelSource>();
         var actionSets = collectActionSets(definitions);
+        var irDefaults = new HashMap<ModelSource, Set<Map<String, Float>>>();
+        for (var definition : definitions) for (var instance : definition.parts()) {
+            if (instance.source().format() == ModelSource.Format.IR_OBJ) {
+                irDefaults.computeIfAbsent(instance.source(), ignored -> new HashSet<>()).add(definition.irControlDefaults());
+            }
+        }
         try (var cache = new ModelCache("vehicles"); var textures = new TexturePool()) {
             for (var definition : definitions) {
                 for (var instance : definition.parts()) {
@@ -75,14 +84,16 @@ public final class ModelPreparer {
                     }
                 }
             }
-            var regions = TextureAtlas.build(classified.values(), textures);
+            var regions = TextureAtlas.build(classified.values().stream().map(ClassifiedSource::parts).toList(), textures);
             var prepared = new HashMap<ModelSource, PreparedModel>();
             var iterator = classified.entrySet().iterator();
             while (iterator.hasNext()) {
                 var entry = iterator.next();
                 try {
-                    prepared.put(entry.getKey(), prepareSource(entry.getKey(), entry.getValue(), regions,
-                            actionSets.getOrDefault(entry.getKey(), Set.of())));
+                    prepared.put(entry.getKey(), prepareSource(entry.getKey(), entry.getValue().parts(),
+                            entry.getValue().irComponents(), regions,
+                            actionSets.getOrDefault(entry.getKey(), Set.of()),
+                            irDefaults.getOrDefault(entry.getKey(), Set.of())));
                 } catch (RuntimeException e) {
                     LOGGER.error("Unable to prepare vehicle model {}", entry.getKey().model(), e);
                 }
@@ -110,7 +121,7 @@ public final class ModelPreparer {
         return result;
     }
 
-    private static List<ModelPart> classifySource(ModelSource source, TexturePool textures, ModelCache cache) throws IOException {
+    private static ClassifiedSource classifySource(ModelSource source, TexturePool textures, ModelCache cache) throws IOException {
         var imported = ModelImporter.load(source, cache);
         var mesh = imported.mesh();
         var parts = new ArrayList<ModelPart>();
@@ -222,12 +233,13 @@ public final class ModelPreparer {
                 summary.alphaBlend, summary.reducedAlpha, summary.counts[0], summary.counts[1], summary.counts[2], summary.skipped));
         LOGGER.info("Prepared {} {}: {} parts, {} triangles; CUTOUT={}, BLEND={}, MIXED={}",
                 source.format(), source.model(), mesh.parts().size(), mesh.triangleCount(), counts[0], counts[1], counts[2]);
-        return List.copyOf(parts);
+        return new ClassifiedSource(List.copyOf(parts), imported.irComponents());
     }
 
     private static PreparedModel prepareSource(ModelSource source, List<ModelPart> parts,
+                                               List<IrModelComponent> irComponents,
                                                Map<ResourceLocation, TextureAtlas.Region> regions,
-                                               Set<Set<String>> actionSets) {
+                                               Set<Set<String>> actionSets, Set<Map<String, Float>> irDefaults) {
         var originalVisible = parts.stream().filter(ModelPart::visible).flatMap(part -> part.batches().stream())
                 .filter(batch -> batch.category() == RenderCategory.CUTOUT).toList();
         int beforeAtlas = OpaqueBatchMerger.visibleBatchCount(parts);
@@ -270,11 +282,31 @@ public final class ModelPreparer {
             allBatches.addAll(selection.batches());
         }
         var componentParts = new EnumMap<VehiclePartRole, PartSelection>(VehiclePartRole.class);
+        var irParts = new EnumMap<VehiclePartRole, List<IrModelPart>>(VehiclePartRole.class);
         if (source.format() == ModelSource.Format.IR_OBJ) {
+            var dynamicNames = new HashSet<String>();
+            var drivenGroups = new HashSet<String>();
+            for (var component : irComponents) if (component.driven()) drivenGroups.add(component.controlGroup());
+            for (var component : irComponents) {
+                // Unoperated controls in their neutral pose can remain in the packed static ranges.
+                // Account for every vehicle configuration sharing this OBJ before making that decision.
+                boolean defaultTransform = irDefaults.stream().anyMatch(defaults -> component.value(
+                        defaults.getOrDefault(component.controlGroup(), component.defaultPosition())) != 0);
+                if (!component.driven() && !drivenGroups.contains(component.controlGroup()) && !component.hide()
+                        && !defaultTransform) continue;
+                var selected = new ArrayList<ModelPart>();
+                for (String name : component.objects()) selected.addAll(named.getOrDefault(name, List.of()));
+                var selection = PartSelection.grouped(selected);
+                irParts.computeIfAbsent(component.role(), ignored -> new ArrayList<>()).add(new IrModelPart(component, selection));
+                dynamicNames.addAll(component.objects());
+                allBatches.addAll(selection.batches());
+            }
             for (var role : VehiclePartRole.values()) {
                 var selection = PartSelection.grouped(visible.stream()
-                        .filter(part -> IrBogieGroups.role(part.name()) == role).toList());
+                        .filter(part -> IrModelComponents.role(part.name()) == role)
+                        .filter(part -> !dynamicNames.contains(part.name())).toList());
                 componentParts.put(role, selection);
+                irParts.put(role, List.copyOf(irParts.getOrDefault(role, List.of())));
                 // Register these range objects before GPU upload; all alias the existing packed meshes.
                 allBatches.addAll(selection.batches());
             }
@@ -287,6 +319,6 @@ public final class ModelPreparer {
         LOGGER.info("Model {}: atlas visible CUTOUT batches {} -> {}",
                 source.model(), beforeAtlas, mergedVisible.size());
         return new PreparedModel(merged.parts(), visibleSelection, Map.copyOf(bodySelections),
-                Map.copyOf(actionParts), Map.copyOf(partsByName), Map.copyOf(componentParts), List.copyOf(allBatches));
+                Map.copyOf(actionParts), Map.copyOf(partsByName), Map.copyOf(componentParts), Map.copyOf(irParts), List.copyOf(allBatches));
     }
 }

@@ -10,6 +10,8 @@ import org.slf4j.LoggerFactory;
 import com.unrealtrainmod.model.ModelSource;
 import com.unrealtrainmod.model.ModelTexture;
 import com.unrealtrainmod.compat.ir.IrModelLoader;
+import com.unrealtrainmod.compat.ir.IrModelComponents;
+import com.unrealtrainmod.compat.ir.IrModelComponent;
 import com.unrealtrainmod.model.ModelData;
 import com.unrealtrainmod.model.ModelMesh;
 import com.unrealtrainmod.model.MqoModelInput;
@@ -23,6 +25,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
+import java.util.List;
 
 /** Resolves format-specific geometry and material rules before client preparation. */
 public final class ModelImporter {
@@ -70,7 +73,7 @@ public final class ModelImporter {
                 }
             }
         }
-        return new ImportedModel(mesh, textures);
+        return new ImportedModel(mesh, textures, geometry.irComponents());
     }
 
     private static VehicleGeometry loadGeometry(ModelSource source) throws IOException {
@@ -86,7 +89,8 @@ public final class ModelImporter {
                 model = parseMqo(input);
             }
         }
+        var components = ir ? IrModelComponents.read(model, source.scale(), source.model().toString()) : List.<IrModelComponent>of();
         var mesh = ModelMesh.prepare(model, source.scale(), source.smoothing(), ir);
-        return new VehicleGeometry(mesh, model.materials().stream().map(ModelData.Material::name).toList(), bindings);
+        return new VehicleGeometry(mesh, model.materials().stream().map(ModelData.Material::name).toList(), bindings, components);
     }
 }

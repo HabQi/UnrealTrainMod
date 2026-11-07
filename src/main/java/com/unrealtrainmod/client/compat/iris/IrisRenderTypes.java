@@ -15,23 +15,23 @@ import net.minecraft.resources.ResourceLocation;
 /** Vanilla entity shader suppliers let Iris choose the current view's program. */
 public final class IrisRenderTypes extends RenderStateShard {
     private record Key(ResourceLocation texture, boolean doubleSided, boolean translucent, boolean opaque,
-                       boolean temporal, boolean emissive) {}
+                       int temporal, boolean emissive) {}
     private static final Map<Key, RenderType> TYPES = new HashMap<>();
 
     private IrisRenderTypes() { super("utm_iris", () -> {}, () -> {}); }
 
     public static RenderType get(ResourceLocation texture, boolean doubleSided, boolean translucent, boolean opaque) {
-        return get(texture, doubleSided, translucent, opaque, false);
+        return get(texture, doubleSided, translucent, opaque, 0);
     }
 
-    static RenderType get(ResourceLocation texture, boolean doubleSided, boolean translucent, boolean opaque, boolean temporal) {
+    static RenderType get(ResourceLocation texture, boolean doubleSided, boolean translucent, boolean opaque, int temporal) {
         return get(texture, doubleSided, translucent, opaque, temporal, false);
     }
 
     static RenderType get(ResourceLocation texture, boolean doubleSided, boolean translucent, boolean opaque,
-                          boolean temporal, boolean emissive) {
+                          int temporal, boolean emissive) {
         return TYPES.computeIfAbsent(new Key(texture, doubleSided, translucent, opaque, temporal, emissive), key -> RenderType.create(
-                temporal ? "utm_iris_vehicle_history" : "utm_iris_entity",
+                temporal != 0 ? "utm_iris_vehicle_history_" + temporal : "utm_iris_entity",
                 DefaultVertexFormat.NEW_ENTITY, VertexFormat.Mode.TRIANGLES, 1536, false, false,
                 RenderType.CompositeState.builder()
                         .setShaderState(emissive ? RENDERTYPE_ENTITY_TRANSLUCENT_EMISSIVE_SHADER
@@ -41,13 +41,13 @@ public final class IrisRenderTypes extends RenderStateShard {
                         .setTransparencyState(translucent ? TRANSLUCENT_TRANSPARENCY : NO_TRANSPARENCY)
                         .setCullState(doubleSided ? NO_CULL : CULL)
                         .setLightmapState(LIGHTMAP).setOverlayState(OVERLAY)
-                        .setLayeringState(temporal || emissive ? new LayeringStateShard("utm_vehicle_material",
+                        .setLayeringState(temporal != 0 || emissive ? new LayeringStateShard("utm_vehicle_material",
                                 () -> {
                                     IrisVehicleReprojection.setDrawing(temporal);
                                     IrisEmissivePass.setDrawing(emissive);
                                 }, () -> {
                                     IrisEmissivePass.setDrawing(false);
-                                    IrisVehicleReprojection.setDrawing(false);
+                                    IrisVehicleReprojection.setDrawing(0);
                                 }) : NO_LAYERING)
                         .setDepthTestState(LEQUAL_DEPTH_TEST).setWriteMaskState(COLOR_DEPTH_WRITE)
                         .createCompositeState(false)));

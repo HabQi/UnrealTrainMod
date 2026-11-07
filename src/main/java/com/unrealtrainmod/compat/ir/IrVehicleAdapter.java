@@ -100,7 +100,7 @@ final class IrVehicleAdapter {
             var rotated = new ModelBounds(raw.minZ() * scale, raw.minY() * scale, -raw.maxX() * scale,
                     raw.maxZ() * scale, raw.maxY() * scale, -raw.minX() * scale);
             combined.include(rotated);
-            groups.computeIfAbsent(IrBogieGroups.role(part), ignored -> new ModelBounds.Builder()).include(rotated);
+            groups.computeIfAbsent(IrModelComponents.role(part), ignored -> new ModelBounds.Builder()).include(rotated);
         });
         var bounds = combined.build();
         double floorY = readFloorY(json, rawParts, scale, bounds, name);
@@ -118,7 +118,20 @@ final class IrVehicleAdapter {
                     new TrackVector(0, 0, z), builder.build(), VehicleActions.NONE));
         });
         return new VehicleDefinition(id, name, config, null, type, parts, bounds, spec,
-                VehiclePerformanceSpec.DEFAULT, VehicleInteriorSpec.fromBounds(bounds, floorY));
+                VehiclePerformanceSpec.DEFAULT, VehicleInteriorSpec.fromBounds(bounds, floorY), readControlDefaults(json));
+    }
+
+    private static Map<String, Float> readControlDefaults(JsonObject json) throws IOException {
+        var controls = GsonHelper.getAsJsonObject(json, "controls", new JsonObject());
+        var defaults = new HashMap<String, Float>();
+        for (var entry : controls.entrySet()) {
+            float value = GsonHelper.getAsFloat(GsonHelper.convertToJsonObject(entry.getValue(), entry.getKey()), "default", 0);
+            if (!Float.isFinite(value) || value < 0 || value > 1) {
+                throw new IOException("IR control default must be between 0 and 1: " + entry.getKey());
+            }
+            defaults.put(entry.getKey(), value);
+        }
+        return Map.copyOf(defaults);
     }
 
     private static double readFloorY(JsonObject json, Map<String, ModelBounds> rawParts, double scale,

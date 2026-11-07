@@ -11,6 +11,7 @@ import com.unrealtrainmod.client.renderer.instancing.InstancingStats;
 import com.unrealtrainmod.compat.rtm.script.VehicleScriptManager;
 import com.unrealtrainmod.entity.TrainEntity;
 import com.unrealtrainmod.vehicle.VehiclePose;
+import com.unrealtrainmod.model.ModelSource;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.neoforged.neoforge.client.event.ClientPlayerNetworkEvent;
@@ -50,6 +51,8 @@ public final class TrainModelRenderer {
         int previousLights = queue.lights();
         queue.lights(entity == null ? 0 : entity.lights());
         try {
+            var irFrame = model.instances().stream().anyMatch(instance -> instance.definition().source().format() == ModelSource.Format.IR_OBJ)
+                    ? IrModelRenderer.sample(model, entity, vehiclePose, partialTick) : null;
             for (var instance : model.instances()) {
                 long poseStart = stats == null ? 0L : System.nanoTime();
                 pose.pushPose();
@@ -65,6 +68,11 @@ public final class TrainModelRenderer {
                         if (instance.definition().reversedBogie()) pose.mulPose(Axis.YP.rotationDegrees(180));
                     }
                     if (stats != null) stats.addPose(System.nanoTime() - poseStart);
+                    if (instance.definition().source().format() == ModelSource.Format.IR_OBJ) {
+                        queue.submitGeometry(instance.model(), instance.visibleParts(), pose, light);
+                        IrModelRenderer.submit(queue, instance, irFrame, pose, light);
+                        continue;
+                    }
                     long scriptStart = stats != null && instance.definition().source().rendererPath() != null ? System.nanoTime() : 0L;
                     boolean scripted;
                     try {
@@ -128,6 +136,7 @@ public final class TrainModelRenderer {
     public static void clearWorld() { WORLD.clear(); }
     public static void closeWorld() {
         WORLD.close();
+        IrModelRenderer.clear();
         com.unrealtrainmod.client.compat.iris.IrisModelRenderer.clear();
         com.unrealtrainmod.client.texture.MaterialTexture.releasePbr();
     }

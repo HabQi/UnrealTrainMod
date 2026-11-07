@@ -15,4 +15,5 @@ public record PreparedModel(List<ModelPart> parts, PartSelection visibleParts,
                             Map<Set<String>, PartSelection> bodyParts,
                             Map<String, PartSelection> actionParts,
                             Map<String, PartSelection> partsByName, Map<VehiclePartRole, PartSelection> componentParts,
+                            Map<VehiclePartRole, List<IrModelPart>> irParts,
                             List<RenderBatch> batches) {}

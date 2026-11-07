@@ -22,7 +22,7 @@ final class IrisBatch {
     final int firstSolid, solidCount;
     final boolean forceOpaque;
     final BitSet split = new BitSet();
-    private final RenderType[] solidTypes = new RenderType[2], blendTypes = new RenderType[2], clippedTypes = new RenderType[2];
+    private final RenderType[] solidTypes = new RenderType[3], blendTypes = new RenderType[3], clippedTypes = new RenderType[3];
 
     static IrisBatch get(RenderBatch batch) { return BATCHES.computeIfAbsent(batch, IrisBatch::new); }
     static void clear() { BATCHES.clear(); }
@@ -54,17 +54,16 @@ final class IrisBatch {
         }
     }
 
-    RenderType solidType() { return solidType(false); }
+    RenderType solidType() { return solidType(0); }
 
-    RenderType solidType(boolean temporal) {
-        int slot = temporal ? 1 : 0;
-        if (solidTypes[slot] == null) {
+    RenderType solidType(int temporal) {
+        if (solidTypes[temporal] == null) {
             var texture = forceOpaque ? IrisMaterials.texture(batch.texture(), IrisMaterials.Mask.OPAQUE)
                     : batch.category() == RenderCategory.MIXED
                     ? IrisMaterials.texture(batch.texture(), IrisMaterials.Mask.SOLID) : batch.texture();
-            solidTypes[slot] = IrisRenderTypes.get(texture, batch.doubleSided(), false, forceOpaque, temporal);
+            solidTypes[temporal] = IrisRenderTypes.get(texture, batch.doubleSided(), false, forceOpaque, temporal);
         }
-        return solidTypes[slot];
+        return solidTypes[temporal];
     }
 
     void prewarmTypes() {
@@ -76,22 +75,21 @@ final class IrisBatch {
         if (firstOtherTriangle < batch.indexCount() / 3) translucentType(firstOtherTriangle);
     }
 
-    RenderType translucentType(int triangle) { return translucentType(triangle, false); }
+    RenderType translucentType(int triangle) { return translucentType(triangle, 0); }
 
-    RenderType translucentType(int triangle, boolean temporal) {
-        int slot = temporal ? 1 : 0;
+    RenderType translucentType(int triangle, int temporal) {
         if (batch.lightLayer() != ModelLightLayer.BASE) {
-            if (clippedTypes[slot] == null) clippedTypes[slot] = IrisRenderTypes.get(
+            if (clippedTypes[temporal] == null) clippedTypes[temporal] = IrisRenderTypes.get(
                     batch.texture(), batch.doubleSided(), true, false, temporal, batch.lightLayer().emissive());
-            return clippedTypes[slot];
+            return clippedTypes[temporal];
         }
         if (split.get(triangle)) {
-            if (blendTypes[slot] == null) blendTypes[slot] = IrisRenderTypes.get(
+            if (blendTypes[temporal] == null) blendTypes[temporal] = IrisRenderTypes.get(
                     IrisMaterials.texture(batch.texture(), IrisMaterials.Mask.BLEND), batch.doubleSided(), true, false, temporal);
-            return blendTypes[slot];
+            return blendTypes[temporal];
         }
-        if (clippedTypes[slot] == null) clippedTypes[slot] = IrisRenderTypes.get(
+        if (clippedTypes[temporal] == null) clippedTypes[temporal] = IrisRenderTypes.get(
                 IrisMaterials.texture(batch.texture(), IrisMaterials.Mask.CLIPPED), batch.doubleSided(), true, false, temporal);
-        return clippedTypes[slot];
+        return clippedTypes[temporal];
     }
 }

@@ -14,7 +14,7 @@ import java.util.Map;
 import java.util.Set;
 
 /** Vehicle assembly referencing shared source geometry. */
-public record LoadedModel(List<Instance> instances, ModelBounds bounds) {
+public record LoadedModel(List<Instance> instances, ModelBounds bounds, Map<String, Float> irControlDefaults) {
     /**
      * Owns GPU geometry; selections only reference its parts and never own rendering resources.
      * {@code bodyParts} maps an action-name set to the body selection that omits those objects.
@@ -24,6 +24,7 @@ public record LoadedModel(List<Instance> instances, ModelBounds bounds) {
                          Map<Set<String>, PartSelection> bodyParts,
                          Map<String, PartSelection> actionParts,
                          Map<String, PartSelection> partsByName, Map<VehiclePartRole, PartSelection> componentParts,
+                         Map<VehiclePartRole, List<IrModelPart>> irParts,
                          GpuModel gpu) {}
     public record Instance(Source model, VehicleDefinition.Instance definition, PartSelection visibleParts) {
         public ModelData.Position offset() { return definition.offset(); }

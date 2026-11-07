@@ -10,12 +10,17 @@ import com.unrealtrainmod.model.ModelSource;
 import com.unrealtrainmod.resource.PackageAsset;
 import com.unrealtrainmod.track.geometry.TrackVector;
 import java.util.List;
+import java.util.Map;
 import net.minecraft.resources.ResourceLocation;
 
 public record VehicleDefinition(ResourceLocation id, String name, PackageAsset config, PackageAsset buttonTexture, String trainType,
                                 List<Instance> parts, ModelBounds bounds, VehicleMotionSpec motionSpec,
-                                VehiclePerformanceSpec performanceSpec, VehicleInteriorSpec interiorSpec) {
-    public VehicleDefinition { parts = List.copyOf(parts); }
+                                VehiclePerformanceSpec performanceSpec, VehicleInteriorSpec interiorSpec,
+                                Map<String, Float> irControlDefaults) {
+    public VehicleDefinition {
+        parts = List.copyOf(parts);
+        irControlDefaults = Map.copyOf(irControlDefaults);
+    }
     /**
      * Bounds and pivot are source-local; offset retains the original static assembly. Door actions belong to
      * the body instance; bogie instances carry {@link VehicleActions#NONE}.
@@ -41,17 +46,17 @@ public record VehicleDefinition(ResourceLocation id, String name, PackageAsset c
                     new TrackVector(0, 0, z), part.bounds(), part.actions());
         }).toList();
         return new VehicleDefinition(id, name, config, buttonTexture, trainType, calibrated, bounds, spec, performanceSpec,
-                interiorSpec);
+                interiorSpec, irControlDefaults);
     }
 
     public VehicleDefinition withPerformanceSpec(VehiclePerformanceSpec spec) {
         return new VehicleDefinition(id, name, config, buttonTexture, trainType, parts, bounds, motionSpec, spec,
-                interiorSpec);
+                interiorSpec, irControlDefaults);
     }
 
     public VehicleDefinition withInteriorSpec(VehicleInteriorSpec spec) {
         return new VehicleDefinition(id, name, config, buttonTexture, trainType, parts, bounds, motionSpec,
-                performanceSpec, spec);
+                performanceSpec, spec, irControlDefaults);
     }
 
     public String packName() { return config.archive().getFileName().toString(); }
