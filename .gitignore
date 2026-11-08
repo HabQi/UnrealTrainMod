@@ -47,6 +47,7 @@ repo/
 /textures/
 /packages/
 /docs/
+/tools/
 
 ### Local tests ###
 /src/test/

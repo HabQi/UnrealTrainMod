@@ -8,10 +8,10 @@ import com.unrealtrainmod.vehicle.VehicleRuntimeState;
 import java.util.List;
 import java.util.Map;
 
-/** Server-visible control/animation definitions contain no geometry or render resources. */
+/** Logical control, animation and sound definitions contain no client runtime objects. */
 public record IrVehicleDefinition(Map<String, IrControlDefinition> controls,
-                                   List<IrAnimationDefinition> animations, float maxSpeedKmh) {
-    public static final IrVehicleDefinition NONE = new IrVehicleDefinition(Map.of(), List.of(), 200);
+                                   List<IrAnimationDefinition> animations, float maxSpeedKmh, IrVehicleSounds sounds) {
+    public static final IrVehicleDefinition NONE = new IrVehicleDefinition(Map.of(), List.of(), 200, IrVehicleSounds.NONE);
 
     public IrVehicleDefinition {
         controls = Map.copyOf(controls);

@@ -9,6 +9,7 @@ import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.BufferUploader;
 import com.mojang.blaze3d.vertex.VertexBuffer;
 import com.mojang.blaze3d.vertex.VertexFormat;
+import java.nio.IntBuffer;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import net.minecraft.client.Minecraft;
@@ -18,11 +19,13 @@ import net.neoforged.neoforge.client.GlStateBackup;
 import org.joml.Matrix4f;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL13;
+import org.lwjgl.opengl.GL14;
 import org.lwjgl.opengl.GL15;
 import org.lwjgl.opengl.GL20;
 import org.lwjgl.opengl.GL30;
+import org.lwjgl.system.MemoryUtil;
 
-/** Owned drawing range: entity draws retain Iris state until the material or matrices change. */
+/** Owned drawing range: continuous draws retain Iris state until the material or matrices change. */
 public final class IrisDrawScope implements AutoCloseable {
     private static IrisDrawScope current;
     private final IrisRenderStats.Scope metrics = IrisRenderStats.beginScope();
@@ -39,9 +42,11 @@ public final class IrisDrawScope implements AutoCloseable {
     private final float[] color = RenderSystem.getShaderColor().clone();
     private final int[] identity, drawIdentity;
     private final boolean entity;
+    private boolean retainShader, lastDrawAppliedShader;
     private final Map<Integer, int[]> constants = new LinkedHashMap<>();
     private RenderType activeType;
     private ShaderInstance appliedShader;
+    private VertexBuffer boundBuffer;
     private final Matrix4f appliedView = new Matrix4f(), appliedProjection = new Matrix4f();
 
     public IrisDrawScope() { this(false, false); }
@@ -49,9 +54,11 @@ public final class IrisDrawScope implements AutoCloseable {
     /** HandRenderer already owns the hand phase and projection; do not wrap it as an entity pass. */
     public static IrisDrawScope hand() { return new IrisDrawScope(false, true); }
     public static IrisDrawScope current() { return current; }
+    public boolean lastDrawAppliedShader() { return lastDrawAppliedShader; }
 
     private IrisDrawScope(boolean entity, boolean hand) {
         this.entity = entity;
+        retainShader = entity;
         RenderSystem.backupGlState(state);
         GL11.glGetIntegerv(GL11.GL_VIEWPORT, viewport);
         for (int i = 0; i < 3; i++) {
@@ -67,6 +74,12 @@ public final class IrisDrawScope implements AutoCloseable {
         if (metrics != null) metrics.captured();
     }
 
+    /** Enter the final track draw-only range, after uploads and dynamic fallback submissions. */
+    public void beginTrackBatch() {
+        endBatch();
+        retainShader = true;
+    }
+
     private boolean use(RenderType type) {
         if (entity) type = IrisCompat.entityType(type);
         if (activeType == type) return false;
@@ -79,6 +92,7 @@ public final class IrisDrawScope implements AutoCloseable {
 
     /** Call before handing control back to MultiBufferSource, whose wrappers own their own entity phase. */
     public void endBatch() {
+        boundBuffer = null;
         try {
             if (appliedShader != null) {
                 var shader = appliedShader;
@@ -103,24 +117,35 @@ public final class IrisDrawScope implements AutoCloseable {
     }
 
     public static boolean draw(VertexBuffer buffer, RenderType type, Matrix4f modelView, Matrix4f projection) {
-        return current.drawInternal(buffer, null, 0, 0, type, modelView, projection, 0);
+        return current.drawInternal(buffer, null, 0, 0, type, modelView, projection, 0, null, 0);
     }
 
     public boolean drawCached(IrisGeometryCache.Mesh mesh, RenderType type, Matrix4f modelView, Matrix4f projection, int light) {
-        return drawInternal(mesh.storage.buffer, mesh, mesh.firstVertex, mesh.vertices, type, modelView, projection, light);
+        return drawInternal(mesh.storage.buffer, mesh, mesh.firstVertex, mesh.vertices, type, modelView, projection, light, null, 0);
     }
 
     boolean drawCachedRange(IrisGeometryCache.Mesh mesh, int firstVertex, int vertices, RenderType type,
                             Matrix4f modelView, Matrix4f projection, int light) {
-        return drawInternal(mesh.storage.buffer, mesh, firstVertex, vertices, type, modelView, projection, light);
+        return drawInternal(mesh.storage.buffer, mesh, firstVertex, vertices, type, modelView, projection, light, null, 0);
+    }
+
+    /** Starts and counts occupy consecutive halves of the caller's reusable native workspace. */
+    void drawCachedRanges(IrisGeometryCache.Mesh mesh, IntBuffer ranges, int rangeCount, RenderType type,
+                          Matrix4f modelView, Matrix4f projection, int light) {
+        drawInternal(mesh.storage.buffer, mesh, 0, 0, type, modelView, projection, light, ranges, rangeCount);
     }
 
     private boolean drawInternal(VertexBuffer buffer, IrisGeometryCache.Mesh mesh, int firstVertex, int vertices, RenderType type,
-                              Matrix4f modelView, Matrix4f projection, int light) {
+                              Matrix4f modelView, Matrix4f projection, int light, IntBuffer ranges, int rangeCount) {
+        lastDrawAppliedShader = false;
         boolean changed = use(type);
         var shader = RenderSystem.getShader();
-        buffer.bind();
-        if (metrics != null) metrics.bufferBinds++;
+        if (metrics != null) metrics.bufferBindRequests++;
+        if (!retainShader || boundBuffer != buffer) {
+            buffer.bind();
+            boundBuffer = buffer;
+            if (metrics != null) metrics.bufferBinds++;
+        }
         if (mesh != null) {
             saveConstant(mesh.storage.lightAttribute);
             saveConstant(mesh.storage.identityAttribute);
@@ -134,6 +159,7 @@ public final class IrisDrawScope implements AutoCloseable {
             shader.setDefaultUniforms(VertexFormat.Mode.TRIANGLES, modelView, projection, Minecraft.getInstance().getWindow());
             appliedShader = shader;
             shader.apply();
+            lastDrawAppliedShader = true;
             appliedView.set(modelView);
             appliedProjection.set(projection);
             if (metrics != null) {
@@ -141,12 +167,18 @@ public final class IrisDrawScope implements AutoCloseable {
                 if (matricesChanged) metrics.matrixChanges++;
             }
         }
-        if (mesh != null && mesh.shared) GL11.glDrawArrays(GL11.GL_TRIANGLES, firstVertex, vertices);
+        if (ranges != null) {
+            long address = MemoryUtil.memAddress(ranges);
+            GL14.nglMultiDrawArrays(GL11.GL_TRIANGLES, address, address + (long) rangeCount * Integer.BYTES, rangeCount);
+        } else if (mesh != null && mesh.shared) GL11.glDrawArrays(GL11.GL_TRIANGLES, firstVertex, vertices);
         else buffer.draw();
-        if (!entity) {
+        if (!retainShader) {
             appliedShader = null;
             try { shader.clear(); }
-            finally { VertexBuffer.unbind(); }
+            finally {
+                boundBuffer = null;
+                VertexBuffer.unbind();
+            }
         }
         return changed;
     }
@@ -158,6 +190,7 @@ public final class IrisDrawScope implements AutoCloseable {
             restore();
             completed = true;
         } finally {
+            if (previous != null) previous.boundBuffer = null;
             if (metrics != null) metrics.restored(completed);
         }
     }

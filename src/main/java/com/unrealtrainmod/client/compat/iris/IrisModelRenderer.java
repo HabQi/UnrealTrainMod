@@ -18,6 +18,7 @@ import com.unrealtrainmod.entity.TrainEntity;
 import com.unrealtrainmod.model.IndexedMesh;
 import com.unrealtrainmod.vehicle.VehiclePose;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
+import java.nio.IntBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
@@ -32,13 +33,67 @@ import net.minecraft.client.renderer.LightTexture;
 import net.minecraft.client.renderer.RenderType;
 import net.minecraft.world.entity.Entity;
 import org.joml.Matrix4f;
+import org.lwjgl.system.MemoryUtil;
 
 /** One local command snapshot per entity/frame; GPU geometry is independent of entity and view. */
 public final class IrisModelRenderer {
-    private record Command(RenderBatch batch, PoseStack.Pose pose, int light) {}
-    private record Prepared(IrisBatch material, PoseStack.Pose pose, Matrix4f view, int light,
-                            IrisGeometryCache.Mesh solidGpu, IrisGeometryCache.Mesh clippedGpu,
-                            IrisGeometryCache.Mesh lightGpu) {}
+    private static final class Command {
+        private RenderBatch batch;
+        private PoseStack.Pose pose;
+        private int light;
+
+        void set(RenderBatch batch, PoseStack.Pose pose, int light) {
+            this.batch = batch;
+            this.pose = pose;
+            this.light = light;
+        }
+        RenderBatch batch() { return batch; }
+        PoseStack.Pose pose() { return pose; }
+        int light() { return light; }
+        void clear() { batch = null; pose = null; }
+    }
+    private static final class Prepared {
+        private IrisBatch material;
+        private PoseStack.Pose pose;
+        private Matrix4f view;
+        private int light;
+        private IrisGeometryCache.Mesh solidGpu, clippedGpu, lightGpu;
+
+        void set(IrisBatch material, PoseStack.Pose pose, Matrix4f view, int light,
+                 IrisGeometryCache.Mesh solidGpu, IrisGeometryCache.Mesh clippedGpu, IrisGeometryCache.Mesh lightGpu) {
+            this.material = material;
+            this.pose = pose;
+            this.view = view;
+            this.light = light;
+            this.solidGpu = solidGpu;
+            this.clippedGpu = clippedGpu;
+            this.lightGpu = lightGpu;
+        }
+        IrisBatch material() { return material; }
+        PoseStack.Pose pose() { return pose; }
+        Matrix4f view() { return view; }
+        int light() { return light; }
+        IrisGeometryCache.Mesh solidGpu() { return solidGpu; }
+        IrisGeometryCache.Mesh clippedGpu() { return clippedGpu; }
+        IrisGeometryCache.Mesh lightGpu() { return lightGpu; }
+        void clear() {
+            material = null;
+            pose = null;
+            view = null;
+            solidGpu = clippedGpu = lightGpu = null;
+        }
+    }
+    /** Owned matrices are not reused until the next frame, after deferred transparency is discarded. */
+    private static final class ViewPose {
+        private final PoseStack.Pose pose = new PoseStack().last();
+        private final Matrix4f view = new Matrix4f();
+
+        void set(PoseStack.Pose viewPose, PoseStack.Pose local) {
+            pose.pose().set(viewPose.pose()).mul(local.pose());
+            pose.normal().set(viewPose.normal()).mul(local.normal());
+            view.set(RenderSystem.getModelViewMatrix()).mul(pose.pose());
+        }
+    }
     private static final Comparator<Prepared> GPU_RANGE_ORDER = Comparator
             .comparingLong((Prepared draw) -> draw.solidGpu().storage.order)
             .thenComparingInt(draw -> draw.solidGpu().firstVertex)
@@ -46,15 +101,17 @@ public final class IrisModelRenderer {
     private static final class OpaqueCommand {
         Prepared draw;
         RenderType type;
+        long state;
         int first, vertices;
-        void set(Prepared draw, RenderType type) {
+        void set(Prepared draw, RenderType type, long state) {
             this.draw = draw;
             this.type = type;
+            this.state = state;
             first = draw.solidGpu().firstVertex;
             vertices = draw.solidGpu().vertices;
         }
     }
-    /** View matrices are immutable until this view finishes; inserted keys retain a cached full-value hash. */
+    /** View matrices are immutable for the frame; inserted keys retain a cached full-value hash. */
     private static final class PoseKey {
         private Matrix4f view;
         private int hash, id;
@@ -186,9 +243,13 @@ public final class IrisModelRenderer {
             }
         }
     }
-    private static final class Snapshot implements ModelDrawSink {
+    private static final class Snapshot implements ModelDrawSink, AutoCloseable {
         private final List<Command> commands = new ArrayList<>();
         private final List<Prepared> prepared = new ArrayList<>();
+        private final List<Command> commandPool = new ArrayList<>();
+        private final List<Prepared> preparedPool = new ArrayList<>();
+        private final List<ViewPose> viewPosePool = new ArrayList<>();
+        private int commandCount, preparedCount, viewPoseCount;
         private final LinkedHashMap<RenderType, MaterialGroup> opaque = new LinkedHashMap<>();
         private final List<MaterialGroup> opaqueGroups = new ArrayList<>();
         private final IdentityHashMap<Matrix4f, PoseKey> opaqueSnapshots = new IdentityHashMap<>();
@@ -198,11 +259,55 @@ public final class IrisModelRenderer {
         private int opaquePoseCount;
         private final List<OpaqueCommand> opaqueCommands = new ArrayList<>();
         private int opaqueCommandCount;
+        private IntBuffer multiRanges;
         private RangeDiagnostics rangeDiagnostics;
         private final SortBuffer sorted = new SortBuffer();
         private boolean ready, poseReady;
         private VehiclePose vehiclePose;
         private int lights;
+
+        private void addCommand(RenderBatch batch, PoseStack.Pose pose, int light) {
+            if (commandCount == commandPool.size()) {
+                commandPool.add(new Command());
+                IrisRenderStats.commandPoolGrew();
+            }
+            var command = commandPool.get(commandCount++);
+            command.set(batch, pose, light);
+            commands.add(command);
+        }
+
+        private void addPrepared(IrisBatch material, PoseStack.Pose pose, Matrix4f view, int light,
+                                 IrisGeometryCache.Mesh solidGpu, IrisGeometryCache.Mesh clippedGpu,
+                                 IrisGeometryCache.Mesh lightGpu) {
+            if (preparedCount == preparedPool.size()) {
+                preparedPool.add(new Prepared());
+                IrisRenderStats.preparedPoolGrew();
+            }
+            var draw = preparedPool.get(preparedCount++);
+            draw.set(material, pose, view, light, solidGpu, clippedGpu, lightGpu);
+            prepared.add(draw);
+        }
+
+        private ViewPose viewPose(PoseStack.Pose view, PoseStack.Pose local) {
+            if (viewPoseCount == viewPosePool.size()) {
+                viewPosePool.add(new ViewPose());
+                IrisRenderStats.viewPosePoolGrew();
+            }
+            var posed = viewPosePool.get(viewPoseCount++);
+            posed.set(view, local);
+            return posed;
+        }
+
+        private void resetFrame() {
+            commands.clear();
+            prepared.clear();
+            for (int i = 0; i < commandCount; i++) commandPool.get(i).clear();
+            for (int i = 0; i < preparedCount; i++) preparedPool.get(i).clear();
+            commandCount = preparedCount = viewPoseCount = 0;
+            ready = poseReady = false;
+            vehiclePose = null;
+        }
+
         private int opaquePose(Matrix4f view) {
             var pose = opaqueSnapshots.get(view);
             if (pose != null) return pose.id;
@@ -249,22 +354,47 @@ public final class IrisModelRenderer {
                         } else {
                             if (opaqueCommandCount == opaqueCommands.size()) opaqueCommands.add(new OpaqueCommand());
                             previous = opaqueCommands.get(opaqueCommandCount++);
-                            previous.set(draw, material.getKey());
+                            previous.set(draw, material.getKey(), group.order[i]);
                         }
                     }
                 }
             }
             return before;
         }
+
+        private void prepareRanges(int first, int end) {
+            int count = end - first;
+            int size = Math.multiplyExact(count, 2);
+            if (multiRanges == null || multiRanges.capacity() < size) {
+                var replacement = MemoryUtil.memAllocInt(Math.max(16, size));
+                MemoryUtil.memFree(multiRanges);
+                multiRanges = replacement;
+            }
+            multiRanges.clear();
+            for (int i = 0; i < count; i++) {
+                var command = opaqueCommands.get(first + i);
+                multiRanges.put(i, command.first);
+                multiRanges.put(count + i, command.vertices);
+            }
+        }
+
+        @Override public void close() {
+            try { VehicleScriptManager.releasePreview(this); }
+            finally {
+                MemoryUtil.memFree(multiRanges);
+                multiRanges = null;
+            }
+        }
         @Override public int lights() { return lights; }
         @Override public void lights(int value) { lights = value; }
         @Override public void submitGeometry(LoadedModel.Source source, PartSelection selection,
                                              PoseStack.Pose pose, int light, boolean directionalLighting) {
-            var local = pose.copy();
+            PoseStack.Pose local = null;
             for (var batch : selection.batches()) {
                 if (!batch.lightLayer().enabled(lights)) continue;
-                commands.add(new Command(batch, local, batch.lightLayer().emissive()
-                        ? LightTexture.FULL_BRIGHT : light));
+                if (local == null) local = pose.copy();
+                addCommand(batch, local, batch.lightLayer().emissive()
+                        ? LightTexture.FULL_BRIGHT : light);
             }
         }
     }
@@ -332,9 +462,8 @@ public final class IrisModelRenderer {
         var selection = instance.model().partsByName().get(name);
         if (selection == null) return false;
         boolean shadow = IrisCompat.shadowPass();
-        try (var metrics = IrisRenderStats.begin(IrisRenderStats.VEHICLE, shadow)) {
+        try (var metrics = IrisRenderStats.begin(IrisRenderStats.VEHICLE, shadow); var snapshot = new Snapshot()) {
             long start = IrisRenderStats.clock();
-            var snapshot = new Snapshot();
             snapshot.submit(instance, selection, new PoseStack(), light);
             prepare(snapshot, pose, shadow);
             IrisRenderStats.prepare(start);
@@ -355,11 +484,10 @@ public final class IrisModelRenderer {
             // One submission shares a local pose across its batches; each view prepares it independently.
             if (local != command.pose()) {
                 local = command.pose();
-                posed = new PoseStack().last();
-                posed.pose().set(viewPose.last().pose()).mul(local.pose());
-                posed.normal().set(viewPose.last().normal()).mul(local.normal());
+                var slot = snapshot.viewPose(viewPose.last(), local);
+                posed = slot.pose;
                 supported = IrisGeometryCache.supportsPose(posed.pose());
-                view = new Matrix4f(RenderSystem.getModelViewMatrix()).mul(posed.pose());
+                view = slot.view;
             }
             var solidGpu = material.solidCount == 0 || !supported ? null : IrisGeometryCache.requestVehicleOpaque(
                     material.solidMesh, material.firstSolid, material.solidCount, material.forceOpaque);
@@ -368,14 +496,13 @@ public final class IrisModelRenderer {
             var clippedGpu = staticTransparency && supported && !material.batch.isLightLayer() && material.clippedCount != 0
                     ? IrisGeometryCache.requestVehicle(material.clippedMesh, material.firstClipped, material.clippedCount, false) : null;
             if (material.solidCount != 0) material.solidType();
-            snapshot.prepared.add(new Prepared(material, posed, view, command.light(), solidGpu, clippedGpu, lightGpu));
+            snapshot.addPrepared(material, posed, view, command.light(), solidGpu, clippedGpu, lightGpu);
         }
         if (!IrisGeometryCache.uploadVehicleOpaque()) {
             for (int i = 0; i < snapshot.prepared.size(); i++) {
                 var draw = snapshot.prepared.get(i);
                 if (draw.solidGpu() != null && !draw.solidGpu().ready()) {
-                    snapshot.prepared.set(i, new Prepared(draw.material(), draw.pose(), draw.view(), draw.light(),
-                            null, draw.clippedGpu(), draw.lightGpu()));
+                    draw.solidGpu = null;
                 }
             }
         }
@@ -418,12 +545,29 @@ public final class IrisModelRenderer {
             int callsBefore = snapshot.mergeOpaque();
             IrisRenderStats.opaqueMerge(callsBefore, snapshot.opaqueCommandCount, mergeStart);
             if (!opaque.isEmpty()) try (var scope = IrisDrawScope.entity()) {
-                for (int i = 0; i < snapshot.opaqueCommandCount; i++) {
+                for (int i = 0; i < snapshot.opaqueCommandCount;) {
                     var command = snapshot.opaqueCommands.get(i);
                     var draw = command.draw;
-                    scope.drawCachedRange(draw.solidGpu(), command.first, command.vertices, command.type,
-                            draw.view(), RenderSystem.getProjectionMatrix(), draw.light());
-                    IrisRenderStats.gpu(command.vertices / 3);
+                    int end = i + 1;
+                    long triangles = command.vertices / 3;
+                    while (end < snapshot.opaqueCommandCount) {
+                        var next = snapshot.opaqueCommands.get(end);
+                        if (next.type != command.type || next.state != command.state
+                                || next.draw.solidGpu().storage != draw.solidGpu().storage) break;
+                        triangles += next.vertices / 3;
+                        end++;
+                    }
+                    int count = end - i;
+                    if (count == 1) {
+                        scope.drawCachedRange(draw.solidGpu(), command.first, command.vertices, command.type,
+                                draw.view(), RenderSystem.getProjectionMatrix(), draw.light());
+                    } else {
+                        snapshot.prepareRanges(i, end);
+                        scope.drawCachedRanges(draw.solidGpu(), snapshot.multiRanges, count, command.type,
+                                draw.view(), RenderSystem.getProjectionMatrix(), draw.light());
+                    }
+                    IrisRenderStats.opaqueDraw(count, triangles);
+                    i = end;
                 }
             }
         } finally {
@@ -542,19 +686,17 @@ public final class IrisModelRenderer {
         while (iterator.hasNext()) {
             var entry = iterator.next(); var snapshot = entry.getValue();
             if (entry.getKey().isRemoved() || entry.getKey().level() != Minecraft.getInstance().level) {
-                VehicleScriptManager.releasePreview(snapshot);
+                snapshot.close();
                 iterator.remove();
             } else {
-                snapshot.commands.clear(); snapshot.prepared.clear();
-                snapshot.ready = snapshot.poseReady = false;
-                snapshot.vehiclePose = null;
+                snapshot.resetFrame();
             }
         }
     }
 
     public static void clear() {
         IrisVehicleReprojection.reset();
-        ENTITIES.values().forEach(VehicleScriptManager::releasePreview);
+        ENTITIES.values().forEach(Snapshot::close);
         ENTITIES.clear();
         IrisRenderStats.reset();
         IrisGeometryCache.clear();

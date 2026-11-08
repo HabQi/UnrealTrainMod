@@ -412,6 +412,10 @@ public final class TrackConstructionManager {
         TrackCurveParameters curve;
         TrackVerticalCurveParameters vertical;
         try {
+            if (payload.verticalEdited() && !payload.verticalAutomatic()
+                    && Math.abs(payload.grade()) > TrackVerticalCurveParameters.MAX_EDIT_GRADE) {
+                throw new IllegalArgumentException("Grade outside editor range");
+            }
             curve = new TrackCurveParameters(payload.angle(), payload.length());
             TrackCurveParameters startCurve = session.startCurve, endCurve = session.endCurve;
             if (payload.horizontalEdited()) {

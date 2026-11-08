@@ -29,6 +29,7 @@ import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.renderer.texture.OverlayTexture;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.level.ChunkPos;
+import net.minecraft.world.phys.AABB;
 import net.neoforged.neoforge.client.event.RenderLevelStageEvent;
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
@@ -37,6 +38,16 @@ import org.joml.Vector3f;
 final class RailPartRenderer implements AutoCloseable {
     private record Key(SharedRailPart mesh, ResourceLocation texture, boolean doubleSided, long chunk, boolean moving) {}
     private record Draw(Key key, PoseStack.Pose pose, int light) {}
+    /** View-independent preparation; camera matrices, visibility and light remain draw-time inputs. */
+    private static final class IrisPart {
+        private final PoseStack.Pose pose = new PoseStack().last();
+        private RailDrawSnapshot.Part part;
+        private AABB bounds;
+        private long chunk;
+        private boolean supported;
+
+        void clear() { part = null; bounds = null; }
+    }
     private final InstanceBuffer fixedInstances = new InstanceBuffer();
     private final InstanceBuffer movingInstances = new InstanceBuffer();
     private List<Draw> uploadedFixed = List.of(), uploadedMoving = List.of();
@@ -47,6 +58,11 @@ final class RailPartRenderer implements AutoCloseable {
     private final TrackLighting lighting;
     private final TrackVector anchor;
     private final double meshOriginY;
+    private final List<IrisPart> irisParts = new ArrayList<>();
+    private final Matrix4f irisLocal = new Matrix4f();
+    private RailDrawSnapshot irisSnapshot, irisPrevious;
+    private float irisFraction = Float.NaN;
+    private int irisPartCount;
 
     RailPartRenderer(TrackVector anchor, double meshOriginY) {
         this.anchor = anchor;
@@ -171,29 +187,24 @@ final class RailPartRenderer implements AutoCloseable {
         lighting.refresh(level);
         var previous = snapshot.matches(entry.previousSnapshot) ? entry.previousSnapshot : null;
         float fraction = entry.snapshotFraction(time);
+        prepareIris(snapshot, previous, fraction);
         var camera = event.getCamera().getPosition();
         var modelView = new Matrix4f(event.getModelViewMatrix()).translate((float)(anchor.x() - camera.x),
                 (float)(anchor.y() - camera.y), (float)(anchor.z() - camera.z));
-        var local = new Matrix4f();
-        var stack = new PoseStack();
         var writer = new IrisVertices();
         if (fallback == null) fallback = new ByteBufferBuilder(1 << 16);
         int drawn = 0;
-        for (int i = 0; i < snapshot.parts().size(); i++) {
-            var part = snapshot.parts().get(i);
-            snapshot.interpolate(previous, i, fraction, local);
-            long chunk = ChunkPos.asLong((int)Math.floor((anchor.x() + local.m30()) / 16),
-                    (int)Math.floor((anchor.z() + local.m32()) / 16));
+        for (int i = 0; i < irisPartCount; i++) {
+            var prepared = irisParts.get(i);
+            long chunk = prepared.chunk;
             if (!entry.chunks.contains(chunk) || !level.hasChunk(ChunkPos.getX(chunk), ChunkPos.getZ(chunk))) continue;
-            var source = part.source();
+            var source = prepared.part.source();
             if (source.mesh().indices().length == 0) continue;
-            var shared = ClientRailModelManager.INSTANCE.sharedPart(source.mesh());
-            if (!event.getFrustum().isVisible(shared.transformedBounds(local, anchor.x(), anchor.y(), anchor.z()))) continue;
+            if (!event.getFrustum().isVisible(prepared.bounds)) continue;
             long start = stats == null ? 0 : System.nanoTime();
-            stack.last().pose().set(local);
-            local.normal(stack.last().normal());
+            var local = prepared.pose.pose();
             int light = lighting.sample(level, local.m30(), local.m31(), local.m32(), 0, 1, 0);
-            var gpu = IrisGeometryCache.supportsPose(local)
+            var gpu = prepared.supported
                     ? IrisGeometryCache.request(source.mesh(), 0, source.mesh().indices().length, false) : null;
             var type = IrisRenderTypes.get(source.texture(), source.doubleSided(), false, false);
             if (gpu != null) {
@@ -207,7 +218,7 @@ final class RailPartRenderer implements AutoCloseable {
                 }
             } else {
                 var builder = new BufferBuilder(fallback, VertexFormat.Mode.TRIANGLES, DefaultVertexFormat.NEW_ENTITY);
-                for (int index : source.mesh().indices()) writer.vertex(builder, source.mesh(), index, stack.last(), light, false);
+                for (int index : source.mesh().indices()) writer.vertex(builder, source.mesh(), index, prepared.pose, light, false);
                 if (irisFallback == null) irisFallback = new VertexBuffer(VertexBuffer.Usage.DYNAMIC);
                 irisFallback.bind();
                 var built = builder.buildOrThrow();
@@ -229,6 +240,38 @@ final class RailPartRenderer implements AutoCloseable {
         }
         if (stats != null) stats.dynamicParts(drawn);
         return uploads;
+    }
+
+    private void prepareIris(RailDrawSnapshot snapshot, RailDrawSnapshot previous, float fraction) {
+        if (irisSnapshot == snapshot && irisPrevious == previous && irisFraction == fraction) return;
+        int count = snapshot.parts().size();
+        for (int i = 0; i < count; i++) {
+            if (i == irisParts.size()) irisParts.add(new IrisPart());
+            var prepared = irisParts.get(i);
+            var part = snapshot.parts().get(i);
+            if (part.source().mesh().indices().length == 0) {
+                prepared.clear();
+                prepared.part = part;
+                continue;
+            }
+            snapshot.interpolate(previous, i, fraction, irisLocal);
+            if (prepared.part == null || prepared.part.source() != part.source()
+                    || !prepared.pose.pose().equals(irisLocal)) {
+                prepared.pose.pose().set(irisLocal);
+                irisLocal.normal(prepared.pose.normal());
+                var shared = ClientRailModelManager.INSTANCE.sharedPart(part.source().mesh());
+                prepared.bounds = shared.transformedBounds(irisLocal, anchor.x(), anchor.y(), anchor.z());
+                prepared.chunk = ChunkPos.asLong((int)Math.floor((anchor.x() + irisLocal.m30()) / 16),
+                        (int)Math.floor((anchor.z() + irisLocal.m32()) / 16));
+                prepared.supported = IrisGeometryCache.supportsPose(irisLocal);
+            }
+            prepared.part = part;
+        }
+        for (int i = count; i < irisPartCount; i++) irisParts.get(i).clear();
+        irisPartCount = count;
+        irisSnapshot = snapshot;
+        irisPrevious = previous;
+        irisFraction = fraction;
     }
 
     private static boolean sameInstances(List<Draw> current, List<Draw> previous) {
@@ -321,6 +364,10 @@ final class RailPartRenderer implements AutoCloseable {
     }
 
     void invalidateInstances() {
+        for (int i = 0; i < irisPartCount; i++) irisParts.get(i).clear();
+        irisPartCount = 0;
+        irisSnapshot = irisPrevious = null;
+        irisFraction = Float.NaN;
         if (irisFallback != null) { irisFallback.close(); irisFallback = null; }
         fixedInstances.close(); movingInstances.close();
         uploadedFixed = uploadedMoving = List.of();

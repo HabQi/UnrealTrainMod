@@ -50,7 +50,14 @@ public final class TrainListWidget<T> extends ObjectSelectionList<TrainListWidge
                            Consumer<T> onSelect, Component emptyMessage, boolean vehicleEntries) {
         super(minecraft, width, height, 0, 40);
         this.emptyMessage = emptyMessage;
-        this.items = List.copyOf(items);
+        var groups = new LinkedHashMap<Path, List<T>>();
+        for (var item : items) groups.computeIfAbsent(archive.apply(item), key -> new ArrayList<>()).add(item);
+        var ordered = new ArrayList<T>(items.size());
+        for (var group : groups.values()) {
+            group.sort((first, second) -> compareNames(label.apply(first).getString(), label.apply(second).getString()));
+            ordered.addAll(group);
+        }
+        this.items = List.copyOf(ordered);
         this.archive = archive;
         this.label = label;
         this.detail = detail;
@@ -58,6 +65,37 @@ public final class TrainListWidget<T> extends ObjectSelectionList<TrainListWidge
         this.onSelect = onSelect;
         this.vehicleEntries = vehicleEntries;
     }
+
+    /** Compare digit runs by magnitude without converting them to fixed-width numbers. */
+    private static int compareNames(String first, String second) {
+        int i = 0, j = 0;
+        while (i < first.length() && j < second.length()) {
+            char a = first.charAt(i), b = second.charAt(j);
+            if (isDigit(a) && isDigit(b)) {
+                int firstEnd = i, secondEnd = j;
+                while (firstEnd < first.length() && isDigit(first.charAt(firstEnd))) firstEnd++;
+                while (secondEnd < second.length() && isDigit(second.charAt(secondEnd))) secondEnd++;
+                while (i < firstEnd && first.charAt(i) == '0') i++;
+                while (j < secondEnd && second.charAt(j) == '0') j++;
+                int lengthOrder = Integer.compare(firstEnd - i, secondEnd - j);
+                if (lengthOrder != 0) return lengthOrder;
+                while (i < firstEnd) {
+                    int digitOrder = Character.compare(first.charAt(i++), second.charAt(j++));
+                    if (digitOrder != 0) return digitOrder;
+                }
+                i = firstEnd;
+                j = secondEnd;
+            } else {
+                int order = Character.compare(a, b);
+                if (order != 0) return order;
+                i++;
+                j++;
+            }
+        }
+        return Integer.compare(first.length() - i, second.length() - j);
+    }
+
+    private static boolean isDigit(char value) { return value >= '0' && value <= '9'; }
 
     public void filter(String query) {
         String filter = query.strip().toLowerCase(Locale.ROOT);

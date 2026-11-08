@@ -96,9 +96,13 @@ public final class IrisCompat {
 
     static int[] currentIdentity() {
         int[] previous = new int[3];
+        currentIdentity(previous);
+        return previous;
+    }
+
+    static void currentIdentity(int[] target) {
         try {
-            for (int i = 0; i < 3; i++) previous[i] = (int) getIdentity[i].invoke();
-            return previous;
+            for (int i = 0; i < 3; i++) target[i] = (int) getIdentity[i].invoke();
         } catch (Throwable exception) { throw new IllegalStateException("Cannot read Iris entity context", exception); }
     }
 

@@ -6,6 +6,7 @@ package com.unrealtrainmod.client.track;
 
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.unrealtrainmod.client.ClientConfig;
+import com.unrealtrainmod.client.compat.iris.IrisDrawScope;
 import java.util.HashSet;
 import java.util.Collections;
 import java.util.IdentityHashMap;
@@ -239,6 +240,7 @@ final class TrackRenderStats {
 
     /** A shader {@code apply()} issued by the draw scope. */
     void irisShaderBind() {
+        if (!IrisDrawScope.current().lastDrawAppliedShader()) return;
         int program = RenderSystem.getShader().getId();
         shaderBind(irisProgram != -1 && irisProgram != program);
         irisProgram = program;

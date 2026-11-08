@@ -56,7 +56,7 @@ public final class ClientThumbnailManager extends SimplePreparableReloadListener
     private static final float VEHICLE_GUI_PIXELS_PER_BLOCK = 8;
     private static final float RAIL_GUI_PIXELS_PER_BLOCK = 27.6f;
     // Bump when framing, lighting, import appearance or alpha processing changes.
-    private static final String RECIPE = "8:" + PreviewRenderer.THUMBNAIL_WIDTH + "x" + PreviewRenderer.THUMBNAIL_HEIGHT
+    private static final String RECIPE = "9:" + PreviewRenderer.THUMBNAIL_WIDTH + "x" + PreviewRenderer.THUMBNAIL_HEIGHT
             + ":capture-ppb=" + PreviewRenderer.THUMBNAIL_PIXELS_PER_BLOCK
             + ":vehicle-gui-ppb=" + VEHICLE_GUI_PIXELS_PER_BLOCK + ":rail-gui-ppb=" + RAIL_GUI_PIXELS_PER_BLOCK
             + ":distance=" + PreviewRenderer.THUMBNAIL_DISTANCE

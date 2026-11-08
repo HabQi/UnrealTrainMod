@@ -19,13 +19,15 @@ public final class IrisRenderStats {
     private static final int SCOPES = 17, SETUPS = 18, APPLIES = 19, MATRICES = 20, BINDS = 21,
             GROUPS = 22, GROUP_CPU = 23, CAPTURE_CPU = 24, DIRECT_CPU = 25, RESTORE_CPU = 26,
             POSE_SNAPSHOTS = 27, POSE_VALUES = 28, POSE_RUNS = 29, POSE_GROUPS = 30, LIGHT_GROUPS = 31,
-            RANGE_CPU = 32, RANGE_BEFORE = 33, RANGE_AFTER = 34, MERGE_CPU = 35;
+            RANGE_CPU = 32, RANGE_BEFORE = 33, RANGE_AFTER = 34, MERGE_CPU = 35,
+            BIND_REQUESTS = 36, COMMAND_GROWTH = 37, PREPARED_GROWTH = 38, VIEW_POSE_GROWTH = 39,
+            OPAQUE_CALLS = 40, MULTI_CALLS = 41, MULTI_RANGES = 42;
     private static final Window[] WINDOWS = {new Window("Vehicle"), new Window("Track")};
     private static Sample current;
 
     private static final class Window {
         final String name;
-        final long[][] values = new long[2][36];
+        final long[][] values = new long[2][43];
         final long[] viewFrame = {-1, -1};
         final RangeSample[] ranges = new RangeSample[2];
         final IrisGpuTimer[] timers = new IrisGpuTimer[3];
@@ -55,18 +57,24 @@ public final class IrisRenderStats {
         void logState(int slot) {
             var v = values[slot];
             if (v[0] == 0) return;
-            LOGGER.info("Vehicle Iris state [{}] | perView scopes={} opaqueGroups={} stateSetups={} shaderApplies={} matrixChanges={} bufferBinds={} "
+            LOGGER.info("Vehicle Iris state [{}] | perView scopes={} opaqueGroups={} stateSetups={} shaderApplies={} matrixChanges={} bufferBinds={} bufferBindRequests={} bufferBindsSaved={} "
                             + "| opaque poseSnapshots={} poseValues={} poseRunsBefore={} poseGroups={} lightGroups={} poseRunsSaved={} "
                             + "rangeCallsBefore={} rangeCallsAfter={} rangeCallsSaved={} "
-                            + "| cpu group={} merge={} ranges={} capture={} direct={} restore={} ms/view | gpuOpaqueRange={} gpuTranslucentRange={}",
+                            + "opaqueDrawCalls={} multiDrawCalls={} multiDrawRanges={} multiDrawSaved={} "
+                            + "| cpu group={} merge={} ranges={} capture={} direct={} restore={} ms/view | gpuOpaqueRange={} gpuTranslucentRange={} "
+                            + "| window preparePoolGrowth commands={} prepared={} viewPoses={}",
                     slot == 0 ? "main" : "shadow", average(v[SCOPES], v[0]), average(v[GROUPS], v[0]),
                     average(v[SETUPS], v[0]), average(v[APPLIES], v[0]), average(v[MATRICES], v[0]), average(v[BINDS], v[0]),
+                    average(v[BIND_REQUESTS], v[0]), average(v[BIND_REQUESTS] - v[BINDS], v[0]),
                     average(v[POSE_SNAPSHOTS], v[0]), average(v[POSE_VALUES], v[0]), average(v[POSE_RUNS], v[0]),
                     average(v[POSE_GROUPS], v[0]), average(v[LIGHT_GROUPS], v[0]), average(v[POSE_RUNS] - v[POSE_GROUPS], v[0]),
                     average(v[RANGE_BEFORE], v[0]), average(v[RANGE_AFTER], v[0]), average(v[RANGE_BEFORE] - v[RANGE_AFTER], v[0]),
+                    average(v[OPAQUE_CALLS], v[0]), average(v[MULTI_CALLS], v[0]), average(v[MULTI_RANGES], v[0]),
+                    average(v[RANGE_AFTER] - v[OPAQUE_CALLS], v[0]),
                     milliseconds(v[GROUP_CPU], v[0]), milliseconds(v[MERGE_CPU], v[0]), milliseconds(v[RANGE_CPU], v[0]), milliseconds(v[CAPTURE_CPU], v[0]),
                     milliseconds(v[DIRECT_CPU], v[0]), milliseconds(v[RESTORE_CPU], v[0]),
-                    gpu(slot), slot == 0 ? gpu(2) : "notApplicable");
+                    gpu(slot), slot == 0 ? gpu(2) : "notApplicable",
+                    v[COMMAND_GROWTH], v[PREPARED_GROWTH], v[VIEW_POSE_GROWTH]);
             if (ranges[slot] != null) ranges[slot].log(slot);
         }
     }
@@ -98,11 +106,13 @@ public final class IrisRenderStats {
         private final long begun = System.nanoTime();
         private long prepare, sort, draw, triangles, gpuDraws, cpuVertices, hits, misses, uploads;
         private long lightTriangles, lightGpuDraws, lightCpuVertices, lightHits, lightMisses, lightUploads;
-        private long scopes, stateSetups, shaderApplies, matrixChanges, bufferBinds, groups,
+        private long scopes, stateSetups, shaderApplies, matrixChanges, bufferBinds, bufferBindRequests, groups,
                 groupNanos, captureNanos, directNanos, restoreNanos;
         private long poseSnapshots, poseValues, poseRuns, poseGroups, lightGroups;
         private long rangeNanos;
         private long rangeBefore, rangeAfter, mergeNanos;
+        private long commandGrowth, preparedGrowth, viewPoseGrowth;
+        private long opaqueCalls, multiCalls, multiRanges;
         private Sample(Window window, boolean shadow, boolean submission) {
             this.window = window;
             slot = shadow ? 1 : 0;
@@ -124,12 +134,15 @@ public final class IrisRenderStats {
             v[14] += lightHits; v[15] += lightMisses; v[16] += lightUploads;
             v[SCOPES] += scopes; v[SETUPS] += stateSetups; v[APPLIES] += shaderApplies;
             v[MATRICES] += matrixChanges; v[BINDS] += bufferBinds; v[GROUPS] += groups;
+            v[BIND_REQUESTS] += bufferBindRequests;
             v[GROUP_CPU] += groupNanos; v[CAPTURE_CPU] += captureNanos;
             v[DIRECT_CPU] += directNanos; v[RESTORE_CPU] += restoreNanos;
             v[POSE_SNAPSHOTS] += poseSnapshots; v[POSE_VALUES] += poseValues; v[POSE_RUNS] += poseRuns;
             v[POSE_GROUPS] += poseGroups; v[LIGHT_GROUPS] += lightGroups;
             v[RANGE_CPU] += rangeNanos;
             v[RANGE_BEFORE] += rangeBefore; v[RANGE_AFTER] += rangeAfter; v[MERGE_CPU] += mergeNanos;
+            v[COMMAND_GROWTH] += commandGrowth; v[PREPARED_GROWTH] += preparedGrowth; v[VIEW_POSE_GROWTH] += viewPoseGrowth;
+            v[OPAQUE_CALLS] += opaqueCalls; v[MULTI_CALLS] += multiCalls; v[MULTI_RANGES] += multiRanges;
             if (System.nanoTime() - window.start < 5_000_000_000L) return;
             var main = window.values[0]; var shadow = window.values[1];
             LOGGER.info(
@@ -158,7 +171,7 @@ public final class IrisRenderStats {
         private final long begun = System.nanoTime();
         private long directStart, restoreStart;
         private IrisGpuTimer timer;
-        int setups, applies, matrixChanges, bufferBinds;
+        int setups, applies, matrixChanges, bufferBinds, bufferBindRequests;
 
         Scope(Sample sample) { this.sample = sample; }
         void captured() {
@@ -178,6 +191,7 @@ public final class IrisRenderStats {
             sample.shaderApplies += applies;
             sample.matrixChanges += matrixChanges;
             sample.bufferBinds += bufferBinds;
+            sample.bufferBindRequests += bufferBindRequests;
             sample.restoreNanos += System.nanoTime() - restoreStart;
         }
     }
@@ -231,6 +245,9 @@ public final class IrisRenderStats {
     private static String average(long count, long views) { return String.format(Locale.ROOT, "%.1f", (double) count / views); }
     private static String milliseconds(long nanos, long views) { return String.format(Locale.ROOT, "%.3f", nanos / (views * 1e6)); }
     static boolean collecting() { return current != null; }
+    static void commandPoolGrew() { if (current != null) current.commandGrowth++; }
+    static void preparedPoolGrew() { if (current != null) current.preparedGrowth++; }
+    static void viewPosePoolGrew() { if (current != null) current.viewPoseGrowth++; }
     public static long clock() { return current == null ? 0 : System.nanoTime(); }
     public static void prepare(long start) { if (current != null) current.prepare += Math.max(0, System.nanoTime() - start - current.draw); }
     public static void sort(long start) { if (current != null) current.sort += System.nanoTime() - start; }
@@ -244,6 +261,13 @@ public final class IrisRenderStats {
     }
     public static void gpu(int triangles) { gpu(1, triangles); }
     public static void gpu(int calls, int triangles) { if (current != null) { current.gpuDraws += calls; current.triangles += triangles; } }
+    static void opaqueDraw(int ranges, long triangles) {
+        if (current == null) return;
+        current.gpuDraws++;
+        current.triangles += triangles;
+        current.opaqueCalls++;
+        if (ranges > 1) { current.multiCalls++; current.multiRanges += ranges; }
+    }
     public static void lightGpu(int triangles) {
         if (current != null) { current.gpuDraws++; current.triangles += triangles; current.lightGpuDraws++; current.lightTriangles += triangles; }
     }

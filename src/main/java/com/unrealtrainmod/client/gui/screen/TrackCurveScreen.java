@@ -7,6 +7,8 @@ package com.unrealtrainmod.client.gui.screen;
 import com.unrealtrainmod.UnrealTrainMod;
 import com.unrealtrainmod.client.gui.theme.GuiTheme;
 import com.unrealtrainmod.client.gui.widget.AngleSlider;
+import com.unrealtrainmod.client.gui.widget.GradeSlider;
+import com.unrealtrainmod.client.gui.widget.HandleLengthSlider;
 import com.unrealtrainmod.client.gui.widget.TrainIconButton;
 import com.unrealtrainmod.client.track.ClientTrackConstruction;
 import com.unrealtrainmod.client.track.ClientTurnoutConstruction;
@@ -29,9 +31,12 @@ import net.neoforged.neoforge.network.PacketDistributor;
 public final class TrackCurveScreen extends Screen {
     private final OpenTrackCurvePayload open;
     private AngleSlider angle;
+    private GradeSlider grade;
+    private HandleLengthSlider lengthSlider, verticalLengthSlider;
     private Button angleDecreaseLarge, angleDecreaseSmall, angleIncreaseSmall, angleIncreaseLarge;
+    private Button gradeDecreaseLarge, gradeDecreaseSmall, gradeIncreaseSmall, gradeIncreaseLarge;
     private Button horizontalTab, verticalTab;
-    private EditBox length, grade, verticalLength;
+    private EditBox length, verticalLength;
     private TrainIconButton apply, reset;
     private boolean verticalPage, automatic, verticalAutomatic, pending, updating;
     private boolean horizontalEdited, verticalEdited, horizontalValid = true, verticalValid = true;
@@ -57,7 +62,7 @@ public final class TrackCurveScreen extends Screen {
         top = Math.max(6, (height - panelHeight) / 2);
         double angleValue = angle == null ? parsed.angle() : angle.number();
         String lengthText = length == null ? Double.toString(parsed.length()) : length.getValue();
-        String gradeText = grade == null ? Double.toString(parsedVertical.grade()) : grade.getValue();
+        double gradeValue = grade == null ? parsedVertical.grade() : grade.number();
         String verticalLengthText = verticalLength == null ? Double.toString(parsedVertical.length()) : verticalLength.getValue();
         int tabWidth = (panelWidth - 22) / 2;
         horizontalTab = addRenderableWidget(Button.builder(label("horizontal"), button -> selectPage(false))
@@ -65,13 +70,32 @@ public final class TrackCurveScreen extends Screen {
         verticalTab = addRenderableWidget(Button.builder(label("vertical"), button -> selectPage(true))
                 .bounds(left + 12 + tabWidth, top + 38, tabWidth, 18).build());
         angle = new AngleSlider(left + 50, top + 78, panelWidth - 100, angleValue, value -> horizontalChanged());
-        angleDecreaseLarge = angleButton(left + 10, "<<", "angle_decrease_large", 15, false);
-        angleDecreaseSmall = angleButton(left + 30, "<", "angle_decrease_small", 1, false);
-        angleIncreaseSmall = angleButton(angle.getRight() + 2, ">", "angle_increase_small", 1, true);
-        angleIncreaseLarge = angleButton(angle.getRight() + 22, ">>", "angle_increase_large", 15, true);
+        angleDecreaseLarge = adjustmentButton(left + 10, "<<", "angle_decrease_large", () -> angle.adjust(15, false));
+        angleDecreaseSmall = adjustmentButton(left + 30, "<", "angle_decrease_small", () -> angle.adjust(1, false));
+        angleIncreaseSmall = adjustmentButton(angle.getRight() + 2, ">", "angle_increase_small", () -> angle.adjust(1, true));
+        angleIncreaseLarge = adjustmentButton(angle.getRight() + 22, ">>", "angle_increase_large", () -> angle.adjust(15, true));
         length = field(top + 115, "length", lengthText);
-        grade = field(top + 78, "grade", gradeText);
+        lengthSlider = new HandleLengthSlider(left + 10, top + 115, panelWidth - 90, parsed.length(),
+                value -> {
+                    String text = Double.toString(value);
+                    if (automatic || !text.equals(length.getValue())) length.setValue(text);
+                });
+        lengthSlider.setTooltip(Tooltip.create(label("length_slider_hint")));
+        length.setTooltip(Tooltip.create(label("length_input_hint")));
+        grade = new GradeSlider(left + 50, top + 78, panelWidth - 100, gradeValue, value -> verticalChanged());
+        grade.setTooltip(Tooltip.create(label("grade_slider_hint")));
+        gradeDecreaseLarge = adjustmentButton(left + 10, "<<", "grade_decrease_large", () -> grade.adjust(15, false));
+        gradeDecreaseSmall = adjustmentButton(left + 30, "<", "grade_decrease_small", () -> grade.adjust(1, false));
+        gradeIncreaseSmall = adjustmentButton(grade.getRight() + 2, ">", "grade_increase_small", () -> grade.adjust(1, true));
+        gradeIncreaseLarge = adjustmentButton(grade.getRight() + 22, ">>", "grade_increase_large", () -> grade.adjust(15, true));
         verticalLength = field(top + 115, "vertical_length", verticalLengthText);
+        verticalLengthSlider = new HandleLengthSlider(left + 10, top + 115, panelWidth - 90, parsedVertical.length(),
+                value -> {
+                    String text = Double.toString(value);
+                    if (verticalAutomatic || !text.equals(verticalLength.getValue())) verticalLength.setValue(text);
+                });
+        verticalLengthSlider.setTooltip(Tooltip.create(label("length_slider_hint")));
+        verticalLength.setTooltip(Tooltip.create(label("length_input_hint")));
         apply = new TrainIconButton(left + 10, top + panelHeight - 74, panelWidth - 20,
                 label("apply"), TrainIconButton.Icon.CONFIRM, this::submit);
         reset = new TrainIconButton(left + 10, top + panelHeight - 50, panelWidth - 20,
@@ -79,15 +103,20 @@ public final class TrackCurveScreen extends Screen {
         var cancel = new TrainIconButton(left + 10, top + panelHeight - 26, panelWidth - 20,
                 CommonComponents.GUI_CANCEL, TrainIconButton.Icon.CLOSE, this::onClose);
         length.setResponder(value -> horizontalChanged());
-        grade.setResponder(value -> verticalChanged());
         verticalLength.setResponder(value -> verticalChanged());
         addRenderableWidget(angleDecreaseLarge);
         addRenderableWidget(angleDecreaseSmall);
         addRenderableWidget(angle);
         addRenderableWidget(angleIncreaseSmall);
         addRenderableWidget(angleIncreaseLarge);
+        addRenderableWidget(lengthSlider);
         addRenderableWidget(length);
+        addRenderableWidget(gradeDecreaseLarge);
+        addRenderableWidget(gradeDecreaseSmall);
         addRenderableWidget(grade);
+        addRenderableWidget(gradeIncreaseSmall);
+        addRenderableWidget(gradeIncreaseLarge);
+        addRenderableWidget(verticalLengthSlider);
         addRenderableWidget(verticalLength);
         addRenderableWidget(apply);
         addRenderableWidget(reset);
@@ -96,7 +125,8 @@ public final class TrackCurveScreen extends Screen {
     }
 
     private EditBox field(int y, String key, String value) {
-        var field = new EditBox(font, left + 10, y, panelWidth - 20, 18, label(key));
+        // Set the final width before the value so EditBox scrolls its cursor correctly.
+        var field = new EditBox(font, left + panelWidth - 74, y, 64, 18, label(key));
         field.setMaxLength(32);
         field.setValue(value);
         return field;
@@ -106,9 +136,9 @@ public final class TrackCurveScreen extends Screen {
         return Component.translatable("gui.unrealtrainmod.track_curve." + key);
     }
 
-    private Button angleButton(int x, String text, String key, int step, boolean increase) {
+    private Button adjustmentButton(int x, String text, String key, Runnable action) {
         Component description = label(key);
-        return Button.builder(Component.literal(text), button -> angle.adjust(step, increase))
+        return Button.builder(Component.literal(text), button -> action.run())
                 .bounds(x, top + 78, 18, 18).tooltip(Tooltip.create(description))
                 .createNarration(supplier -> description.copy()).build();
     }
@@ -126,6 +156,7 @@ public final class TrackCurveScreen extends Screen {
         status = null;
         try {
             parsed = new TrackCurveParameters(angle.number(), Double.parseDouble(length.getValue()));
+            lengthSlider.setNumber(parsed.length());
             horizontalValid = true;
             preview();
         } catch (IllegalArgumentException exception) {
@@ -140,8 +171,13 @@ public final class TrackCurveScreen extends Screen {
         verticalEdited = true;
         status = null;
         try {
-            parsedVertical = new TrackVerticalCurveParameters(open.verticalLocked() ? 0 : Double.parseDouble(grade.getValue()),
+            double gradeValue = open.verticalLocked() ? 0 : grade.number();
+            if (Math.abs(gradeValue) > TrackVerticalCurveParameters.MAX_EDIT_GRADE) {
+                throw new IllegalArgumentException("Grade outside editor range");
+            }
+            parsedVertical = new TrackVerticalCurveParameters(gradeValue,
                     Double.parseDouble(verticalLength.getValue()), parsedVertical.referenceYaw());
+            verticalLengthSlider.setNumber(parsedVertical.length());
             verticalValid = true;
             preview();
         } catch (IllegalArgumentException exception) {
@@ -159,6 +195,7 @@ public final class TrackCurveScreen extends Screen {
                 updating = true;
                 angle.setNumber(parsed.angle());
                 length.setValue(Double.toString(parsed.length()));
+                lengthSlider.setNumber(parsed.length());
                 updating = false;
             }
             return;
@@ -173,8 +210,9 @@ public final class TrackCurveScreen extends Screen {
                     : new TrackVerticalCurveParameters(effective.gradeAlong(tangent), effective.length(),
                             TrackVerticalCurveParameters.yaw(tangent));
             updating = true;
-            grade.setValue(Double.toString(parsedVertical.grade()));
+            grade.setNumber(parsedVertical.grade());
             verticalLength.setValue(Double.toString(parsedVertical.length()));
+            verticalLengthSlider.setNumber(parsedVertical.length());
             updating = false;
         }
     }
@@ -183,14 +221,16 @@ public final class TrackCurveScreen extends Screen {
         updating = true;
         if (verticalPage) {
             parsedVertical = open.initialVertical();
-            grade.setValue(Double.toString(parsedVertical.grade()));
+            grade.setNumber(parsedVertical.grade());
             verticalLength.setValue(Double.toString(parsedVertical.length()));
+            verticalLengthSlider.setNumber(parsedVertical.length());
             verticalAutomatic = !open.verticalLocked();
             verticalEdited = true;
             verticalValid = true;
         } else {
             angle.setNumber(open.initial().angle());
             length.setValue(Double.toString(open.initial().length()));
+            lengthSlider.setNumber(open.initial().length());
             parsed = open.initial();
             automatic = true;
             horizontalEdited = true;
@@ -215,7 +255,13 @@ public final class TrackCurveScreen extends Screen {
         angleIncreaseSmall.visible = !verticalPage;
         angleIncreaseLarge.visible = !verticalPage;
         length.setVisible(!verticalPage);
-        grade.setVisible(verticalPage);
+        lengthSlider.visible = !verticalPage;
+        grade.visible = verticalPage;
+        gradeDecreaseLarge.visible = verticalPage;
+        gradeDecreaseSmall.visible = verticalPage;
+        gradeIncreaseSmall.visible = verticalPage;
+        gradeIncreaseLarge.visible = verticalPage;
+        verticalLengthSlider.visible = verticalPage;
         verticalLength.setVisible(verticalPage);
         angle.active = !pending && !open.horizontalLocked();
         angleDecreaseLarge.active = !pending && !open.horizontalLocked();
@@ -223,7 +269,13 @@ public final class TrackCurveScreen extends Screen {
         angleIncreaseSmall.active = !pending && !open.horizontalLocked();
         angleIncreaseLarge.active = !pending && !open.horizontalLocked();
         length.setEditable(!pending);
-        grade.setEditable(!pending && !open.verticalLocked());
+        lengthSlider.active = !pending;
+        grade.active = !pending && !open.verticalLocked();
+        gradeDecreaseLarge.active = !pending && !open.verticalLocked();
+        gradeDecreaseSmall.active = !pending && !open.verticalLocked();
+        gradeIncreaseSmall.active = !pending && !open.verticalLocked();
+        gradeIncreaseLarge.active = !pending && !open.verticalLocked();
+        verticalLengthSlider.active = !pending;
         verticalLength.setEditable(!pending);
     }
 

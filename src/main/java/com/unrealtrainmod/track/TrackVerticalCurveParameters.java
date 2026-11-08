@@ -8,6 +8,9 @@ import com.unrealtrainmod.track.geometry.TrackVector;
 
 /** Grade in per mille along a reference horizontal direction; length is horizontal mileage. */
 public record TrackVerticalCurveParameters(double grade, double length, double referenceYaw) {
+    /** Manual editor limit; inferred geometry and saved grades retain their original values. */
+    public static final double MAX_EDIT_GRADE = 200;
+
     public TrackVerticalCurveParameters {
         if (!Double.isFinite(grade) || !Double.isFinite(referenceYaw) || !Double.isFinite(length)
                 || length < TrackCurveParameters.MIN_LENGTH || length > TrackCurveParameters.MAX_LENGTH) {

@@ -270,7 +270,10 @@ public final class TrackWorldRenderer {
                         : entry.parts.draw(entry, event, level, time, false, groupMaterials, uploads, stats);
             }
             if (iris) IrisRenderStats.prepare(irisPrepareStart);
-            if (queue != null && iris) queue.draw(null, event.getProjectionMatrix(), stats);
+            if (queue != null && iris) {
+                irisScope.beginTrackBatch();
+                queue.draw(null, event.getProjectionMatrix(), stats);
+            }
             cache.collectStats(stats, time);
         } finally {
             frameUploads = uploads;

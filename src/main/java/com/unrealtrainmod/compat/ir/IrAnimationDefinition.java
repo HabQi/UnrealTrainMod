@@ -5,12 +5,14 @@
 package com.unrealtrainmod.compat.ir;
 
 import com.unrealtrainmod.resource.PackageAsset;
+import com.unrealtrainmod.sound.VehicleSoundSequence;
 import com.unrealtrainmod.vehicle.VehicleRuntimeState;
 import java.util.Map;
 
 /** Configuration order identifies a playback instance; the referenced frame data can be shared. */
 public record IrAnimationDefinition(PackageAsset asset, String controlGroup, IrReadout readout, Mode mode,
-                                    float framesPerTick, float rangeMin, float rangeMax, float offset, boolean invert) {
+                                    float framesPerTick, float rangeMin, float rangeMax, float offset, boolean invert,
+                                    VehicleSoundSequence sound) {
     public enum Mode { VALUE, LOOP, PLAY_BOTH, PLAY_FORWARD }
 
     public float value(IrVehicleDefinition definition, Map<String, Float> controls, VehicleRuntimeState state,

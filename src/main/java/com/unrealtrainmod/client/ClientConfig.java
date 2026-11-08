@@ -51,8 +51,10 @@ public final class ClientConfig {
                     "GPU spans include instance uploads and possible idle gaps; they are not full-frame GPU times.",
                     "Reports native range-merge phase timings, workload and workspace growth without rescanning geometry.",
                     "Iris reports separate main/shadow material and shader state counts, CPU scope phases and sampled GPU direct-range times.",
+                    "Iris state counts include actual buffer binds, requested/saved binds and window totals for preparation pool growth.",
                     "Iris opaque diagnostics compare pose runs before grouping with exact per-material pose/light groups.",
                     "Iris also reports actual opaque range calls before/after merging, merge CPU cost, and shared buffer uploads/residency.",
+                    "Opaque range counts remain separate from actual API calls; multi-draw reports calls, covered ranges and saved calls.",
                     "Once per warmed-up main/shadow window, samples one train's buffer/source/range layout without scanning vertices.",
                     "Iris GPU samples cover one direct vehicle range, not an entire view or the shader pack's full frame.",
                     "IR loading reports static/animated batch layout and transform-group composition while enabled.",
@@ -69,10 +71,11 @@ public final class ClientConfig {
             .define("logItemRenderStats", false);
 
     public static final ModConfigSpec.BooleanValue USE_TRACK_RENDER_STATE_CACHE = BUILDER
-            .comment("Reuse render type, shader program, samplers and direction lights across consecutive track draws.",
+            .comment("Reuse render type, shader program, samplers and direction lights across consecutive native track draws.",
                     "Disabled by default to compare against the original per-mesh draw path on identical cached geometry.",
                     "All paths reuse cached geometry and keep the same build/upload budgets without re-laying tracks.",
                     "When groupTrackDrawsByMaterial is enabled, visible batches are grouped across meshes.",
+                    "Only controls the native backend; Iris uses its own draw state scope.",
                     "Affects world tracks from the next frame; rail preview and thumbnails always use their own",
                     "short-lived state scope.")
             .translation("unrealtrainmod.configuration.useTrackRenderStateCache")
@@ -80,7 +83,7 @@ public final class ClientConfig {
 
     public static final ModConfigSpec.BooleanValue GROUP_TRACK_DRAWS_BY_MATERIAL = BUILDER
             .comment("Group visible world track batches by render type across meshes before drawing.",
-                    "Enabled by default, but only active while useTrackRenderStateCache is enabled.",
+                    "Enabled by default; native rendering requires useTrackRenderStateCache, while Iris groups independently.",
                     "Fixed meshes reduce state changes; rigid turnout parts also group shared-mesh instances.",
                     "Changes submission order between materials; coplanar overlays may be covered differently.",
                     "Takes effect on the next frame without rebuilding meshes; previews and thumbnails are unchanged.")

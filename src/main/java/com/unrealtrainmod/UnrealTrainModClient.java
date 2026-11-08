@@ -18,6 +18,7 @@ import com.unrealtrainmod.client.TrainEntityRenderer;
 import com.unrealtrainmod.client.StaticModelShader;
 import com.unrealtrainmod.client.item.CachedItemRenderer;
 import com.unrealtrainmod.client.item.CachedObjLoader;
+import com.unrealtrainmod.client.sound.VehicleSoundManager;
 import com.unrealtrainmod.client.gui.ActivationWarningOverlay;
 import com.unrealtrainmod.client.gui.TrainDebugOverlay;
 import com.unrealtrainmod.client.network.ClientPayloadHandlers;
@@ -101,6 +102,7 @@ public class UnrealTrainModClient {
         event.registerReloadListener(ClientThumbnailManager.INSTANCE);
         event.registerReloadListener(ClientTrackCache.INSTANCE);
         event.registerReloadListener(ClientTurnoutConstruction.INSTANCE);
+        event.registerReloadListener(VehicleSoundManager.INSTANCE);
     }
 
     public UnrealTrainModClient(ModContainer container) {
@@ -141,6 +143,9 @@ public class UnrealTrainModClient {
         NeoForge.EVENT_BUS.addListener(TrainPoseClient::onFramePre);
         NeoForge.EVENT_BUS.addListener(TrainPoseClient::unload);
         NeoForge.EVENT_BUS.addListener(TrainPoseClient::logout);
+        NeoForge.EVENT_BUS.addListener(VehicleSoundManager.INSTANCE::onTick);
+        NeoForge.EVENT_BUS.addListener(VehicleSoundManager.INSTANCE::onUnload);
+        NeoForge.EVENT_BUS.addListener(VehicleSoundManager.INSTANCE::onLogout);
         NeoForge.EVENT_BUS.addListener(TrainMapClient::onSync);
         NeoForge.EVENT_BUS.addListener(TrainMapClient::onUnload);
         NeoForge.EVENT_BUS.addListener(TrainMapClient::onLogout);
@@ -181,6 +186,7 @@ public class UnrealTrainModClient {
     }
 
     private static void onGameShuttingDown(GameShuttingDownEvent event) {
+        VehicleSoundManager.INSTANCE.clear();
         TrainDrivingClient.clear();
         TrainWalkingClient.clear();
         TrainPoseClient.clear();

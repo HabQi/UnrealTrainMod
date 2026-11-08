@@ -436,7 +436,7 @@ public final class IrisGeometryCache {
     }
 
     public static void clear() {
-        IrisTranslucentQueue.clear();
+        IrisTranslucentQueue.release();
         ENTRIES.values().forEach(entry -> { if (entry.gpu != null) entry.gpu.storage.close(); });
         ENTRIES.clear(); PENDING.clear();
         SHARED.values().forEach(entry -> entry.storage.close());

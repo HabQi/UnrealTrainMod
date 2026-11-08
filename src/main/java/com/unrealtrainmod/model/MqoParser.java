@@ -138,7 +138,8 @@ public final class MqoParser {
         for (String a : List.of("alpha", "aplane", "bump")) {
             if (!attribute(line, a).isEmpty()) throw error("Unsupported material mapping: " + a);
         }
-        return new ModelData.Material(value(line.getFirst()), color[0], color[1], color[2], color[3],
+        // Ignore authored RGB tint while retaining material opacity and texture bindings.
+        return new ModelData.Material(value(line.getFirst()), 1, 1, 1, color[3],
                 texture.isEmpty() ? null : value(texture.getFirst()),
                 !doubleSided.isEmpty() && !doubleSided.getFirst().equals("0"));
     }
@@ -215,7 +216,8 @@ public final class MqoParser {
         if (!c.isEmpty() && c.size() != count) throw error("Face color count mismatch");
         for (int i = 0; i < count; i++) {
             int abgr = c.isEmpty() ? -1 : Integer.parseUnsignedInt(c.get(i));
-            colors[i] = (abgr & 0xff00ff00) | ((abgr & 255) << 16) | ((abgr >>> 16) & 255);
+            // MQO corner colors are ABGR; retain only alpha and use neutral white RGB.
+            colors[i] = (abgr & 0xff000000) | 0x00ffffff;
         }
         return new ModelData.Face(indices, uv, colors, m.isEmpty() ? -1 : Integer.parseInt(m.getFirst()));
     }

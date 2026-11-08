@@ -9,6 +9,7 @@ import com.unrealtrainmod.resource.PackageArchive;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -37,6 +38,8 @@ final class IrVehicleDefinitions {
             if (key != null) objects.computeIfAbsent(key, ignored -> new ArrayList<>()).add(name);
         }
         var controls = new LinkedHashMap<String, IrControlDefinition>();
+        var engines = new HashSet<String>();
+        var horns = new HashSet<String>();
         for (var entry : objects.entrySet()) {
             String key = entry.getKey(), group = null, label = null;
             boolean toggle = false, press = false;
@@ -49,6 +52,8 @@ final class IrVehicleDefinitions {
                 press |= IrModelComponents.token(name, "PRESS");
             }
             if (group == null) group = key;
+            if (key.startsWith("ENGINE_START_")) engines.add(group);
+            if (key.startsWith("HORN_CONTROL_")) horns.add(group);
             if (label == null) label = key;
             IrReadout driver = key.startsWith("THROTTLE_") && !key.startsWith("THROTTLE_BRAKE_") ? IrReadout.THROTTLE
                     : key.startsWith("TRAIN_BRAKE_") ? IrReadout.TRAIN_BRAKE
@@ -72,7 +77,10 @@ final class IrVehicleDefinitions {
                 float max = number(entry, "range_max", 1), offset = number(entry, "offset", 0);
                 if (rate <= 0 || min == max) throw new IllegalArgumentException("Invalid rate or range");
                 var animation = new IrAnimationDefinition(archive.resolve(prefix, reference), group, readout, mode,
-                        rate, min, max, offset, GsonHelper.getAsBoolean(entry, "invert", false));
+                        rate, min, max, offset, GsonHelper.getAsBoolean(entry, "invert", false),
+                        IrSoundDefinitions.read(entry.get("sound"), archive, prefix,
+                                archive.path() + " " + GsonHelper.getAsString(json, "name")
+                                        + " animations[" + animations.size() + "].sound", 32));
                 animations.add(animation);
                 if (group != null) controls.putIfAbsent(group, new IrControlDefinition(group, group,
                         mode == IrAnimationDefinition.Mode.VALUE ? IrControlDefinition.Type.CONTINUOUS : IrControlDefinition.Type.TOGGLE,
@@ -85,7 +93,8 @@ final class IrVehicleDefinitions {
                 new IrControlDefinition(group, group, IrControlDefinition.Type.CONTINUOUS, value, null)));
         float speed = number(GsonHelper.getAsJsonObject(json, "properties", new JsonObject()), "max_speed_kmh", 200);
         if (speed <= 0) throw new IOException("IR max_speed_kmh must be positive");
-        return new IrVehicleDefinition(controls, animations, speed);
+        return new IrVehicleDefinition(controls, animations, speed,
+                IrSoundDefinitions.read(json, archive, prefix, engines, horns));
     }
 
     private static IrControlDefinition merge(IrControlDefinition a, IrControlDefinition b) {

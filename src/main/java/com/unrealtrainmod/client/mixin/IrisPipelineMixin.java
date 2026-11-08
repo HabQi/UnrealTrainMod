@@ -4,9 +4,7 @@
  */
 package com.unrealtrainmod.client.mixin;
 
-import com.unrealtrainmod.client.compat.iris.IrisVehicleReprojection;
-import com.unrealtrainmod.client.compat.iris.IrisGeometryCache;
-import com.unrealtrainmod.client.compat.iris.IrisRenderStats;
+import com.unrealtrainmod.client.compat.iris.IrisModelRenderer;
 import com.unrealtrainmod.client.compat.iris.IrisTranslucentQueue;
 import com.unrealtrainmod.client.texture.MaterialTexture;
 import org.spongepowered.asm.mixin.Mixin;
@@ -25,9 +23,7 @@ public abstract class IrisPipelineMixin {
 
     @Inject(method = "destroy", at = @At("HEAD"))
     private void unrealtrainmod$releaseResources(CallbackInfo callback) {
-        IrisVehicleReprojection.reset();
-        IrisRenderStats.reset();
-        IrisGeometryCache.clear();
+        IrisModelRenderer.clear();
         MaterialTexture.invalidatePbr();
     }
 }
