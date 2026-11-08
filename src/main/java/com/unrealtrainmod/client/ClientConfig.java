@@ -17,23 +17,26 @@ public final class ClientConfig {
 
     public static final ModConfigSpec.BooleanValue SORT_TRANSLUCENT_TRIANGLES = BUILDER
             .comment("Sort vehicle translucent triangles from far to near in world and preview rendering.",
-                    "Disabling only skips sorting; depth calculation, index uploads and adjacent draw merging remain active.",
+                    "On the native path, disabling only skips sorting; depth calculation, index uploads and adjacent draw merging remain active.",
+                    "Also applies to Iris; its dynamic translucent mode retains CPU vertex submission.",
                     "Ignored while useStaticTranslucentBatches is enabled.",
                     "Overlapping translucent surfaces may blend incorrectly when disabled.")
             .translation("unrealtrainmod.configuration.sortTranslucentTriangles")
             .define("sortTranslucentTriangles", false);
 
     public static final ModConfigSpec.BooleanValue USE_STATIC_TRANSLUCENT_BATCHES = BUILDER
-            .comment("Draw vehicle translucent batches directly from static indices in submission order.",
+            .comment("Group vehicle translucent batches by material and draw directly from static indices.",
                     "Skips triangle collection, depth calculation, sorting and dynamic index uploads on the GPU path.",
+                    "With Iris, reuses shared local GPU geometry and draws after deferred lighting instead of rewriting vertices each frame.",
                     "Overrides sortTranslucentTriangles; overlapping translucent surfaces may blend incorrectly.")
             .translation("unrealtrainmod.configuration.useStaticTranslucentBatches")
             .define("useStaticTranslucentBatches", true);
 
     public static final ModConfigSpec.BooleanValue USE_VEHICLE_INSTANCING = BUILDER
-            .comment("Draw instanced vehicle CUTOUT batches with one indexed instanced draw per shared mesh range.",
+            .comment("Instance vehicle CUTOUT and MIXED opaque passes across all visible vehicles by shared mesh range.",
+                    "Applies to native world and preview rendering; Iris uses separate material grouping and opaque range merging.",
                     "Enabled by default; disable for side-by-side comparison with the normal GPU draw path.",
-                    "Only affects vehicle CUTOUT requests; MIXED, BLEND and CPU fallback keep their existing rules.",
+                    "Opaque draws are grouped by material; translucent passes and CPU fallback are not instanced.",
                     "Requires OpenGL 3.3 and the instanced model shader; otherwise the normal path is used automatically.",
                     "Takes effect immediately without reloading models or restarting the game.")
             .translation("unrealtrainmod.configuration.useVehicleInstancing")
@@ -46,6 +49,13 @@ public final class ClientConfig {
                     "CPU scopes overlap: entity includes submission; submission includes scripts and enqueueing.",
                     "Separately samples opaque and translucent GPU timeline spans every 16 pass calls without waiting.",
                     "GPU spans include instance uploads and possible idle gaps; they are not full-frame GPU times.",
+                    "Reports native range-merge phase timings, workload and workspace growth without rescanning geometry.",
+                    "Iris reports separate main/shadow material and shader state counts, CPU scope phases and sampled GPU direct-range times.",
+                    "Iris opaque diagnostics compare pose runs before grouping with exact per-material pose/light groups.",
+                    "Iris also reports actual opaque range calls before/after merging, merge CPU cost, and shared buffer uploads/residency.",
+                    "Once per warmed-up main/shadow window, samples one train's buffer/source/range layout without scanning vertices.",
+                    "Iris GPU samples cover one direct vehicle range, not an entire view or the shader pack's full frame.",
+                    "IR loading reports static/animated batch layout and transform-group composition while enabled.",
                     "Disabling skips counters/timing and releases queries at the next vehicle queue frame.")
             .translation("unrealtrainmod.configuration.logVehicleInstancingStats")
             .define("logVehicleInstancingStats", false);

@@ -6,6 +6,8 @@ package com.unrealtrainmod.client.renderer.instancing;
 
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.unrealtrainmod.client.ClientConfig;
+import com.unrealtrainmod.client.RenderCategory;
+import com.unrealtrainmod.client.model.PartSelection;
 import com.unrealtrainmod.vehicle.VehicleCatalog;
 import com.unrealtrainmod.compat.rtm.script.VehicleScriptManager;
 import java.util.LinkedHashMap;
@@ -22,16 +24,31 @@ public final class InstancingStats implements AutoCloseable {
     private static final long IDLE_RESET = 1_000_000_000L;
 
     private static final class Counters {
-        long requests, cutout, groups, covered, gpuCalls, fallback, translucentCalls, binds, switches;
+        long requests, cutout, mixed, groups, covered, gpuCalls, fallback, translucentCalls, binds, switches;
         long vehicles, scripts, opaqueTris, translucentTris, bytes;
-        long group, pack, upload, opaque, translucent, entity, pose, submit, script, enqueue;
+        long irStaticGroups, irAnimatedGroups, irStaticCutout, irAnimatedCutout;
+        long stateSetups, textureRebinds, matrixUpdates;
+        long rangeCallsBefore, rangeCallsAfter;
+        long rangePoseIds, rangeSignature, rangeBucket, rangeSort, rangeJoin, rangeCleanup;
+        long rangeSnapshots, rangePoses, rangeValues, rangeBuckets, commandGrowth, signatureGrowth, bucketGrowth;
+        long snapshotCopies, snapshotReuses, poseKeyGrowth;
+        long group, rangeMerge, pack, upload, opaque, translucent, entity, pose, submit, script, enqueue;
 
         void add(Counters c) {
-            requests+=c.requests; cutout+=c.cutout; groups+=c.groups; covered+=c.covered;
+            requests+=c.requests; cutout+=c.cutout; mixed+=c.mixed; groups+=c.groups; covered+=c.covered;
             gpuCalls+=c.gpuCalls; fallback+=c.fallback; translucentCalls+=c.translucentCalls;
             binds+=c.binds; switches+=c.switches; vehicles+=c.vehicles; scripts+=c.scripts;
             opaqueTris+=c.opaqueTris; translucentTris+=c.translucentTris; bytes+=c.bytes;
-            group+=c.group; pack+=c.pack; upload+=c.upload; opaque+=c.opaque; translucent+=c.translucent;
+            irStaticGroups+=c.irStaticGroups; irAnimatedGroups+=c.irAnimatedGroups;
+            irStaticCutout+=c.irStaticCutout; irAnimatedCutout+=c.irAnimatedCutout;
+            stateSetups+=c.stateSetups; textureRebinds+=c.textureRebinds; matrixUpdates+=c.matrixUpdates;
+            rangeCallsBefore+=c.rangeCallsBefore; rangeCallsAfter+=c.rangeCallsAfter;
+            rangePoseIds+=c.rangePoseIds; rangeSignature+=c.rangeSignature; rangeBucket+=c.rangeBucket;
+            rangeSort+=c.rangeSort; rangeJoin+=c.rangeJoin; rangeCleanup+=c.rangeCleanup;
+            rangeSnapshots+=c.rangeSnapshots; rangePoses+=c.rangePoses; rangeValues+=c.rangeValues; rangeBuckets+=c.rangeBuckets;
+            commandGrowth+=c.commandGrowth; signatureGrowth+=c.signatureGrowth; bucketGrowth+=c.bucketGrowth;
+            snapshotCopies+=c.snapshotCopies; snapshotReuses+=c.snapshotReuses; poseKeyGrowth+=c.poseKeyGrowth;
+            group+=c.group; rangeMerge+=c.rangeMerge; pack+=c.pack; upload+=c.upload; opaque+=c.opaque; translucent+=c.translucent;
             entity+=c.entity; pose+=c.pose; submit+=c.submit; script+=c.script; enqueue+=c.enqueue;
         }
     }
@@ -52,7 +69,7 @@ public final class InstancingStats implements AutoCloseable {
     public void beginFrame() {
         long now = System.nanoTime();
         boolean instancing = ClientConfig.USE_VEHICLE_INSTANCING.getAsBoolean();
-        String mode = ClientConfig.USE_STATIC_TRANSLUCENT_BATCHES.getAsBoolean() ? "static"
+        String mode = ClientConfig.USE_STATIC_TRANSLUCENT_BATCHES.getAsBoolean() ? "staticMaterial"
                 : ClientConfig.SORT_TRANSLUCENT_TRIANGLES.getAsBoolean() ? "sorted" : "unsorted";
         if (windowStart == 0 || now - lastFrame > IDLE_RESET
                 || configuredInstancing != instancing || !transparency.equals(mode)) {
@@ -74,21 +91,73 @@ public final class InstancingStats implements AutoCloseable {
     public void addSubmission(long nanos) { frame.submit += nanos; }
     public void addScript(long nanos) { frame.scripts++; frame.script += nanos; }
     public void addEnqueue(long nanos) { frame.enqueue += nanos; }
-    public void request() { frame.requests++; }
-    public void instanceable() { frame.cutout++; }
+    public void snapshotCapture(boolean reused) {
+        if (reused) frame.snapshotReuses++;
+        else frame.snapshotCopies++;
+    }
+    public void request(RenderCategory category) {
+        frame.requests++;
+        if (category == RenderCategory.CUTOUT) frame.cutout++;
+        else if (category == RenderCategory.MIXED) frame.mixed++;
+    }
     public void gpuDraw(int indices) { frame.gpuCalls++; frame.opaqueTris += indices / 3; }
     public void fallbackDraw(int indices) { frame.fallback++; frame.opaqueTris += indices / 3; }
     public void translucentDraw(int triangles) { frame.translucentCalls++; frame.translucentTris += triangles; }
-    public void instancedDraw(int instances, int indices) {
+    public void instancedDraw(int instances, int indices, int coveredRequests) {
         frame.groups++;
-        frame.covered += instances;
+        frame.covered += coveredRequests;
         frame.opaqueTris += (long)(indices / 3) * instances;
     }
     public void addGrouping(long nanos) { frame.group += nanos; }
+    public void addRangeMerge(int before, int after, long nanos) {
+        frame.rangeCallsBefore += before;
+        frame.rangeCallsAfter += after;
+        frame.rangeMerge += nanos;
+    }
+    public void addRangePhases(long poseIds, long signature, long bucket, long sort, long join) {
+        frame.rangePoseIds += poseIds;
+        frame.rangeSignature += signature;
+        frame.rangeBucket += bucket;
+        frame.rangeSort += sort;
+        frame.rangeJoin += join;
+    }
+    public void addRangeWork(int snapshots, int poses, int values, int buckets,
+                             int commandsGrown, int signaturesGrown, int bucketsGrown, int poseKeysGrown) {
+        frame.rangeSnapshots += snapshots;
+        frame.rangePoses += poses;
+        frame.rangeValues += values;
+        frame.rangeBuckets += buckets;
+        frame.commandGrowth += commandsGrown;
+        frame.signatureGrowth += signaturesGrown;
+        frame.bucketGrowth += bucketsGrown;
+        frame.poseKeyGrowth += poseKeysGrown;
+    }
+    public void addRangeCleanup(long nanos) {
+        frame.rangeCleanup += nanos;
+        frame.rangeMerge += nanos;
+    }
     public void addPacking(long nanos) { frame.pack += nanos; }
     public void addOpaque(long nanos) { frame.opaque += nanos; }
     public void addTranslucent(long nanos) { frame.translucent += nanos; }
     public void addShaderCounts(int binds, int switches) { frame.binds += binds; frame.switches += switches; }
+    public void addOpaqueStateCounts(int setups, int textures, int matrices) {
+        frame.stateSetups += setups;
+        frame.textureRebinds += textures;
+        frame.matrixUpdates += matrices;
+    }
+    /** Enabled IR selection submissions, before native instancing; not a second GPU draw count. */
+    public void irSelection(PartSelection selection, boolean animated, int lights) {
+        int cutout = 0;
+        boolean visible = false;
+        for (var batch : selection.batches()) {
+            if (!batch.lightLayer().enabled(lights)) continue;
+            visible = true;
+            if (batch.category() == RenderCategory.CUTOUT) cutout++;
+        }
+        if (!visible) return;
+        if (animated) { frame.irAnimatedGroups++; frame.irAnimatedCutout += cutout; }
+        else { frame.irStaticGroups++; frame.irStaticCutout += cutout; }
+    }
     public void addUpload(int bytes, long nanos) { frame.bytes += bytes; frame.upload += nanos; }
 
     public void beginGpu(boolean opaque) {
@@ -128,26 +197,44 @@ public final class InstancingStats implements AutoCloseable {
         long now = System.nanoTime();
         lastFrame = now;
         if (now - windowStart < LOG_INTERVAL) return;
-        LOGGER.info("Vehicle render [{}] frames={} window={}ms instancingConfigured={} transparency={} "
-                        + "| perFrame vehicles={} requests={} cutout={} groups={} covered={} gpuCalls={} cpuFallback={} "
-                        + "opaqueCalls={} translucentCalls={} opaqueTris={} translucentTris={} shaderBinds={} shaderSwitches={} upload={}B scriptCalls={} "
-                        + "| cpu entity={} pose={} submit={} script={} enqueue={} opaque={} translucent={} group={} pack={} upload={} ms/frame "
+        LOGGER.info("Vehicle render [{}] frames={} window={}ms fpsEstimate={} frameAvg={}ms instancingConfigured={} transparency={} "
+                        + "| perFrame vehicles={} requests={} cutout={} mixed={} groups={} covered={} gpuCalls={} cpuFallback={} "
+                        + "opaqueCalls={} rangeCallsBefore={} rangeCallsAfter={} rangeCallsSaved={} translucentCalls={} "
+                        + "opaqueTris={} translucentTris={} shaderBinds={} shaderSwitches={} upload={}B scriptCalls={} "
+                        + "| cpu entity={} pose={} submit={} script={} enqueue={} opaque={} translucent={} group={} rangeMerge={} pack={} upload={} ms/frame "
                         + "maxEntity={}ms maxOpaque={}ms maxTranslucent={}ms "
                         + "| gpuOpaque={} samples={} avg={} max={} gpuTranslucent={} samples={} avg={} max={} "
+                        + "| ir staticGroups={} animatedGroups={} staticCutout={} animatedCutout={} "
+                        + "| opaqueState setups={} textureRebinds={} matrixUpdates={} "
                         + "| sharedPrewarm calls={} total={}ms failures={} | models={}",
-                scene, frames, ms(now-windowStart), configuredInstancing, transparency,
-                avg(window.vehicles), avg(window.requests), avg(window.cutout), avg(window.groups), avg(window.covered),
+                scene, frames, ms(now-windowStart),
+                String.format(Locale.ROOT, "%.1f", frames * 1_000_000_000d / (now-windowStart)),
+                ms((now-windowStart)/frames), configuredInstancing, transparency,
+                avg(window.vehicles), avg(window.requests), avg(window.cutout), avg(window.mixed), avg(window.groups), avg(window.covered),
                 avg(window.gpuCalls), avg(window.fallback), avg(window.groups+window.gpuCalls+window.fallback),
+                avg(window.rangeCallsBefore), avg(window.rangeCallsAfter), avg(window.rangeCallsBefore-window.rangeCallsAfter),
                 avg(window.translucentCalls), avg(window.opaqueTris), avg(window.translucentTris), avg(window.binds),
                 avg(window.switches), avg(window.bytes), avg(window.scripts),
                 ms(window.entity/frames), ms(window.pose/frames), ms(window.submit/frames), ms(window.script/frames),
                 ms(window.enqueue/frames), ms(window.opaque/frames), ms(window.translucent/frames),
-                ms(window.group/frames), ms(window.pack/frames), ms(window.upload/frames),
+                ms(window.group/frames), ms(window.rangeMerge/frames), ms(window.pack/frames), ms(window.upload/frames),
                 ms(maxEntity), ms(maxOpaque), ms(maxTranslucent),
                 gpuState(opaqueSamples), opaqueSamples, sampleMs(gpuOpaque, opaqueSamples), sampleMs(maxGpuOpaque, opaqueSamples == 0 ? 0 : 1),
                 gpuState(translucentSamples), translucentSamples, sampleMs(gpuTranslucent, translucentSamples),
                 sampleMs(maxGpuTranslucent, translucentSamples == 0 ? 0 : 1),
+                avg(window.irStaticGroups), avg(window.irAnimatedGroups), avg(window.irStaticCutout), avg(window.irAnimatedCutout),
+                avg(window.stateSetups), avg(window.textureRebinds), avg(window.matrixUpdates),
                 prewarmCalls, ms(prewarmNanos), prewarmFailures, modelSummary());
+        if (window.rangeCallsBefore > 0) {
+            LOGGER.info("Vehicle range [{}] | cpu poseIds={} signature={} bucket={} sort={} merge={} cleanup={} ms/frame "
+                            + "| perFrame poseSnapshots={} poseStates={} instanceValues={} buckets={} snapshotCopies={} snapshotReuses={} "
+                            + "| window poolGrowth commands={} signatures={} buckets={} poseKeys={}",
+                    scene, ms(window.rangePoseIds/frames), ms(window.rangeSignature/frames), ms(window.rangeBucket/frames),
+                    ms(window.rangeSort/frames), ms(window.rangeJoin/frames), ms(window.rangeCleanup/frames),
+                    avg(window.rangeSnapshots), avg(window.rangePoses), avg(window.rangeValues), avg(window.rangeBuckets),
+                    avg(window.snapshotCopies), avg(window.snapshotReuses),
+                    window.commandGrowth, window.signatureGrowth, window.bucketGrowth, window.poseKeyGrowth);
+        }
         resetWindow(now);
     }
 

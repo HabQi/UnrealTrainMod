@@ -20,6 +20,8 @@ final class IrisBatch {
     final RenderBatch batch;
     final IndexedMesh solidMesh;
     final int firstSolid, solidCount;
+    final IndexedMesh clippedMesh;
+    final int firstClipped, clippedCount;
     final boolean forceOpaque;
     final BitSet split = new BitSet();
     private final RenderType[] solidTypes = new RenderType[3], blendTypes = new RenderType[3], clippedTypes = new RenderType[3];
@@ -34,8 +36,11 @@ final class IrisBatch {
             solidMesh = batch.mesh();
             firstSolid = batch.firstIndex();
             solidCount = batch.indexCount();
+            clippedMesh = batch.mesh();
+            firstClipped = clippedCount = 0;
         } else if (batch.category() == RenderCategory.MIXED) {
             var selected = new IntArrayList();
+            var clipped = new IntArrayList();
             int[] indices = batch.mesh().indices(), colors = batch.mesh().colors();
             for (int relative = 0; relative < batch.indexCount(); relative += 3) {
                 int offset = batch.firstIndex() + relative;
@@ -43,14 +48,22 @@ final class IrisBatch {
                         && (colors[indices[offset + 2]] >>> 24) == 255) {
                     split.set(relative / 3);
                     selected.add(indices[offset]); selected.add(indices[offset + 1]); selected.add(indices[offset + 2]);
+                } else {
+                    clipped.add(indices[offset]); clipped.add(indices[offset + 1]); clipped.add(indices[offset + 2]);
                 }
             }
             solidMesh = new IndexedMesh(batch.mesh().vertices(), colors, selected.toIntArray());
             firstSolid = 0;
             solidCount = selected.size();
+            clippedMesh = new IndexedMesh(batch.mesh().vertices(), colors, clipped.toIntArray());
+            firstClipped = 0;
+            clippedCount = clipped.size();
         } else {
             solidMesh = batch.mesh();
             firstSolid = solidCount = 0;
+            clippedMesh = batch.mesh();
+            firstClipped = batch.firstIndex();
+            clippedCount = batch.indexCount();
         }
     }
 
@@ -78,12 +91,16 @@ final class IrisBatch {
     RenderType translucentType(int triangle) { return translucentType(triangle, 0); }
 
     RenderType translucentType(int triangle, int temporal) {
+        return translucentType(split.get(triangle), temporal);
+    }
+
+    RenderType translucentType(boolean blend, int temporal) {
         if (batch.lightLayer() != ModelLightLayer.BASE) {
             if (clippedTypes[temporal] == null) clippedTypes[temporal] = IrisRenderTypes.get(
                     batch.texture(), batch.doubleSided(), true, false, temporal, batch.lightLayer().emissive());
             return clippedTypes[temporal];
         }
-        if (split.get(triangle)) {
+        if (blend) {
             if (blendTypes[temporal] == null) blendTypes[temporal] = IrisRenderTypes.get(
                     IrisMaterials.texture(batch.texture(), IrisMaterials.Mask.BLEND), batch.doubleSided(), true, false, temporal);
             return blendTypes[temporal];

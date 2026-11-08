@@ -48,7 +48,7 @@ public final class ClientButtonTextureManager extends SimplePreparableReloadList
                 try {
                     images.put(asset, crop(asset));
                 } catch (IOException | RuntimeException exception) {
-                    LOGGER.warn("Unable to load RTM button {}; using text entry: {}", asset, exception.getMessage());
+                    LOGGER.warn("Unable to load RTM button {}; using fallback entry: {}", asset, exception.getMessage());
                 }
             }
             return images;
@@ -100,7 +100,7 @@ public final class ClientButtonTextureManager extends SimplePreparableReloadList
                     upload(id, image);
                     textures.put(asset, texture);
                 } catch (RuntimeException exception) {
-                    LOGGER.warn("Unable to upload RTM button {}; using text entry: {}", asset, exception.getMessage());
+                    LOGGER.warn("Unable to upload RTM button {}; using fallback entry: {}", asset, exception.getMessage());
                 }
             }
         } catch (RuntimeException | Error exception) {

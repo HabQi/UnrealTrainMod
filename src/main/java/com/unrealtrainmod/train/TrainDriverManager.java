@@ -7,6 +7,7 @@ package com.unrealtrainmod.train;
 import com.unrealtrainmod.UnrealTrainMod;
 import com.unrealtrainmod.entity.TrainEntity;
 import com.unrealtrainmod.network.payload.TrainControlInputPayload;
+import com.unrealtrainmod.network.payload.TrainIrControlInputPayload;
 import com.unrealtrainmod.network.payload.TrainControlSyncPayload;
 import com.unrealtrainmod.network.payload.TrainRouteProfile;
 import com.unrealtrainmod.network.payload.TrainControlSyncPayload.Feedback;
@@ -95,6 +96,12 @@ public final class TrainDriverManager {
         }
     }
 
+    public static void handleIrInput(TrainIrControlInputPayload payload, IPayloadContext context) {
+        if (context.player() instanceof ServerPlayer player) {
+            TrainManager.get(player.serverLevel()).drivers().irInput(player, payload);
+        }
+    }
+
     private boolean valid(TrainDriverSession session) {
         var player = session.player;
         return player.serverLevel() == level && player.isAlive() && !player.isSpectator() && !player.hasDisconnected()
@@ -103,12 +110,31 @@ public final class TrainDriverManager {
                 && manager.knownTrain(session.vehicle) == session.train && manager.drivingReady(session.train);
     }
 
-    private void input(ServerPlayer player, TrainControlInputPayload payload) {
+    private TrainDriverSession acceptInput(ServerPlayer player, UUID id, long sequence) {
         var session = sessions.get(player.getUUID());
-        if (session == null || session.player != player || !session.id.equals(payload.session()) || !valid(session)
-                || payload.sequence() <= session.sequence) return;
-        session.sequence = payload.sequence();
+        if (session == null || session.player != player || !session.id.equals(id) || !valid(session)
+                || sequence <= session.sequence) return null;
+        session.sequence = sequence;
         session.silentTicks = 0;
+        return session;
+    }
+
+    private void irInput(ServerPlayer player, TrainIrControlInputPayload payload) {
+        var session = acceptInput(player, payload.session(), payload.sequence());
+        if (session == null) return;
+        Feedback feedback = Feedback.NONE;
+        try {
+            if (payload.pulse() && payload.value() != 1) throw new IllegalArgumentException("Invalid pulse target");
+            ((TrainEntity) player.getVehicle()).setIrControl(payload.group(), payload.value(), payload.pulse());
+        } catch (IllegalArgumentException exception) {
+            feedback = Feedback.IR_CONTROL_UNAVAILABLE;
+        }
+        send(session, true, feedback);
+    }
+
+    private void input(ServerPlayer player, TrainControlInputPayload payload) {
+        var session = acceptInput(player, payload.session(), payload.sequence());
+        if (session == null) return;
         var action = payload.action();
         if (action == TrainControlInputPayload.Action.HEARTBEAT) return;
         if (action == TrainControlInputPayload.Action.POWER_SET

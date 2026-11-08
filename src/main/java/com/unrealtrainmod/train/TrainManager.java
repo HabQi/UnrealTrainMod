@@ -1387,15 +1387,19 @@ public final class TrainManager {
             if (!(level.getEntity(id) instanceof TrainEntity entity) || entity.isRemoved()) continue;
             var train = trains.get(entityTrains.get(id));
             var car = train == null ? null : train.member(id);
+            boolean front = train != null && train.peer(id, TrainCarEnd.FRONT) != null;
+            boolean rear = train != null && train.peer(id, TrainCarEnd.REAR) != null;
             if (train == null || !attached.contains(id) || entity.getRailAnchor() == null
                     || !matches(entity, train, car)) {
                 entity.setRuntimeState(VehicleRuntimeState.IDLE);
+                entity.updateIrState(front, rear);
                 continue;
             }
             int direction = car.direction();
             var control = train.control();
             entity.setRuntimeState(new VehicleRuntimeState(direction * train.actualSpeed(), control.throttle(),
                     control.trainBrake(), control.emergencyBrake(), direction * control.reverser().direction()));
+            entity.updateIrState(front, rear);
         }
     }
 

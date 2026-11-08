@@ -6,6 +6,8 @@ package com.unrealtrainmod.resource.cache;
 
 import com.unrealtrainmod.compat.ir.IrModelLoader;
 import com.unrealtrainmod.compat.ir.IrModelComponent;
+import com.unrealtrainmod.compat.ir.IrReadout;
+import com.unrealtrainmod.compat.ir.IrAnimatrix;
 import com.unrealtrainmod.track.geometry.TrackVector;
 import com.unrealtrainmod.vehicle.VehiclePartRole;
 import com.unrealtrainmod.model.IndexedMesh;
@@ -63,6 +65,40 @@ public final class ModelCacheCodecs {
         textures(output, value.textures());
     });
     public static final Codec<ModelMesh> MESH = codec((input, asset) -> mesh(input), ModelCacheCodecs::mesh);
+    public static final Codec<IrAnimatrix> IR_ANIMATION = codec((input, asset) -> {
+        int count = input.count(4);
+        var tracks = new ArrayList<IrAnimatrix.Track>(count);
+        for (int i = 0; i < count; i++) {
+            int frames = input.count(40);
+            require(frames > 0, "Empty IR animation track");
+            var values = new ArrayList<IrAnimatrix.Frame>(frames);
+            for (int f = 0; f < frames; f++) values.add(new IrAnimatrix.Frame(input.number(), input.number(), input.number(),
+                    input.number(), input.number(), input.number(), input.number(), input.number(), input.number(), input.number()));
+            tracks.add(new IrAnimatrix.Track(values));
+        }
+        int names = input.count(8);
+        require(names > 0, "Empty IR animation");
+        var groups = new HashMap<String, Integer>();
+        for (int i = 0; i < names; i++) {
+            String name = input.text();
+            int index = input.readInt();
+            require(index >= 0 && index < tracks.size(), "Invalid IR animation track index");
+            require(groups.put(name, index) == null, "Duplicate IR animation alias");
+        }
+        return new IrAnimatrix(tracks, groups);
+    }, (output, value) -> {
+        output.writeInt(value.tracks().size());
+        for (var track : value.tracks()) {
+            output.writeInt(track.frames().size());
+            for (var frame : track.frames()) {
+                output.writeFloat(frame.x()); output.writeFloat(frame.y()); output.writeFloat(frame.z());
+                output.writeFloat(frame.qx()); output.writeFloat(frame.qy()); output.writeFloat(frame.qz()); output.writeFloat(frame.qw());
+                output.writeFloat(frame.sx()); output.writeFloat(frame.sy()); output.writeFloat(frame.sz());
+            }
+        }
+        output.writeInt(value.groups().size());
+        for (var entry : new TreeMap<>(value.groups()).entrySet()) { text(output, entry.getKey()); output.writeInt(entry.getValue()); }
+    });
     public static final Codec<VehicleGeometry> VEHICLE_GEOMETRY = codec((input, asset) -> {
         var mesh = mesh(input);
         int count = input.count(4);
@@ -98,9 +134,15 @@ public final class ModelCacheCodecs {
             float offset = input.number();
             boolean invert = input.readBoolean(), hide = input.readBoolean();
             float diameter = input.number();
+            int readout = input.readUnsignedByte();
+            require(readout == 255 || readout < IrReadout.values().length, "Invalid IR readout");
+            require(kinds[kind] != IrModelComponent.Kind.GAUGE || readout != 255, "Missing IR gauge readout");
+            float rangeMin = input.number(), rangeMax = input.number();
+            require(rangeMin != rangeMax, "Empty IR gauge range");
             require(kinds[kind] != IrModelComponent.Kind.WHEEL || diameter > 0, "Invalid IR wheel diameter");
             result.add(new IrModelComponent(key, roles[role], kinds[kind], objects, group, pivot, axis,
-                    degrees, translation, offset, invert, hide, diameter));
+                    degrees, translation, offset, invert, hide, diameter,
+                    readout == 255 ? null : IrReadout.values()[readout], rangeMin, rangeMax));
         }
         return List.copyOf(result);
     }
@@ -118,6 +160,8 @@ public final class ModelCacheCodecs {
             output.writeFloat(component.offset());
             output.writeBoolean(component.invert()); output.writeBoolean(component.hide());
             output.writeFloat(component.diameter());
+            output.writeByte(component.readout() == null ? 255 : component.readout().ordinal());
+            output.writeFloat(component.rangeMin()); output.writeFloat(component.rangeMax());
         }
     }
 

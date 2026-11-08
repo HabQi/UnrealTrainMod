@@ -14,6 +14,8 @@ import com.mojang.brigadier.suggestion.Suggestion;
 import com.mojang.brigadier.suggestion.Suggestions;
 import com.mojang.brigadier.suggestion.SuggestionsBuilder;
 import com.unrealtrainmod.entity.TrainEntity;
+import com.unrealtrainmod.compat.ir.IrControlDefinition;
+import com.unrealtrainmod.compat.ir.IrVehicleDefinition;
 import com.unrealtrainmod.track.block.TrackBlockManager;
 import com.unrealtrainmod.train.TrainAnchor;
 import com.unrealtrainmod.train.TrainCarEnd;
@@ -35,6 +37,8 @@ import net.minecraft.commands.arguments.selector.EntitySelector;
 import net.minecraft.network.chat.Component;
 import net.neoforged.neoforge.event.RegisterCommandsEvent;
 
+import static com.mojang.brigadier.arguments.StringArgumentType.string;
+import static com.mojang.brigadier.arguments.StringArgumentType.getString;
 import static com.mojang.brigadier.arguments.BoolArgumentType.bool;
 import static com.mojang.brigadier.arguments.BoolArgumentType.getBool;
 import static com.mojang.brigadier.arguments.DoubleArgumentType.doubleArg;
@@ -97,6 +101,7 @@ public final class TrainCommands {
                 .then(literal("reverse").then(vehicleArgument()
                         .executes(context -> execute(context, "reverse", TrainManager::reverse))))
                 .then(door)
+                .then(irCommands())
                 .then(literal("info").then(vehicleArgument().executes(TrainCommands::info)))
                 .then(literal("debug")
                         .then(literal("off").executes(context -> {
@@ -108,6 +113,73 @@ public final class TrainCommands {
                             return 1;
                         })));
         event.getDispatcher().register(literal("utm").requires(source -> source.hasPermission(2)).then(train));
+    }
+
+    private static LiteralArgumentBuilder<CommandSourceStack> irCommands() {
+        return literal("ir").then(vehicleArgument()
+                .then(literal("list").executes(context -> {
+                    var vehicle = vehicle(context);
+                    var definition = irDefinition(vehicle);
+                    context.getSource().sendSuccess(() -> Component.translatable(PREFIX + "ir.list", vehicle.getUUID().toString(), definition.controls().size()), false);
+                    for (String group : definition.controls().keySet().stream().sorted().toList()) sendIrControl(context, vehicle, definition, group);
+                    return definition.controls().size();
+                }))
+                .then(literal("get").then(irGroup().executes(context -> {
+                    var vehicle = vehicle(context);
+                    sendIrControl(context, vehicle, irDefinition(vehicle), getString(context, "group"));
+                    return 1;
+                })))
+                .then(literal("set").then(irGroup().then(argument("value", doubleArg(0, 1))
+                        .executes(context -> changeIrControl(context, "set")))))
+                .then(literal("toggle").then(irGroup().executes(context -> changeIrControl(context, "toggle"))))
+                .then(literal("pulse").then(irGroup().executes(context -> changeIrControl(context, "pulse")))));
+    }
+
+    private static RequiredArgumentBuilder<CommandSourceStack, String> irGroup() {
+        return argument("group", string()).suggests((context, builder) -> SharedSuggestionProvider.suggest(
+                irDefinition(vehicle(context)).controls().keySet().stream().sorted(), builder));
+    }
+
+    private static IrVehicleDefinition irDefinition(TrainEntity vehicle) throws CommandSyntaxException {
+        var definition = VehicleCatalog.find(vehicle.getModelId());
+        if (definition == null || definition.ir() == IrVehicleDefinition.NONE) throw error("ir.vehicle");
+        return definition.ir();
+    }
+
+    private static float irValue(TrainEntity vehicle, IrVehicleDefinition definition, String group) {
+        var snapshot = vehicle.irSnapshot();
+        return definition.value(group, snapshot.values(), vehicle.runtimeState(), snapshot.frontCoupled(), snapshot.rearCoupled());
+    }
+
+    private static void sendIrControl(CommandContext<CommandSourceStack> context, TrainEntity vehicle,
+                                      IrVehicleDefinition definition, String group) throws CommandSyntaxException {
+        var control = definition.controls().get(group);
+        if (control == null) throw error("ir.unknown", group);
+        context.getSource().sendSuccess(() -> Component.translatable(PREFIX + "ir.control", group, control.label(),
+                number(irValue(vehicle, definition, group)), number(control.defaultValue()),
+                Component.translatable(PREFIX + "ir.type." + control.type().name().toLowerCase(Locale.ROOT)),
+                Component.translatable(PREFIX + (control.readOnly() ? "ir.readonly" : "ir.writable"))), false);
+    }
+
+    private static int changeIrControl(CommandContext<CommandSourceStack> context, String operation) throws CommandSyntaxException {
+        var vehicle = vehicle(context);
+        var definition = irDefinition(vehicle);
+        String group = getString(context, "group");
+        var control = definition.controls().get(group);
+        if (control == null) throw error("ir.unknown", group);
+        if (control.readOnly()) throw error("ir.readonly_group", group);
+        double value = switch (operation) {
+            case "set" -> getDouble(context, "value");
+            case "toggle" -> irValue(vehicle, definition, group) >= 0.5f ? 0 : 1;
+            default -> 1;
+        };
+        if (!Double.isFinite(value) || value < 0 || value > 1
+                || (control.type() != IrControlDefinition.Type.CONTINUOUS && value != 0 && value != 1)) {
+            throw error("ir.value", group);
+        }
+        boolean changed = vehicle.setIrControl(group, (float)value, operation.equals("pulse"));
+        sendIrControl(context, vehicle, definition, group);
+        return changed ? 1 : 0;
     }
 
     private static RequiredArgumentBuilder<CommandSourceStack, EntitySelector> vehicleArgument() {

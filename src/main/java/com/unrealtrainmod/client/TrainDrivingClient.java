@@ -7,11 +7,14 @@ package com.unrealtrainmod.client;
 import com.mojang.blaze3d.platform.InputConstants;
 import com.unrealtrainmod.client.gui.TrainDrivingOverlay;
 import com.unrealtrainmod.client.gui.TrainMonitorOverlay;
+import com.unrealtrainmod.client.gui.TrainIrControlPanel;
+import com.unrealtrainmod.client.gui.TrainIrControlScreen;
 import com.unrealtrainmod.entity.TrainEntity;
 import com.unrealtrainmod.network.TrackSyncEvent;
 import com.unrealtrainmod.network.payload.TrainControlInputPayload;
 import com.unrealtrainmod.network.payload.TrainControlInputPayload.Action;
 import com.unrealtrainmod.network.payload.TrainControlSyncPayload;
+import com.unrealtrainmod.network.payload.TrainIrControlInputPayload;
 import com.unrealtrainmod.train.TrainControlState.Reverser;
 import com.unrealtrainmod.train.TrainConsist.StopReason;
 import com.unrealtrainmod.vehicle.VehicleDoor;
@@ -19,6 +22,7 @@ import java.util.Locale;
 import java.util.UUID;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.screens.PauseScreen;
 import net.minecraft.network.chat.Component;
 import net.neoforged.neoforge.client.event.CustomizeGuiOverlayEvent;
 import net.neoforged.neoforge.client.event.ClientPlayerNetworkEvent;
@@ -27,6 +31,7 @@ import net.neoforged.neoforge.client.event.InputEvent;
 import net.neoforged.neoforge.client.event.RegisterKeyMappingsEvent;
 import net.neoforged.neoforge.client.event.RenderGuiEvent;
 import net.neoforged.neoforge.client.event.RenderGuiLayerEvent;
+import net.neoforged.neoforge.client.event.ScreenEvent;
 import net.neoforged.neoforge.client.gui.VanillaGuiLayers;
 import net.neoforged.neoforge.client.settings.IKeyConflictContext;
 import net.neoforged.neoforge.client.settings.KeyConflictContext;
@@ -40,7 +45,7 @@ public final class TrainDrivingClient {
     private static final IKeyConflictContext CONTEXT = new IKeyConflictContext() {
         @Override public boolean isActive() {
             var mc = Minecraft.getInstance();
-            return mc.screen == null && mc.getOverlay() == null && riding();
+            return (mc.screen == null || mc.screen instanceof TrainIrControlScreen) && mc.getOverlay() == null && riding();
         }
         @Override public boolean conflicts(IKeyConflictContext other) { return other == this || other == KeyConflictContext.IN_GAME; }
     };
@@ -131,12 +136,13 @@ public final class TrainDrivingClient {
 
     public static boolean consoleVisible() {
         var mc = Minecraft.getInstance();
-        return riding() && !mc.options.hideGui && mc.screen == null && mc.getOverlay() == null;
+        return riding() && !mc.options.hideGui && (mc.screen == null || mc.screen instanceof TrainIrControlScreen)
+                && mc.getOverlay() == null;
     }
 
     public static boolean usingCursor() {
         var mc = Minecraft.getInstance();
-        return cursorOwned && consoleVisible() && mc.isWindowActive() && !mc.isPaused();
+        return (cursorOwned || mc.screen instanceof TrainIrControlScreen) && consoleVisible() && mc.isWindowActive() && !mc.isPaused();
     }
 
     public static Component controlHint() {
@@ -147,10 +153,24 @@ public final class TrainDrivingClient {
                 mc.options.keyShift.getTranslatedKeyMessage());
     }
 
-    private static void updateCursor() {
+    public static void updateCursor() {
         var mc = Minecraft.getInstance();
         if (!consoleVisible() || !mc.isWindowActive()) CURSOR.setDown(false);
         boolean requested = consoleVisible() && mc.isWindowActive() && !mc.isPaused() && CURSOR.isDown();
+        if (mc.screen instanceof TrainIrControlScreen screen) {
+            cursorOwned = false;
+            if (consoleVisible() && mc.isWindowActive() && !mc.isPaused() && TrainIrControlPanel.expanded()
+                    && (requested || screen.searching())) return;
+            screen.closeInput();
+        }
+        if (requested && TrainIrControlPanel.expanded() && mc.screen == null) {
+            TrainDrivingOverlay.release();
+            mc.setScreen(new TrainIrControlScreen());
+            // Opening a vanilla Screen releases all key mappings, including the held cursor key.
+            CURSOR.setDown(true);
+            cursorOwned = false;
+            return;
+        }
         if (!requested) TrainDrivingOverlay.release();
         if (requested && !cursorOwned && mc.mouseHandler.isMouseGrabbed()) {
             mc.mouseHandler.releaseMouse();
@@ -167,6 +187,20 @@ public final class TrainDrivingClient {
                 cursorOwned = false;
             }
         }
+    }
+
+    public static boolean cursorKey(int key, int scanCode, boolean down) {
+        if (!CURSOR.matches(key, scanCode)) return false;
+        CURSOR.setDown(down);
+        updateCursor();
+        return true;
+    }
+
+    public static boolean cursorMouse(int button, boolean down) {
+        if (!CURSOR.matchesMouse(button)) return false;
+        CURSOR.setDown(down);
+        updateCursor();
+        return true;
     }
 
     public static void onSync(TrackSyncEvent event) {
@@ -189,6 +223,7 @@ public final class TrainDrivingClient {
         snapshot = incoming;
         TrainMonitorOverlay.accept(incoming, silence > 20);
         silence = 0;
+        if (incoming.feedback() == TrainControlSyncPayload.Feedback.IR_CONTROL_UNAVAILABLE) TrainIrControlPanel.rejectPending();
         if (incoming.feedback() != TrainControlSyncPayload.Feedback.NONE && mc.player != null) {
             mc.player.displayClientMessage(Component.translatable(PREFIX
                     + incoming.feedback().name().toLowerCase(Locale.ROOT)), true);
@@ -204,6 +239,7 @@ public final class TrainDrivingClient {
             clear();
             return;
         }
+        TrainIrControlPanel.tick();
         if (usingCursor()) TrainDrivingOverlay.drag(mouseY());
         if (pendingLightMask >= 0 && ++pendingLightTicks > 40) {
             pendingLightVehicle = null;
@@ -214,13 +250,23 @@ public final class TrainDrivingClient {
     }
 
     public static void keyPressed(InputEvent.Key event) {
+        if (Minecraft.getInstance().screen instanceof TrainIrControlScreen) return;
         updateCursor();
         if (event.getAction() != GLFW.GLFW_PRESS || !CONTEXT.isActive()) return;
         if (!CURSOR.matches(event.getKey(), event.getScanCode())) controlKey(event.getKey(), event.getScanCode());
     }
 
+    public static void openingScreen(ScreenEvent.Opening event) {
+        if (event.getCurrentScreen() == null && event.getNewScreen() instanceof PauseScreen
+                && consoleVisible() && Minecraft.getInstance().isWindowActive() && TrainIrControlPanel.expanded()) {
+            TrainIrControlPanel.toggle();
+            event.setCanceled(true);
+        }
+    }
+
     /** Raw press events distinguish deliberate input from keyboard repeat. */
-    private static void controlKey(int key, int scanCode) {
+    public static void controlKey(int key, int scanCode) {
+        if (!riding()) return;
         boolean power = POWER.matches(key, scanCode), brake = BRAKE.matches(key, scanCode);
         boolean direction = REVERSER.matches(key, scanCode), stop = EMERGENCY.matches(key, scanCode);
         boolean left = DOOR_LEFT.matches(key, scanCode), right = DOOR_RIGHT.matches(key, scanCode);
@@ -230,6 +276,7 @@ public final class TrainDrivingClient {
     }
 
     public static void mousePressed(InputEvent.MouseButton.Pre event) {
+        if (Minecraft.getInstance().screen instanceof TrainIrControlScreen) return;
         if (!CONTEXT.isActive()) return;
         if (CURSOR.matchesMouse(event.getButton())) {
             CURSOR.setDown(event.getAction() != GLFW.GLFW_RELEASE);
@@ -260,6 +307,7 @@ public final class TrainDrivingClient {
     }
 
     public static void mouseScrolled(InputEvent.MouseScrollingEvent event) {
+        if (Minecraft.getInstance().screen instanceof TrainIrControlScreen) return;
         if (!consoleVisible()) return;
         event.setCanceled(true);
         if (usingCursor()) TrainDrivingOverlay.scroll(mouseX(), mouseY(), event.getScrollDeltaY());
@@ -292,6 +340,13 @@ public final class TrainDrivingClient {
         heartbeat = 0;
         sequence++;
         PacketDistributor.sendToServer(new TrainControlInputPayload(snapshot.session(), sequence, action, notch));
+    }
+
+    public static long sendIr(String group, float value, boolean pulse) {
+        if (!riding()) return -1;
+        heartbeat = 0;
+        PacketDistributor.sendToServer(new TrainIrControlInputPayload(snapshot.session(), ++sequence, group, value, pulse));
+        return sequence;
     }
 
     /**

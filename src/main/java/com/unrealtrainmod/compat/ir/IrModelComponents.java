@@ -24,15 +24,30 @@ public final class IrModelComponents {
             + "(?:(BOGEY_FRONT|BOGEY_REAR|FRONT_LOCOMOTIVE|REAR_LOCOMOTIVE|FRONT|REAR)_)?(\\d+)(?=_|$)");
     private static final Pattern WHEEL = Pattern.compile("^(BOGEY_(FRONT|REAR)_WHEEL|FRAME_WHEEL|WHEEL_DRIVER)_"
             + "(?:(FRONT|REAR)_)?(\\d+)(?=_|$)");
-    private static final Pattern GROUP = Pattern.compile("_CG_([^_]+)");
+    private static final Pattern GAUGE = Pattern.compile("^(?:GAUGE_(?:SPEED|THROTTLE|REVERSER|TRAIN_BRAKE|"
+            + "INDEPENDENT_BRAKE|IND_BRAKE|TEMPERATURE)|BRAKE_PRESSURE|COUPLED)_"
+            + "(?:(BOGEY_FRONT|BOGEY_REAR|FRONT|REAR)_)?\\d+(?=_|$)");
     private static final Pattern OFFSET = Pattern.compile("_OFFSET_([^_]+)");
     private static final Pattern ROTATION = Pattern.compile("_ROT_([^_]+)");
     private static final Pattern TRANSLATION = Pattern.compile("_TL_([^_]+)_([XYZ])(?=_|$)");
+    private static final Pattern RANGE = Pattern.compile("_RANGE_([^_]+)_([^_]+)");
     private static final TrackVector ZERO = new TrackVector(0, 0, 0);
 
     private IrModelComponents() {}
 
     public static boolean isControl(String name) { return CONTROL.matcher(name).find(); }
+
+    public static boolean isReadout(String name) { return GAUGE.matcher(name).find(); }
+
+    public static String controlKey(String name) {
+        var matcher = CONTROL.matcher(name);
+        return matcher.find() ? matcher.group() : null;
+    }
+
+    public static String attribute(String name, String token) {
+        var matcher = Pattern.compile("_" + token + "_([^_]+)").matcher(name);
+        return matcher.find() ? matcher.group(1) : null;
+    }
 
     /** Names with positioned controls belong to their bogie even when BOGEY is not the first token. */
     public static VehiclePartRole role(String name) {
@@ -40,6 +55,11 @@ public final class IrModelComponents {
         if (control.find()) {
             if ("BOGEY_FRONT".equals(control.group(2))) return VehiclePartRole.FRONT_BOGIE;
             if ("BOGEY_REAR".equals(control.group(2))) return VehiclePartRole.REAR_BOGIE;
+        }
+        var gauge = GAUGE.matcher(name);
+        if (gauge.find()) {
+            if ("BOGEY_FRONT".equals(gauge.group(1))) return VehiclePartRole.FRONT_BOGIE;
+            if ("BOGEY_REAR".equals(gauge.group(1))) return VehiclePartRole.REAR_BOGIE;
         }
         return IrBogieGroups.role(name);
     }
@@ -50,9 +70,11 @@ public final class IrModelComponents {
             if (!part.visible() || part.positions().isEmpty()) continue;
             var wheel = WHEEL.matcher(part.name());
             var control = CONTROL.matcher(part.name());
+            var gauge = GAUGE.matcher(part.name());
             String key;
             if (wheel.find()) key = wheel.group();
             else if (control.find()) key = control.group();
+            else if (gauge.find()) key = gauge.group();
             else continue;
             groups.computeIfAbsent(key, ignored -> new ArrayList<>()).add(part);
         }
@@ -73,6 +95,7 @@ public final class IrModelComponents {
         var names = parts.stream().map(ModelData.Part::name).distinct().toList();
         var role = role(names.getFirst());
         var kind = WHEEL.matcher(key).find() ? IrModelComponent.Kind.WHEEL
+                : GAUGE.matcher(key).find() ? IrModelComponent.Kind.GAUGE
                 : key.startsWith("THROTTLE_BRAKE_") ? IrModelComponent.Kind.CENTERED
                 : key.startsWith("THROTTLE_") ? IrModelComponent.Kind.THROTTLE
                 : key.startsWith("TRAIN_BRAKE_") ? IrModelComponent.Kind.TRAIN_BRAKE
@@ -89,20 +112,21 @@ public final class IrModelComponents {
                 return null;
             }
             return new IrModelComponent(key, role, kind, names, key, pivot, new TrackVector(1, 0, 0),
-                    0, ZERO, 0, false, false, diameter);
+                    0, ZERO, 0, false, false, diameter, null, 0, 1);
         }
-        String group = key;
-        float offset = 0, degrees = 0;
+        String group = names.stream().sorted().map(name -> attribute(name, "CG"))
+                .filter(java.util.Objects::nonNull).findFirst().orElse(key);
+        float offset = 0, degrees = 0, rangeMin = 0, rangeMax = 1;
         boolean invert = false, hide = false, wantsRotation = false;
         double tx = 0, ty = 0, tz = 0;
         TrackVector axis = ZERO;
         ModelData.Part marker = null;
         for (var part : parts) {
             String name = part.name();
-            var cg = GROUP.matcher(name);
-            if (cg.find()) group = cg.group(1);
             var off = OFFSET.matcher(name);
             if (off.find()) offset = number(off.group(1));
+            var range = RANGE.matcher(name);
+            if (range.find()) { rangeMin = number(range.group(1)); rangeMax = number(range.group(2)); }
             invert |= token(name, "INVERT");
             hide |= token(name, "HIDE");
             wantsRotation |= token(name, "ROT");
@@ -137,9 +161,17 @@ public final class IrModelComponents {
         }
         if (!wantsRotation && tx == 0 && ty == 0 && tz == 0 && !hide
                 && kind != IrModelComponent.Kind.THROTTLE && kind != IrModelComponent.Kind.TRAIN_BRAKE
-                && kind != IrModelComponent.Kind.REVERSER) return null;
+                && kind != IrModelComponent.Kind.REVERSER && kind != IrModelComponent.Kind.GAUGE) return null;
+        if (rangeMin == rangeMax) throw new NumberFormatException("Empty gauge range");
+        IrReadout readout = kind != IrModelComponent.Kind.GAUGE ? null
+                : key.startsWith("GAUGE_SPEED_") ? IrReadout.SPEED
+                : key.startsWith("GAUGE_THROTTLE_") ? IrReadout.THROTTLE
+                : key.startsWith("GAUGE_REVERSER_") ? IrReadout.REVERSER
+                : key.startsWith("GAUGE_TRAIN_BRAKE_") ? IrReadout.TRAIN_BRAKE
+                : key.startsWith("COUPLED_FRONT_") ? IrReadout.COUPLED_FRONT
+                : key.startsWith("COUPLED_REAR_") ? IrReadout.COUPLED_REAR : IrReadout.UNAVAILABLE;
         return new IrModelComponent(key, role, kind, names, group, pivot, axis, degrees,
-                new TrackVector(tx, ty, tz), offset, invert, hide, 0);
+                new TrackVector(tx, ty, tz), offset, invert, hide, 0, readout, rangeMin, rangeMax);
     }
 
     /** End-cloud centroids give the marker's long axis; orientation is relative to the authored origin. */
@@ -178,7 +210,7 @@ public final class IrModelComponents {
         return value;
     }
 
-    private static boolean token(String name, String token) {
+    public static boolean token(String name, String token) {
         return name.startsWith(token + "_") || name.endsWith("_" + token) || name.contains("_" + token + "_");
     }
 }

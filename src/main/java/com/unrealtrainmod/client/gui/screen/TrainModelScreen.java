@@ -93,7 +93,8 @@ public final class TrainModelScreen extends BaseTrainScreen {
         dimension = minecraft.level.dimension();
         list = new TrainListWidget<>(minecraft, 100, 100, VehicleCatalog.all(),
                 model -> model.config().archive(), model -> Component.literal(model.name()),
-                model -> model.id().toString(), ClientThumbnailManager.INSTANCE::vehicleImage, this::selectModel);
+                model -> model.id().toString(), ClientThumbnailManager.INSTANCE::vehicleImage, this::selectModel,
+                Component.translatable("gui.unrealtrainmod.models.empty"), true);
         list.filter("");
         list.select(selected);
         search = new EditBox(font, 0, 0, 100, 18, Component.translatable("gui.unrealtrainmod.models.search"));

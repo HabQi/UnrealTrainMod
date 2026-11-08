@@ -89,7 +89,7 @@ public final class IrModelLoader {
     /** Recognised controls evaluate HIDE dynamically; unsupported hidden objects retain static visibility. */
     public static boolean isVisible(String name) {
         return !name.contains("CARGO_ITEMS_") && !name.contains("CARGO_FILL_")
-                && (!HIDDEN.matcher(name).find() || IrModelComponents.isControl(name));
+                && (!HIDDEN.matcher(name).find() || IrModelComponents.isControl(name) || IrModelComponents.isReadout(name));
     }
 
     private static String findTexture(PackageArchive archive, PackageAsset model, String path) {

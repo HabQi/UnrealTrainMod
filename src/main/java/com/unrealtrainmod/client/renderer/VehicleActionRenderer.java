@@ -9,7 +9,6 @@ import com.unrealtrainmod.client.model.LoadedModel;
 import com.unrealtrainmod.compat.rtm.script.ScriptDiagnostics;
 import com.unrealtrainmod.entity.TrainEntity;
 import com.unrealtrainmod.vehicle.VehicleAction;
-import com.unrealtrainmod.vehicle.VehicleActions;
 import com.unrealtrainmod.vehicle.VehicleDoor;
 import com.unrealtrainmod.vehicle.VehiclePartRole;
 import java.util.List;
@@ -69,11 +68,9 @@ public final class VehicleActionRenderer {
                 }
             }
             pose.translate(-pivot.x(), -pivot.y(), -pivot.z());
-            for (String name : action.objects()) {
-                var selection = source.actionParts().get(VehicleActions.key(name));
-                if (selection != null) queue.submitGeometry(source, selection, pose, light);
-                else ScriptDiagnostics.missingActionPart(model, name);
-            }
+            var prepared = source.actionSelections().get(action);
+            if (!prepared.selection().batches().isEmpty()) queue.submitGeometry(source, prepared.selection(), pose, light);
+            for (String name : prepared.missingNames()) ScriptDiagnostics.missingActionPart(model, name);
             // Child actions inherit the parent pivot and movement, matching the legacy renderer.
             for (var child : action.children()) submitAction(queue, source, model, child, move, pose, light);
         } finally {

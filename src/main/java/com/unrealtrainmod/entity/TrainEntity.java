@@ -20,6 +20,9 @@ import com.unrealtrainmod.vehicle.VehiclePose;
 import com.unrealtrainmod.vehicle.VehiclePosePlayback;
 import com.unrealtrainmod.vehicle.VehiclePoseSnapshot;
 import com.unrealtrainmod.vehicle.VehicleRuntimeState;
+import com.unrealtrainmod.compat.ir.IrVehicleDefinition;
+import com.unrealtrainmod.compat.ir.IrVehicleSnapshot;
+import com.unrealtrainmod.compat.ir.IrVehicleState;
 import com.unrealtrainmod.track.geometry.TrackVector;
 import java.util.UUID;
 import java.util.Locale;
@@ -64,6 +67,8 @@ public final class TrainEntity extends Entity {
             SynchedEntityData.defineId(TrainEntity.class, EntityDataSerializers.COMPOUND_TAG);
     private static final EntityDataAccessor<Byte> LIGHTS =
             SynchedEntityData.defineId(TrainEntity.class, EntityDataSerializers.BYTE);
+    private static final EntityDataAccessor<CompoundTag> IR_STATE =
+            SynchedEntityData.defineId(TrainEntity.class, EntityDataSerializers.COMPOUND_TAG);
     /** Legacy RTM advances a door by one unit per tick for {@code MAX_DOOR_MOVE = 60} ticks. */
     private static final int DOOR_MOVE_TICKS = 60;
     private TrainAnchor railAnchor;
@@ -81,6 +86,8 @@ public final class TrainEntity extends Entity {
     private final DoorState leftDoor = new DoorState(), rightDoor = new DoorState();
     private boolean doorStateLoaded;
     private VehicleRuntimeState runtimeState = VehicleRuntimeState.IDLE;
+    private final IrVehicleState irState = new IrVehicleState();
+    private IrVehicleSnapshot irSnapshot = IrVehicleSnapshot.EMPTY;
 
     public TrainEntity(EntityType<? extends TrainEntity> type, Level level) {
         super(type, level);
@@ -95,6 +102,7 @@ public final class TrainEntity extends Entity {
         builder.define(DOOR_STATE, new CompoundTag());
         builder.define(RUNTIME_STATE, new CompoundTag());
         builder.define(LIGHTS, (byte) 0);
+        builder.define(IR_STATE, new CompoundTag());
     }
 
     public ResourceLocation getModelId() {
@@ -117,6 +125,27 @@ public final class TrainEntity extends Entity {
     }
 
     public VehicleRuntimeState runtimeState() { return runtimeState; }
+
+    public IrVehicleSnapshot irSnapshot() { return irSnapshot; }
+
+    /** Changes are published only when values, coupling ends or trigger edges actually change. */
+    public void updateIrState(boolean front, boolean rear) {
+        var definition = VehicleCatalog.find(getModelId());
+        if (definition == null || definition.ir() == IrVehicleDefinition.NONE) return;
+        irState.bind(definition.ir(), runtimeState, front, rear);
+        if (irState.update(runtimeState, front, rear, level().getGameTime())) {
+            irSnapshot = irState.snapshot();
+            entityData.set(IR_STATE, irSnapshot.save());
+        }
+    }
+
+    public boolean setIrControl(String group, float value, boolean pulse) {
+        if (level().isClientSide) return false;
+        updateIrState(irSnapshot.frontCoupled(), irSnapshot.rearCoupled());
+        boolean changed = irState.set(group, value, pulse, level().getGameTime());
+        updateIrState(irSnapshot.frontCoupled(), irSnapshot.rearCoupled());
+        return changed;
+    }
 
     /** Independent authored RTM front/tail texture layers; persisted and tracked for every observer. */
     public int lights() { return entityData.get(LIGHTS); }
@@ -335,7 +364,11 @@ public final class TrainEntity extends Entity {
     @Override
     public void onSyncedDataUpdated(EntityDataAccessor<?> key) {
         super.onSyncedDataUpdated(key);
-        if (MODEL_ID.equals(key)) setBoundingBox(makeBoundingBox());
+        if (MODEL_ID.equals(key)) {
+            irState.clear(); irSnapshot = IrVehicleSnapshot.EMPTY;
+            if (!level().isClientSide) entityData.set(IR_STATE, new CompoundTag());
+            setBoundingBox(makeBoundingBox());
+        }
         if (RAIL_POSE.equals(key) && level().isClientSide) {
             var snapshot = entityData.get(RAIL_POSE);
             if (snapshot.isEmpty()) {
@@ -354,6 +387,7 @@ public final class TrainEntity extends Entity {
         if (RUNTIME_STATE.equals(key) && level().isClientSide) {
             runtimeState = VehicleRuntimeState.load(entityData.get(RUNTIME_STATE));
         }
+        if (IR_STATE.equals(key) && level().isClientSide) irSnapshot = IrVehicleSnapshot.load(entityData.get(IR_STATE));
     }
 
     /** Applied once this frame's simulation ticks have finished, before camera and entity rendering. */
@@ -376,6 +410,13 @@ public final class TrainEntity extends Entity {
         var id = ResourceLocation.tryParse(tag.getString("ModelId"));
         entityData.set(MODEL_ID, id == null ? "" : id.toString());
         entityData.set(LIGHTS, (byte) (tag.getByte("Lights") & 3));
+        try { irState.loadValues(tag.getCompound("IrControls")); }
+        catch (IllegalArgumentException exception) {
+            LOGGER.warn("Vehicle {} has invalid IR controls: {}", getUUID(), exception.getMessage());
+            irState.clear();
+        }
+        irSnapshot = IrVehicleSnapshot.EMPTY;
+        entityData.set(IR_STATE, new CompoundTag());
         railPose = motionStartPose = null;
         motionStartTick = Long.MIN_VALUE;
         poseRevision++;
@@ -433,6 +474,7 @@ public final class TrainEntity extends Entity {
     protected void addAdditionalSaveData(CompoundTag tag) {
         tag.putString("ModelId", entityData.get(MODEL_ID));
         tag.putByte("Lights", entityData.get(LIGHTS));
+        tag.put("IrControls", irState.saveValues());
         tag.putBoolean("FrontCouplingEnabled", frontCouplingEnabled);
         tag.putBoolean("RearCouplingEnabled", rearCouplingEnabled);
         if (trainId != null) tag.putUUID("TrainId", trainId);

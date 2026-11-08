@@ -69,6 +69,7 @@ public final class TrainModelRenderer {
                     }
                     if (stats != null) stats.addPose(System.nanoTime() - poseStart);
                     if (instance.definition().source().format() == ModelSource.Format.IR_OBJ) {
+                        if (stats != null) stats.irSelection(instance.visibleParts(), false, queue.lights());
                         queue.submitGeometry(instance.model(), instance.visibleParts(), pose, light);
                         IrModelRenderer.submit(queue, instance, irFrame, pose, light);
                         continue;
@@ -117,6 +118,7 @@ public final class TrainModelRenderer {
 
     public static void onFramePre(RenderFrameEvent.Pre event) {
         clearWorld();
+        IrModelRenderer.beginFrame();
         com.unrealtrainmod.client.compat.iris.IrisModelRenderer.beginFrame();
     }
 

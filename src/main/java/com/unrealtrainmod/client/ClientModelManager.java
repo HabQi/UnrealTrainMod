@@ -93,14 +93,15 @@ public final class ClientModelManager extends SimplePreparableReloadListener<Pre
                     }
                 }
                 uploaded.put(entry.getKey(), new LoadedModel.Source(source.parts(), source.visibleParts(),
-                        source.bodyParts(), source.actionParts(), source.partsByName(), source.componentParts(), source.irParts(), gpu));
+                        source.bodyParts(), source.actionSelections(), source.partsByName(), source.irBindings(), gpu));
             }
             var loaded = new HashMap<ResourceLocation, LoadedModel>();
             for (var vehicle : prepared.vehicles()) {
                 var instances = vehicle.parts().stream()
                         .map(instance -> {
                             var source = uploaded.get(instance.source());
-                            var selection = source.componentParts().getOrDefault(instance.role(), source.visibleParts());
+                            var irBinding = source.irBindings().get(vehicle.ir());
+                            var selection = irBinding == null ? source.visibleParts() : irBinding.staticParts().get(instance.role());
                             // This selection is only submitted for static fallback. Scripts select named parts
                             // from the full source, so their presence must not leave doors in the static body.
                             if (instance.role() == VehiclePartRole.BODY && !instance.actions().isEmpty()) {
@@ -108,9 +109,9 @@ public final class ClientModelManager extends SimplePreparableReloadListener<Pre
                                 instance.actions().collectPartNames(names);
                                 selection = source.bodyParts().getOrDefault(Set.copyOf(names), source.visibleParts());
                             }
-                            return new LoadedModel.Instance(source, instance, selection);
+                            return new LoadedModel.Instance(source, instance, selection, irBinding);
                         }).toList();
-                loaded.put(vehicle.id(), new LoadedModel(instances, vehicle.bounds(), vehicle.irControlDefaults()));
+                loaded.put(vehicle.id(), new LoadedModel(instances, vehicle.bounds(), vehicle.ir()));
             }
             sources = Map.copyOf(uploaded);
             textures = Set.copyOf(registered);
@@ -137,6 +138,7 @@ public final class ClientModelManager extends SimplePreparableReloadListener<Pre
         TrainModelRenderer.resetStatistics();
         VehicleScriptManager.clear();
         com.unrealtrainmod.client.renderer.IrModelRenderer.clear();
+        com.unrealtrainmod.client.gui.TrainIrControlPanel.reset();
         ScriptDiagnostics.clear();
         models = Map.of();
         releaseSources(sources);

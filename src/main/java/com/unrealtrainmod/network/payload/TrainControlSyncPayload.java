@@ -23,7 +23,7 @@ public record TrainControlSyncPayload(UUID session, ResourceLocation dimension, 
                                       TrainRouteProfile routeProfile,
                                       double tractionForce, double brakeForce,
                                       StopReason stopReason, Feedback feedback) implements CustomPacketPayload {
-    public enum Feedback { NONE, REVERSER_LOCKED, EMERGENCY_LOCKED }
+    public enum Feedback { NONE, REVERSER_LOCKED, EMERGENCY_LOCKED, IR_CONTROL_UNAVAILABLE }
     public static final Type<TrainControlSyncPayload> TYPE = new Type<>(
             ResourceLocation.fromNamespaceAndPath(UnrealTrainMod.MODID, "train_control_sync"));
     public static final StreamCodec<RegistryFriendlyByteBuf, TrainControlSyncPayload> STREAM_CODEC = StreamCodec.of(

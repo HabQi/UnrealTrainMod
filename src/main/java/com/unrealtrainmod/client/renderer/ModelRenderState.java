@@ -46,6 +46,7 @@ final class ModelRenderState implements AutoCloseable {
     private boolean gpuDirectionalLighting, instancedDirectionalLighting;
     private ShaderInstance lastGpuShader;
     private int shaderBinds, shaderSwitches;
+    private int stateSetups, textureRebinds, matrixUpdates;
     private boolean texturesDirty;
 
     ModelRenderState(boolean frontLighting) {
@@ -66,6 +67,7 @@ final class ModelRenderState implements AutoCloseable {
 
     void use(RenderType type, boolean blended, boolean doubleSided) {
         if (active != type) {
+            if (collectStats) stateSetups++;
             if (active != null) active.clearRenderState();
             active = type;
             active.setupRenderState();
@@ -86,6 +88,7 @@ final class ModelRenderState implements AutoCloseable {
             // A previous instanced segment owns a different program; rebind this shader's common state.
             endGpu();
             custom.prepare(pose, light, pass, directionalLighting);
+            if (collectStats) matrixUpdates++;
             custom.shader().setDefaultUniforms(VertexFormat.Mode.TRIANGLES, modelView, projection,
                     Minecraft.getInstance().getWindow());
             setupLights(custom.shader());
@@ -94,11 +97,12 @@ final class ModelRenderState implements AutoCloseable {
         } else {
             if (texturesDirty) bindGpuTextures();
             // Uniform.upload does not skip unchanged values in this engine version.
-            if (gpuPose != pose) {
+            if (gpuPose != pose && (!gpuPose.pose().equals(pose.pose()) || !gpuPose.normal().equals(pose.normal()))) {
                 custom.modelMatrix().set(pose.pose());
                 custom.normalMatrix().set(pose.normal());
                 custom.modelMatrix().upload();
                 custom.normalMatrix().upload();
+                if (collectStats) matrixUpdates++;
             }
             if (gpuLight != light) {
                 custom.light().set(light & 0xffff, light >>> 16 & 0xffff);
@@ -148,6 +152,7 @@ final class ModelRenderState implements AutoCloseable {
     }
 
     private void bindGpuTextures() {
+        if (collectStats) textureRebinds++;
         int previous = GlStateManager._getActiveTexture();
         for (int i = 0; i < 3; i++) {
             int texture = RenderSystem.getShaderTexture(i);
@@ -169,6 +174,9 @@ final class ModelRenderState implements AutoCloseable {
 
     int shaderBinds() { return shaderBinds; }
     int shaderSwitches() { return shaderSwitches; }
+    int stateSetups() { return stateSetups; }
+    int textureRebinds() { return textureRebinds; }
+    int matrixUpdates() { return matrixUpdates; }
 
     /** CPU fallback owns its shader binding; the next GPU segment must apply its shader again. */
     void endGpu() {

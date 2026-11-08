@@ -25,7 +25,7 @@ final class RtmButtonTexture {
             }
             return archive.resolve(prefix, value.getAsString());
         } catch (IOException | RuntimeException exception) {
-            LOGGER.warn("RTM {}!{}: buttonTexture unavailable; using text entry: {}",
+            LOGGER.warn("RTM {}!{}: buttonTexture unavailable; using fallback entry: {}",
                     config.archive(), config.entry(), exception.getMessage());
             return null;
         }

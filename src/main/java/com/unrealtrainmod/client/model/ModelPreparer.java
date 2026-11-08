@@ -8,11 +8,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.unrealtrainmod.model.ModelSource;
+import com.unrealtrainmod.vehicle.VehicleAction;
 import com.unrealtrainmod.vehicle.VehicleActions;
 import com.unrealtrainmod.vehicle.VehicleDefinition;
-import com.unrealtrainmod.vehicle.VehiclePartRole;
 import com.unrealtrainmod.compat.ir.IrModelComponent;
-import com.unrealtrainmod.compat.ir.IrModelComponents;
+import com.unrealtrainmod.compat.ir.IrVehicleDefinition;
 import com.unrealtrainmod.client.texture.PreparedTexture;
 import com.unrealtrainmod.client.RenderCategory;
 import com.unrealtrainmod.client.renderer.RenderBatch;
@@ -25,9 +25,11 @@ import it.unimi.dsi.fastutil.ints.IntArrayList;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.EnumMap;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -63,14 +65,15 @@ public final class ModelPreparer {
     public static PreparedReload prepare(List<VehicleDefinition> definitions) {
         var classified = new LinkedHashMap<ModelSource, ClassifiedSource>();
         var failed = new HashSet<ModelSource>();
-        var actionSets = collectActionSets(definitions);
-        var irDefaults = new HashMap<ModelSource, Set<Map<String, Float>>>();
+        var actions = collectActions(definitions);
+        var irDefinitions = new HashMap<ModelSource, Set<IrVehicleDefinition>>();
         for (var definition : definitions) for (var instance : definition.parts()) {
             if (instance.source().format() == ModelSource.Format.IR_OBJ) {
-                irDefaults.computeIfAbsent(instance.source(), ignored -> new HashSet<>()).add(definition.irControlDefaults());
+                irDefinitions.computeIfAbsent(instance.source(), ignored -> new HashSet<>()).add(definition.ir());
             }
         }
         try (var cache = new ModelCache("vehicles"); var textures = new TexturePool()) {
+            var irPreparer = new IrModelPreparer(cache);
             for (var definition : definitions) {
                 for (var instance : definition.parts()) {
                     var source = instance.source();
@@ -92,8 +95,8 @@ public final class ModelPreparer {
                 try {
                     prepared.put(entry.getKey(), prepareSource(entry.getKey(), entry.getValue().parts(),
                             entry.getValue().irComponents(), regions,
-                            actionSets.getOrDefault(entry.getKey(), Set.of()),
-                            irDefaults.getOrDefault(entry.getKey(), Set.of())));
+                            actions.getOrDefault(entry.getKey(), List.of()),
+                            irDefinitions.getOrDefault(entry.getKey(), Set.of()), irPreparer));
                 } catch (RuntimeException e) {
                     LOGGER.error("Unable to prepare vehicle model {}", entry.getKey().model(), e);
                 }
@@ -106,16 +109,13 @@ public final class ModelPreparer {
         }
     }
 
-    /** One body selection per distinct configured action-name set sharing this source. */
-    private static Map<ModelSource, Set<Set<String>>> collectActionSets(List<VehicleDefinition> definitions) {
-        var result = new HashMap<ModelSource, Set<Set<String>>>();
+    /** Keep every instance's action objects, including equal definitions with distinct identities. */
+    private static Map<ModelSource, List<VehicleActions>> collectActions(List<VehicleDefinition> definitions) {
+        var result = new HashMap<ModelSource, List<VehicleActions>>();
         for (var definition : definitions) {
             for (var instance : definition.parts()) {
                 if (instance.actions().isEmpty()) continue;
-                var names = new HashSet<String>();
-                instance.actions().collectPartNames(names);
-                result.computeIfAbsent(instance.source(), ignored -> new LinkedHashSet<>())
-                        .add(Set.copyOf(names));
+                result.computeIfAbsent(instance.source(), ignored -> new ArrayList<>()).add(instance.actions());
             }
         }
         return result;
@@ -239,7 +239,8 @@ public final class ModelPreparer {
     private static PreparedModel prepareSource(ModelSource source, List<ModelPart> parts,
                                                List<IrModelComponent> irComponents,
                                                Map<ResourceLocation, TextureAtlas.Region> regions,
-                                               Set<Set<String>> actionSets, Set<Map<String, Float>> irDefaults) {
+                                               List<VehicleActions> actions, Set<IrVehicleDefinition> irDefinitions,
+                                               IrModelPreparer irPreparer) {
         var originalVisible = parts.stream().filter(ModelPart::visible).flatMap(part -> part.batches().stream())
                 .filter(batch -> batch.category() == RenderCategory.CUTOUT).toList();
         int beforeAtlas = OpaqueBatchMerger.visibleBatchCount(parts);
@@ -256,8 +257,18 @@ public final class ModelPreparer {
             if (batch.category() == RenderCategory.CUTOUT) allBatches.add(batch);
         }
         var partsByName = new HashMap<String, PartSelection>();
-        named.forEach((name, matching) -> partsByName.put(name, new PartSelection(matching)));
-        // Actions use one normalized lookup for every matching object, including case-only duplicates.
+        named.forEach((name, matching) -> {
+            var selection = PartSelection.groupedInOrder(matching);
+            partsByName.put(name, selection);
+            allBatches.addAll(selection.batches());
+        });
+        // Body exclusions depend on names, while node selections retain each action object's identity.
+        var actionSets = new LinkedHashSet<Set<String>>();
+        for (var action : actions) {
+            var names = new HashSet<String>();
+            action.collectPartNames(names);
+            actionSets.add(Set.copyOf(names));
+        }
         var actionNames = new HashSet<String>();
         actionSets.forEach(actionNames::addAll);
         var actionObjects = new HashMap<String, List<ModelPart>>();
@@ -267,8 +278,11 @@ public final class ModelPreparer {
                 actionObjects.computeIfAbsent(name, ignored -> new ArrayList<>()).add(part);
             }
         }
-        var actionParts = new HashMap<String, PartSelection>();
-        actionObjects.forEach((name, matching) -> actionParts.put(name, new PartSelection(matching)));
+        var actionSelections = new IdentityHashMap<VehicleAction, ActionSelection>();
+        for (var action : actions) {
+            prepareActions(action.leftDoors(), actionObjects, actionSelections, allBatches);
+            prepareActions(action.rightDoors(), actionObjects, actionSelections, allBatches);
+        }
         // Configured door objects are drawn by the action renderer instead of the static body ranges.
         var visibleSelection = new PartSelection(visible, merged.visibleBatches());
         var bodySelections = new LinkedHashMap<Set<String>, PartSelection>();
@@ -281,36 +295,9 @@ public final class ModelPreparer {
             // Register the extra ranges before GPU upload; they alias the same packed meshes.
             allBatches.addAll(selection.batches());
         }
-        var componentParts = new EnumMap<VehiclePartRole, PartSelection>(VehiclePartRole.class);
-        var irParts = new EnumMap<VehiclePartRole, List<IrModelPart>>(VehiclePartRole.class);
-        if (source.format() == ModelSource.Format.IR_OBJ) {
-            var dynamicNames = new HashSet<String>();
-            var drivenGroups = new HashSet<String>();
-            for (var component : irComponents) if (component.driven()) drivenGroups.add(component.controlGroup());
-            for (var component : irComponents) {
-                // Unoperated controls in their neutral pose can remain in the packed static ranges.
-                // Account for every vehicle configuration sharing this OBJ before making that decision.
-                boolean defaultTransform = irDefaults.stream().anyMatch(defaults -> component.value(
-                        defaults.getOrDefault(component.controlGroup(), component.defaultPosition())) != 0);
-                if (!component.driven() && !drivenGroups.contains(component.controlGroup()) && !component.hide()
-                        && !defaultTransform) continue;
-                var selected = new ArrayList<ModelPart>();
-                for (String name : component.objects()) selected.addAll(named.getOrDefault(name, List.of()));
-                var selection = PartSelection.grouped(selected);
-                irParts.computeIfAbsent(component.role(), ignored -> new ArrayList<>()).add(new IrModelPart(component, selection));
-                dynamicNames.addAll(component.objects());
-                allBatches.addAll(selection.batches());
-            }
-            for (var role : VehiclePartRole.values()) {
-                var selection = PartSelection.grouped(visible.stream()
-                        .filter(part -> IrModelComponents.role(part.name()) == role)
-                        .filter(part -> !dynamicNames.contains(part.name())).toList());
-                componentParts.put(role, selection);
-                irParts.put(role, List.copyOf(irParts.getOrDefault(role, List.of())));
-                // Register these range objects before GPU upload; all alias the existing packed meshes.
-                allBatches.addAll(selection.batches());
-            }
-        }
+        var irBindings = source.format() == ModelSource.Format.IR_OBJ
+                ? irPreparer.prepare(source, merged.parts(), irComponents, irDefinitions, allBatches)
+                : Map.<IrVehicleDefinition, IrModelBinding>of();
         var mergedVisible = merged.visibleBatches().stream().filter(batch -> batch.category() == RenderCategory.CUTOUT).toList();
         LOGGER.info("Model {}: visible CUTOUT batches {} -> {}; triangles {} -> {}",
                 source.model(), originalVisible.size(), mergedVisible.size(),
@@ -319,6 +306,25 @@ public final class ModelPreparer {
         LOGGER.info("Model {}: atlas visible CUTOUT batches {} -> {}",
                 source.model(), beforeAtlas, mergedVisible.size());
         return new PreparedModel(merged.parts(), visibleSelection, Map.copyOf(bodySelections),
-                Map.copyOf(actionParts), Map.copyOf(partsByName), Map.copyOf(componentParts), Map.copyOf(irParts), List.copyOf(allBatches));
+                Collections.unmodifiableMap(actionSelections), Map.copyOf(partsByName), irBindings, List.copyOf(allBatches));
+    }
+
+    /** Resolve one ordered selection per node; repeated names intentionally retain repeated geometry. */
+    private static void prepareActions(List<VehicleAction> actions, Map<String, List<ModelPart>> objects,
+                                       Map<VehicleAction, ActionSelection> selections, List<RenderBatch> batches) {
+        for (var action : actions) {
+            if (selections.containsKey(action)) continue;
+            var selected = new ArrayList<ModelPart>();
+            var missing = new ArrayList<String>();
+            for (String name : action.objects()) {
+                var matching = objects.get(VehicleActions.key(name));
+                if (matching == null) missing.add(name);
+                else selected.addAll(matching);
+            }
+            var selection = PartSelection.groupedInOrder(selected);
+            selections.put(action, new ActionSelection(selection, missing));
+            batches.addAll(selection.batches());
+            prepareActions(action.children(), objects, selections, batches);
+        }
     }
 }

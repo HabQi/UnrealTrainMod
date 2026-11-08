@@ -5,7 +5,8 @@
 package com.unrealtrainmod.client.model;
 
 import com.unrealtrainmod.client.renderer.RenderBatch;
-import com.unrealtrainmod.vehicle.VehiclePartRole;
+import com.unrealtrainmod.vehicle.VehicleAction;
+import com.unrealtrainmod.compat.ir.IrVehicleDefinition;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -13,7 +14,6 @@ import java.util.Set;
 /** CPU geometry and selections awaiting render-thread upload. */
 public record PreparedModel(List<ModelPart> parts, PartSelection visibleParts,
                             Map<Set<String>, PartSelection> bodyParts,
-                            Map<String, PartSelection> actionParts,
-                            Map<String, PartSelection> partsByName, Map<VehiclePartRole, PartSelection> componentParts,
-                            Map<VehiclePartRole, List<IrModelPart>> irParts,
+                            Map<VehicleAction, ActionSelection> actionSelections,
+                            Map<String, PartSelection> partsByName, Map<IrVehicleDefinition, IrModelBinding> irBindings,
                             List<RenderBatch> batches) {}

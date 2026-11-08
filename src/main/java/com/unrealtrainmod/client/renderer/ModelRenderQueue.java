@@ -24,12 +24,16 @@ import com.unrealtrainmod.client.renderer.instancing.InstancedModelShader;
 import com.unrealtrainmod.client.renderer.instancing.InstancingStats;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Comparator;
+import java.util.HashMap;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.LightTexture;
 import net.minecraft.client.renderer.texture.OverlayTexture;
+import net.minecraft.resources.ResourceLocation;
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
 
@@ -37,14 +41,92 @@ import org.joml.Vector3f;
 public final class ModelRenderQueue implements ModelDrawSink, AutoCloseable {
     private record Draw(RenderBatch batch, GpuModel.Part gpu, PoseStack.Pose pose, int light,
                         boolean directionalLighting) {}
-    private static final class InstanceGroup {
-        private final List<Draw> draws = new ArrayList<>();
-        private int startInstance;
+    private record MaterialKey(ResourceLocation texture, boolean doubleSided, int alphaPass,
+                               boolean directionalLighting) {}
+    private static final class PoseKey {
+        private PoseStack.Pose pose;
+        private int hash, id;
+
+        void lookup(PoseStack.Pose pose) {
+            this.pose = pose;
+            hash = 31 * pose.pose().hashCode() + pose.normal().hashCode();
+        }
+
+        void set(PoseKey lookup, int id) {
+            pose = lookup.pose;
+            hash = lookup.hash;
+            this.id = id;
+        }
+
+        @Override public int hashCode() { return hash; }
+
+        @Override public boolean equals(Object other) {
+            if (this == other) return true;
+            return other instanceof PoseKey key && pose.pose().equals(key.pose.pose())
+                    && pose.normal().equals(key.pose.normal());
+        }
     }
+    private static final class OpaqueCommand {
+        private List<Draw> instances;
+        private MaterialKey material;
+        private long[] instanceStates = new long[0];
+        private int firstIndex, rangeHash;
+        private int indexCount, coveredRequests;
+        private int startInstance;
+
+        void set(List<Draw> instances) {
+            this.instances = instances;
+            var first = instances.getFirst();
+            material = materialKey(first, false);
+            firstIndex = first.gpu() == null ? 0 : first.gpu().firstIndex();
+            indexCount = first.batch().indexCount();
+            coveredRequests = instances.size();
+        }
+
+        Draw first() { return instances.getFirst(); }
+        boolean instanced() { return instances.size() >= 2; }
+
+        boolean prepareSignature(IdentityHashMap<PoseStack.Pose, PoseKey> poseIds) {
+            int count = instances.size();
+            boolean grew = instanceStates.length < count;
+            if (grew) instanceStates = new long[count];
+            int hash = 31 * System.identityHashCode(first().gpu().mesh()) + material.hashCode();
+            for (int i = 0; i < count; i++) {
+                var draw = instances.get(i);
+                long value = ((long)poseIds.get(draw.pose()).id << 32) | (draw.light() & 0xffffffffL);
+                instanceStates[i] = value;
+                hash = 31 * hash + Long.hashCode(value);
+            }
+            rangeHash = hash;
+            return grew;
+        }
+
+        @Override public int hashCode() { return rangeHash; }
+
+        @Override public boolean equals(Object other) {
+            if (this == other) return true;
+            if (!(other instanceof OpaqueCommand command)) return false;
+            int count = instances.size();
+            return first().gpu().mesh() == command.first().gpu().mesh() && material.equals(command.material)
+                    && count == command.instances.size()
+                    && Arrays.equals(instanceStates, 0, count, command.instanceStates, 0, count);
+        }
+    }
+    private static final Comparator<OpaqueCommand> INDEX_ORDER = Comparator.comparingInt(command -> command.firstIndex);
     private final String scene;
     private final boolean frontLighting;
     private final boolean vehicleScene;
     private final List<Draw> draws = new ArrayList<>();
+    private final List<OpaqueCommand> opaqueCommands = new ArrayList<>();
+    private final List<OpaqueCommand> inputOpaqueCommands = new ArrayList<>(), commandPool = new ArrayList<>();
+    private final List<List<OpaqueCommand>> rangeBucketPool = new ArrayList<>();
+    private final IdentityHashMap<PoseStack.Pose, PoseKey> rangeSnapshotIds = new IdentityHashMap<>();
+    private final Map<PoseKey, PoseKey> rangePoseIds = new HashMap<>();
+    private final PoseKey rangePoseLookup = new PoseKey();
+    private final List<PoseKey> rangePosePool = new ArrayList<>();
+    private final Map<OpaqueCommand, List<OpaqueCommand>> rangeBuckets = new LinkedHashMap<>();
+    private int commandCount, rangeBucketCount, commandGrowths, bucketGrowths, rangePoseCount, poseKeyGrowths;
+    private PoseStack.Pose lastSnapshot;
     private final IdentityHashMap<GpuModel.Mesh, Boolean> sortedMeshes = new IdentityHashMap<>();
     private final IdentityHashMap<GpuModel.Mesh, Boolean> instancedMeshes = new IdentityHashMap<>();
     private final InstanceBuffer instanceBuffer = new InstanceBuffer();
@@ -118,15 +200,25 @@ public final class ModelRenderQueue implements ModelDrawSink, AutoCloseable {
             customShader = StaticModelShader.state() != null;
             started = true;
         }
-        var snapshot = pose.copy();
+        PoseStack.Pose snapshot = null;
         for (var batch : batches) {
             if (!batch.lightLayer().enabled(lights)) continue;
+            if (snapshot == null) snapshot = captureSnapshot(pose);
             boolean emissive = batch.lightLayer().emissive();
             draws.add(new Draw(batch, customShader && gpu != null ? gpu.part(batch) : null, snapshot,
                     emissive ? LightTexture.FULL_BRIGHT : light,
                     !emissive && directionalLighting));
         }
         if (frameStats != null) frameStats.addEnqueue(System.nanoTime() - enqueueStart);
+    }
+
+    /** Only the static shader consumes the two matrices directly; vanilla fallback also uses pose flags. */
+    private PoseStack.Pose captureSnapshot(PoseStack.Pose pose) {
+        boolean reused = vehicleScene && customShader && lastSnapshot != null
+                && lastSnapshot.pose().equals(pose.pose()) && lastSnapshot.normal().equals(pose.normal());
+        if (!reused) lastSnapshot = pose.copy();
+        if (collectStats) stats.snapshotCapture(reused);
+        return lastSnapshot;
     }
 
     public void drawOpaque() {
@@ -137,10 +229,12 @@ public final class ModelRenderQueue implements ModelDrawSink, AutoCloseable {
         long opaqueStart = collectStats ? System.nanoTime() : 0L;
         boolean completed = false;
         try (var state = new ModelRenderState(frontLighting, collectStats)) {
-            boolean instancing = instancingEnabled();
-            if (instancing) drawOpaqueInstanced(state);
+            if (vehicleScene) drawVehicleOpaque(state);
             else drawOpaqueDirect(state);
-            if (collectStats) stats.addShaderCounts(state.shaderBinds(), state.shaderSwitches());
+            if (collectStats) {
+                stats.addShaderCounts(state.shaderBinds(), state.shaderSwitches());
+                stats.addOpaqueStateCounts(state.stateSetups(), state.textureRebinds(), state.matrixUpdates());
+            }
             completed = true;
         } catch (RuntimeException | Error e) {
             completed = false;
@@ -156,14 +250,26 @@ public final class ModelRenderQueue implements ModelDrawSink, AutoCloseable {
     }
 
     private void drawOpaqueDirect(ModelRenderState state) {
+        var materials = new LinkedHashMap<MaterialKey, List<Draw>>();
         for (var draw : draws) {
             if (!drawsOpaque(draw)) continue;
-            if (collectStats) {
-                stats.request();
-                if (instanceable(draw)) stats.instanceable();
-            }
-            drawOpaqueSingle(state, draw);
+            if (collectStats) stats.request(draw.batch().category());
+            addMaterialDraw(materials, draw, false);
         }
+        drawOpaqueMaterials(state, materials);
+    }
+
+    private void drawOpaqueMaterials(ModelRenderState state, Map<MaterialKey, List<Draw>> materials) {
+        for (var material : materials.values()) for (var draw : material) drawOpaqueSingle(state, draw);
+    }
+
+    private static MaterialKey materialKey(Draw draw, boolean blended) {
+        var batch = draw.batch();
+        return new MaterialKey(batch.texture(), batch.doubleSided(), batch.alphaPass(blended), draw.directionalLighting());
+    }
+
+    private static void addMaterialDraw(Map<MaterialKey, List<Draw>> materials, Draw draw, boolean blended) {
+        materials.computeIfAbsent(materialKey(draw, blended), ignored -> new ArrayList<>()).add(draw);
     }
 
     private void drawOpaqueSingle(ModelRenderState state, Draw draw) {
@@ -183,42 +289,45 @@ public final class ModelRenderQueue implements ModelDrawSink, AutoCloseable {
         }
     }
 
-    /**
-     * CUTOUT requests are grouped per run of consecutive drawable requests sharing the same GPU geometry and
-     * material state. A drawable request that cannot be instanced ends the run, so fallback and ordered draws
-     * keep their place; BLEND requests produce nothing here and therefore do not split batches.
-     */
-    private void drawOpaqueInstanced(ModelRenderState state) {
+    /** Preserve global geometry groups, then join contiguous ranges with identical ordered instance data. */
+    private void drawVehicleOpaque(ModelRenderState state) {
+        boolean instancing = instancingEnabled();
         long groupingStart = collectStats ? System.nanoTime() : 0L;
-        var steps = new ArrayList<Object>();
-        var run = new LinkedHashMap<InstanceBatchKey, InstanceGroup>();
+        var groups = new LinkedHashMap<InstanceBatchKey, List<Draw>>();
+        var commands = inputOpaqueCommands;
+        int fallback = 0;
         for (var draw : draws) {
             if (!drawsOpaque(draw)) continue;
-            if (collectStats) stats.request();
-            if (instanceable(draw)) {
-                if (collectStats) stats.instanceable();
-                run.computeIfAbsent(instanceKey(draw), key -> new InstanceGroup()).draws.add(draw);
+            if (collectStats) stats.request(draw.batch().category());
+            if (instancing && draw.gpu() != null) {
+                groups.computeIfAbsent(instanceKey(draw), key -> new ArrayList<>()).add(draw);
             } else {
-                flushRun(run, steps);
-                steps.add(draw);
+                commands.add(opaqueCommand(List.of(draw)));
+                if (draw.gpu() == null) fallback++;
             }
         }
-        flushRun(run, steps);
-        int instances = 0;
-        for (var step : steps) {
-            if (step instanceof InstanceGroup group) {
-                group.startInstance = instances;
-                instances += group.draws.size();
-            }
-        }
+        for (var group : groups.values()) commands.add(opaqueCommand(group));
         if (collectStats) stats.addGrouping(System.nanoTime() - groupingStart);
-        if (steps.isEmpty()) return;
-        if (instances > 0) {
+
+        long mergeStart = collectStats ? System.nanoTime() : 0L;
+        mergeOpaqueRanges(commands);
+        if (collectStats) stats.addRangeMerge(commands.size() - fallback, opaqueCommands.size() - fallback,
+                System.nanoTime() - mergeStart);
+        var instancedMaterials = new LinkedHashMap<MaterialKey, List<OpaqueCommand>>();
+        var directMaterials = new LinkedHashMap<MaterialKey, List<OpaqueCommand>>();
+        for (var command : opaqueCommands) {
+            var materials = command.instanced() ? instancedMaterials : directMaterials;
+            materials.computeIfAbsent(command.material, ignored -> new ArrayList<>()).add(command);
+        }
+        if (!instancedMaterials.isEmpty()) {
             long packingStart = collectStats ? System.nanoTime() : 0L;
             instanceBuffer.begin();
-            for (var step : steps) {
-                if (step instanceof InstanceGroup group) {
-                    for (var draw : group.draws) instanceBuffer.add(draw.pose(), draw.light());
+            int nextInstance = 0;
+            for (var material : instancedMaterials.values()) {
+                for (var command : material) {
+                    command.startInstance = nextInstance;
+                    for (var draw : command.instances) instanceBuffer.add(draw.pose(), draw.light());
+                    nextInstance += command.instances.size();
                 }
             }
             long uploadStart = collectStats ? System.nanoTime() : 0L;
@@ -227,42 +336,152 @@ public final class ModelRenderQueue implements ModelDrawSink, AutoCloseable {
             if (collectStats) stats.addUpload(instanceBuffer.uploadedBytes(), System.nanoTime() - uploadStart);
         }
 
-        int[] attributes = InstancedModelShader.state().attributes();
+        int[] attributes = instancedMaterials.isEmpty() ? null : InstancedModelShader.state().attributes();
         try {
-            for (var step : steps) {
-                if (step instanceof InstanceGroup group) drawInstanceGroup(state, group, attributes);
-                else drawOpaqueSingle(state, (Draw)step);
+            // Keep each shader's material buckets together, rather than switching programs per material.
+            for (var material : instancedMaterials.values()) {
+                for (var command : material) drawOpaqueCommand(state, command, attributes);
+            }
+            for (var material : directMaterials.values()) {
+                for (var command : material) drawOpaqueCommand(state, command, attributes);
             }
         } finally {
             try {
                 instancedMeshes.keySet().forEach(GpuModel.Mesh::releaseInstanceBuffer);
             } finally {
                 instancedMeshes.clear();
+                long cleanupStart = collectStats ? System.nanoTime() : 0L;
+                resetOpaqueWork();
+                if (collectStats) stats.addRangeCleanup(System.nanoTime() - cleanupStart);
             }
         }
     }
 
-    private static void flushRun(LinkedHashMap<InstanceBatchKey, InstanceGroup> run, List<Object> steps) {
-        for (var group : run.values()) {
-            // A single request keeps the existing direct GPU draw instead of paying instancing overhead.
-            if (group.draws.size() >= 2) steps.add(group);
-            else steps.add(group.draws.getFirst());
+    private OpaqueCommand opaqueCommand(List<Draw> instances) {
+        if (commandCount == commandPool.size()) {
+            commandPool.add(new OpaqueCommand());
+            commandGrowths++;
         }
-        run.clear();
+        var command = commandPool.get(commandCount++);
+        command.set(instances);
+        return command;
     }
 
-    private void drawInstanceGroup(ModelRenderState state, InstanceGroup group, int[] attributes) {
-        var first = group.draws.getFirst();
+    /** Pose snapshots are immutable for this frame, so value keys can reference their matrices directly. */
+    private void mergeOpaqueRanges(List<OpaqueCommand> commands) {
+        long phaseStart = collectStats ? System.nanoTime() : 0L;
+        int instanceValues = 0;
+        for (var command : commands) {
+            if (command.first().gpu() == null) continue;
+            instanceValues += command.instances.size();
+            for (var draw : command.instances) {
+                if (rangeSnapshotIds.containsKey(draw.pose())) continue;
+                var pose = draw.pose();
+                rangePoseLookup.lookup(pose);
+                var poseId = rangePoseIds.get(rangePoseLookup);
+                if (poseId == null) {
+                    if (rangePoseCount == rangePosePool.size()) {
+                        rangePosePool.add(new PoseKey());
+                        poseKeyGrowths++;
+                    }
+                    poseId = rangePosePool.get(rangePoseCount);
+                    poseId.set(rangePoseLookup, rangePoseCount++);
+                    rangePoseIds.put(poseId, poseId);
+                }
+                rangeSnapshotIds.put(pose, poseId);
+            }
+        }
+        long poseEnd = collectStats ? System.nanoTime() : 0L;
+        int signatureGrowths = 0;
+        for (var command : commands) if (command.first().gpu() != null) {
+            if (command.prepareSignature(rangeSnapshotIds)) signatureGrowths++;
+        }
+        long signatureEnd = collectStats ? System.nanoTime() : 0L;
+        for (var command : commands) {
+            if (command.first().gpu() == null) {
+                opaqueCommands.add(command);
+                continue;
+            }
+            // The key's mesh, material and primitive signature stay fixed; merging only changes index counts.
+            var bucket = rangeBuckets.get(command);
+            if (bucket == null) {
+                if (rangeBucketCount == rangeBucketPool.size()) {
+                    rangeBucketPool.add(new ArrayList<>());
+                    bucketGrowths++;
+                }
+                bucket = rangeBucketPool.get(rangeBucketCount++);
+                rangeBuckets.put(command, bucket);
+            }
+            bucket.add(command);
+        }
+        long bucketEnd = collectStats ? System.nanoTime() : 0L;
+        for (int i = 0; i < rangeBucketCount; i++) {
+            var bucket = rangeBucketPool.get(i);
+            if (bucket.size() >= 2) bucket.sort(INDEX_ORDER);
+        }
+        long sortEnd = collectStats ? System.nanoTime() : 0L;
+        for (int i = 0; i < rangeBucketCount; i++) {
+            var group = rangeBucketPool.get(i);
+            OpaqueCommand pending = null;
+            for (var command : group) {
+                if (pending != null && pending.firstIndex + pending.indexCount == command.firstIndex) {
+                    pending.indexCount += command.indexCount;
+                    pending.coveredRequests += command.coveredRequests;
+                } else {
+                    opaqueCommands.add(command);
+                    pending = command;
+                }
+            }
+        }
+        if (collectStats) {
+            stats.addRangePhases(poseEnd - phaseStart, signatureEnd - poseEnd, bucketEnd - signatureEnd,
+                    sortEnd - bucketEnd, System.nanoTime() - sortEnd);
+            stats.addRangeWork(rangeSnapshotIds.size(), rangePoseIds.size(), instanceValues, rangeBucketCount,
+                    commandGrowths, signatureGrowths, bucketGrowths, poseKeyGrowths);
+        }
+    }
+
+    /** Drop frame-owned references before pooled commands or their signatures are reused. */
+    private void resetOpaqueWork() {
+        rangeBuckets.clear();
+        rangeSnapshotIds.clear();
+        rangePoseIds.clear();
+        rangePoseLookup.pose = null;
+        for (int i = 0; i < rangePoseCount; i++) rangePosePool.get(i).pose = null;
+        for (int i = 0; i < rangeBucketCount; i++) rangeBucketPool.get(i).clear();
+        for (int i = 0; i < commandCount; i++) {
+            var command = commandPool.get(i);
+            command.instances = null;
+            command.material = null;
+        }
+        inputOpaqueCommands.clear();
+        opaqueCommands.clear();
+        commandCount = rangeBucketCount = commandGrowths = bucketGrowths = 0;
+        rangePoseCount = poseKeyGrowths = 0;
+    }
+
+    private void drawOpaqueCommand(ModelRenderState state, OpaqueCommand command, int[] attributes) {
+        var first = command.first();
         var batch = first.batch();
         int alphaPass = batch.alphaPass(false);
         state.use(ModelRenderTypes.get(batch.texture(), batch.doubleSided(), false,
                 alphaPass == StaticModelShader.FORCE_OPAQUE), false, batch.doubleSided());
-        state.prepareInstanced(alphaPass, first.directionalLighting(), modelView, projection);
         var part = first.gpu();
-        instancedMeshes.put(part.mesh(), Boolean.TRUE);
-        part.mesh().drawInstanced(part.firstIndex(), batch.indexCount(), instanceBuffer.handle(),
-                instanceBuffer.offsetOf(group.startInstance), group.draws.size(), attributes);
-        if (collectStats) stats.instancedDraw(group.draws.size(), batch.indexCount());
+        if (command.instanced()) {
+            state.prepareInstanced(alphaPass, first.directionalLighting(), modelView, projection);
+            instancedMeshes.put(part.mesh(), Boolean.TRUE);
+            part.mesh().drawInstanced(command.firstIndex, command.indexCount, instanceBuffer.handle(),
+                    instanceBuffer.offsetOf(command.startInstance), command.instances.size(), attributes);
+            if (collectStats) stats.instancedDraw(command.instances.size(), command.indexCount, command.coveredRequests);
+        } else if (part != null) {
+            state.prepareGpu(first.pose(), first.light(), alphaPass, first.directionalLighting(), modelView, projection);
+            part.mesh().draw(false, command.firstIndex, command.indexCount);
+            if (collectStats) stats.gpuDraw(command.indexCount);
+        } else {
+            state.endGpu();
+            drawFallback(state, first, alphaPass, 0, command.indexCount / 3, false);
+            if (collectStats) stats.fallbackDraw(command.indexCount);
+        }
     }
 
     private static InstanceBatchKey instanceKey(Draw draw) {
@@ -275,11 +494,6 @@ public final class ModelRenderQueue implements ModelDrawSink, AutoCloseable {
     private boolean drawsOpaque(Draw draw) {
         var category = draw.batch().category();
         return category == RenderCategory.CUTOUT || (category == RenderCategory.MIXED && customShader);
-    }
-
-    private boolean instanceable(Draw draw) {
-        return customShader && draw.batch().category() == RenderCategory.CUTOUT && draw.gpu() != null
-                && InstancedModelShader.state() != null;
     }
 
     private boolean instancingEnabled() {
@@ -339,42 +553,43 @@ public final class ModelRenderQueue implements ModelDrawSink, AutoCloseable {
         drawLightPass();
     }
 
-    /** Submission-order comparison path: GPU draws reuse canonical IBO ranges without collecting triangles. */
+    /** Static transparency favors material locality and canonical indices over surface submission order. */
     private void drawStaticTranslucent() {
-        int start = 0;
-        while (start < draws.size() && (draws.get(start).batch().category() == RenderCategory.CUTOUT
-                || draws.get(start).batch().isLightLayer())) start++;
-        if (start == draws.size()) return;
+        var materials = new LinkedHashMap<MaterialKey, List<Draw>>();
+        for (var draw : draws) {
+            if (draw.batch().category() != RenderCategory.CUTOUT && !draw.batch().isLightLayer()) {
+                addMaterialDraw(materials, draw, true);
+            }
+        }
+        if (materials.isEmpty()) return;
         try (var state = new ModelRenderState(frontLighting)) {
-            while (start < draws.size()) {
-                var draw = draws.get(start);
-                if (draw.batch().category() == RenderCategory.CUTOUT || draw.batch().isLightLayer()) {
-                    start++;
-                    continue;
-                }
-                int end = start + 1;
-                int count = draw.batch().indexCount();
-                if (draw.gpu() != null) {
-                    while (end < draws.size()) {
-                        var next = draws.get(end);
-                        if (next.batch().category() == RenderCategory.CUTOUT || next.batch().isLightLayer() || !canMerge(draw, next)
-                                || next.gpu().firstIndex() != draw.gpu().firstIndex() + count) break;
-                        count += next.batch().indexCount();
-                        end++;
+            for (var material : materials.values()) {
+                for (int start = 0; start < material.size();) {
+                    var draw = material.get(start);
+                    int end = start + 1;
+                    int count = draw.batch().indexCount();
+                    if (draw.gpu() != null) {
+                        while (end < material.size()) {
+                            var next = material.get(end);
+                            if (!canMerge(draw, next)
+                                    || next.gpu().firstIndex() != draw.gpu().firstIndex() + count) break;
+                            count += next.batch().indexCount();
+                            end++;
+                        }
                     }
+                    int alphaPass = draw.batch().alphaPass(true);
+                    state.use(ModelRenderTypes.get(draw.batch().texture(), draw.batch().doubleSided(), true, false),
+                            true, draw.batch().doubleSided());
+                    if (draw.gpu() != null) {
+                        state.prepareGpu(draw.pose(), draw.light(), alphaPass, draw.directionalLighting(), modelView, projection);
+                        draw.gpu().mesh().draw(false, draw.gpu().firstIndex(), count);
+                    } else {
+                        state.endGpu();
+                        drawFallback(state, draw, alphaPass, 0, count / 3, false);
+                    }
+                    if (collectStats) stats.translucentDraw(count / 3);
+                    start = end;
                 }
-                int alphaPass = draw.batch().alphaPass(true);
-                state.use(ModelRenderTypes.get(draw.batch().texture(), draw.batch().doubleSided(), true, false),
-                        true, draw.batch().doubleSided());
-                if (draw.gpu() != null) {
-                    state.prepareGpu(draw.pose(), draw.light(), alphaPass, draw.directionalLighting(), modelView, projection);
-                    draw.gpu().mesh().draw(false, draw.gpu().firstIndex(), count);
-                } else {
-                    state.endGpu();
-                    drawFallback(state, draw, alphaPass, 0, count / 3, false);
-                }
-                if (collectStats) stats.translucentDraw(count / 3);
-                start = end;
             }
         }
     }
@@ -530,6 +745,8 @@ public final class ModelRenderQueue implements ModelDrawSink, AutoCloseable {
 
     public void clear() {
         draws.clear();
+        lastSnapshot = null;
+        resetOpaqueWork();
         sortedMeshes.clear();
         triangles = 0;
         started = false;
@@ -543,6 +760,9 @@ public final class ModelRenderQueue implements ModelDrawSink, AutoCloseable {
         clear();
         stats.close();
         instanceBuffer.close();
+        commandPool.clear();
+        rangeBucketPool.clear();
+        rangePosePool.clear();
         if (fallbackBuffer != null) {
             fallbackBuffer.close();
             fallbackBuffer = null;

@@ -27,6 +27,7 @@ import com.unrealtrainmod.train.map.TrainMapService;
 import com.unrealtrainmod.train.TrainDriverManager;
 import com.unrealtrainmod.train.TrainPassengerManager;
 import com.unrealtrainmod.network.payload.TrainControlInputPayload;
+import com.unrealtrainmod.network.payload.TrainIrControlInputPayload;
 import com.unrealtrainmod.network.payload.TrainControlSyncPayload;
 import com.unrealtrainmod.network.payload.TrainWalkInputPayload;
 import com.unrealtrainmod.network.payload.TrainPassengerPosePayload;
@@ -39,9 +40,11 @@ public final class ModPayloads {
     private ModPayloads() {}
 
     public static void register(RegisterPayloadHandlersEvent event) {
-        var registrar = event.registrar("32");
+        var registrar = event.registrar("34");
         registrar.playToServer(TrainControlInputPayload.TYPE, TrainControlInputPayload.STREAM_CODEC,
                 TrainDriverManager::handleInput);
+        registrar.playToServer(TrainIrControlInputPayload.TYPE, TrainIrControlInputPayload.STREAM_CODEC,
+                TrainDriverManager::handleIrInput);
         registrar.playToServer(TrainWalkInputPayload.TYPE, TrainWalkInputPayload.STREAM_CODEC,
                 TrainPassengerManager::handleInput);
         registrar.playToServer(TrainPassengerPosePayload.TYPE, TrainPassengerPosePayload.STREAM_CODEC,

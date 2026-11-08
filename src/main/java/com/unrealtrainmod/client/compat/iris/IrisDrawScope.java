@@ -22,9 +22,10 @@ import org.lwjgl.opengl.GL15;
 import org.lwjgl.opengl.GL20;
 import org.lwjgl.opengl.GL30;
 
-/** Owned drawing range: material setup may be shared, every draw still applies the complete Iris shader. */
+/** Owned drawing range: entity draws retain Iris state until the material or matrices change. */
 public final class IrisDrawScope implements AutoCloseable {
     private static IrisDrawScope current;
+    private final IrisRenderStats.Scope metrics = IrisRenderStats.beginScope();
     private final IrisDrawScope previous = current;
     private final GlStateBackup state = new GlStateBackup();
     private final ShaderInstance shader = RenderSystem.getShader();
@@ -40,6 +41,8 @@ public final class IrisDrawScope implements AutoCloseable {
     private final boolean entity;
     private final Map<Integer, int[]> constants = new LinkedHashMap<>();
     private RenderType activeType;
+    private ShaderInstance appliedShader;
+    private final Matrix4f appliedView = new Matrix4f(), appliedProjection = new Matrix4f();
 
     public IrisDrawScope() { this(false, false); }
     public static IrisDrawScope entity() { return new IrisDrawScope(true, false); }
@@ -61,6 +64,7 @@ public final class IrisDrawScope implements AutoCloseable {
         drawIdentity = entity || hand ? identity : new int[3];
         if (!entity && !hand) IrisCompat.restoreTrackIdentity(drawIdentity);
         current = this;
+        if (metrics != null) metrics.captured();
     }
 
     private boolean use(RenderType type) {
@@ -69,15 +73,24 @@ public final class IrisDrawScope implements AutoCloseable {
         endBatch();
         type.setupRenderState();
         activeType = type;
+        if (metrics != null) metrics.setups++;
         return true;
     }
 
     /** Call before handing control back to MultiBufferSource, whose wrappers own their own entity phase. */
     public void endBatch() {
-        if (activeType != null) {
-            var type = activeType;
-            activeType = null;
-            type.clearRenderState();
+        try {
+            if (appliedShader != null) {
+                var shader = appliedShader;
+                appliedShader = null;
+                shader.clear();
+            }
+        } finally {
+            if (activeType != null) {
+                var type = activeType;
+                activeType = null;
+                type.clearRenderState();
+            }
         }
     }
 
@@ -90,37 +103,66 @@ public final class IrisDrawScope implements AutoCloseable {
     }
 
     public static boolean draw(VertexBuffer buffer, RenderType type, Matrix4f modelView, Matrix4f projection) {
-        return current.drawInternal(buffer, null, type, modelView, projection, 0);
+        return current.drawInternal(buffer, null, 0, 0, type, modelView, projection, 0);
     }
 
     public boolean drawCached(IrisGeometryCache.Mesh mesh, RenderType type, Matrix4f modelView, Matrix4f projection, int light) {
-        return drawInternal(mesh.buffer, mesh, type, modelView, projection, light);
+        return drawInternal(mesh.storage.buffer, mesh, mesh.firstVertex, mesh.vertices, type, modelView, projection, light);
     }
 
-    private boolean drawInternal(VertexBuffer buffer, IrisGeometryCache.Mesh mesh, RenderType type,
+    boolean drawCachedRange(IrisGeometryCache.Mesh mesh, int firstVertex, int vertices, RenderType type,
+                            Matrix4f modelView, Matrix4f projection, int light) {
+        return drawInternal(mesh.storage.buffer, mesh, firstVertex, vertices, type, modelView, projection, light);
+    }
+
+    private boolean drawInternal(VertexBuffer buffer, IrisGeometryCache.Mesh mesh, int firstVertex, int vertices, RenderType type,
                               Matrix4f modelView, Matrix4f projection, int light) {
         boolean changed = use(type);
         var shader = RenderSystem.getShader();
-        try {
-            buffer.bind();
-            if (mesh != null) {
-                saveConstant(mesh.lightAttribute);
-                saveConstant(mesh.identityAttribute);
-                GL30.glVertexAttribI2i(mesh.lightAttribute, light & 0xffff, light >>> 16 & 0xffff);
-                GL30.glVertexAttribI3i(mesh.identityAttribute,
-                        drawIdentity[0] & 0xffff, drawIdentity[1] & 0xffff, drawIdentity[2] & 0xffff);
-            }
+        buffer.bind();
+        if (metrics != null) metrics.bufferBinds++;
+        if (mesh != null) {
+            saveConstant(mesh.storage.lightAttribute);
+            saveConstant(mesh.storage.identityAttribute);
+            GL30.glVertexAttribI2i(mesh.storage.lightAttribute, light & 0xffff, light >>> 16 & 0xffff);
+            GL30.glVertexAttribI3i(mesh.storage.identityAttribute,
+                    drawIdentity[0] & 0xffff, drawIdentity[1] & 0xffff, drawIdentity[2] & 0xffff);
+        }
+        boolean matricesChanged = !appliedView.equals(modelView) || !appliedProjection.equals(projection);
+        if (shader != appliedShader || matricesChanged) {
+            // A changed pose still uses Iris apply(), including inverse/normal matrices and custom uniforms.
             shader.setDefaultUniforms(VertexFormat.Mode.TRIANGLES, modelView, projection, Minecraft.getInstance().getWindow());
+            appliedShader = shader;
             shader.apply();
-            buffer.draw();
-            return changed;
-        } finally {
+            appliedView.set(modelView);
+            appliedProjection.set(projection);
+            if (metrics != null) {
+                metrics.applies++;
+                if (matricesChanged) metrics.matrixChanges++;
+            }
+        }
+        if (mesh != null && mesh.shared) GL11.glDrawArrays(GL11.GL_TRIANGLES, firstVertex, vertices);
+        else buffer.draw();
+        if (!entity) {
+            appliedShader = null;
             try { shader.clear(); }
             finally { VertexBuffer.unbind(); }
         }
+        return changed;
     }
 
     @Override public void close() {
+        if (metrics != null) metrics.finishDraw();
+        boolean completed = false;
+        try {
+            restore();
+            completed = true;
+        } finally {
+            if (metrics != null) metrics.restored(completed);
+        }
+    }
+
+    private void restore() {
         try { endBatch(); }
         finally {
             for (var entry : constants.entrySet()) {

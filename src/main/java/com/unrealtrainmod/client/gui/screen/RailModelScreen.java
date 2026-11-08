@@ -64,7 +64,7 @@ public final class RailModelScreen extends BaseTrainScreen {
                     model -> Component.literal(model.railName()),
                     model -> model.tags().isBlank() ? model.id().toString() : model.tags() + " · " + model.id(),
                     ClientThumbnailManager.INSTANCE::railImage, this::selectModel,
-                    Component.translatable("gui.unrealtrainmod.rail_models.empty"));
+                    Component.translatable("gui.unrealtrainmod.rail_models.empty"), false);
             list.select(selected);
             list.filter("");
             search = new EditBox(font, 0, 0, listWidth, 18, Component.translatable("gui.unrealtrainmod.models.search"));

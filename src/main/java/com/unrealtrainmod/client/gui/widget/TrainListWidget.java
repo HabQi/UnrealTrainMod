@@ -5,6 +5,7 @@
 package com.unrealtrainmod.client.gui.widget;
 
 import com.mojang.blaze3d.systems.RenderSystem;
+import com.unrealtrainmod.UnrealTrainMod;
 import com.unrealtrainmod.client.gui.ListEntryImage;
 import com.unrealtrainmod.client.gui.theme.GuiTheme;
 import java.nio.file.Path;
@@ -24,11 +25,14 @@ import net.minecraft.client.gui.narration.NarrationElementOutput;
 import net.minecraft.client.gui.navigation.FocusNavigationEvent;
 import net.minecraft.client.gui.navigation.ScreenDirection;
 import net.minecraft.network.chat.Component;
+import net.minecraft.resources.ResourceLocation;
 
 /** Package-grouped model entries, with a retained selection independent of filtering. */
 public final class TrainListWidget<T> extends ObjectSelectionList<TrainListWidget.Row<T>> {
     /** Extra list width reserved for the scrollbar, outside the existing row width. */
     public static final int SCROLLBAR_GUTTER = 8;
+    private static final ResourceLocation VEHICLE_BUTTON_BACKGROUND = ResourceLocation.fromNamespaceAndPath(
+            UnrealTrainMod.MODID, "textures/gui/button_none.png");
 
     private final List<T> items;
     private final Function<T, Path> archive;
@@ -37,19 +41,13 @@ public final class TrainListWidget<T> extends ObjectSelectionList<TrainListWidge
     private final Function<T, ListEntryImage> image;
     private final Consumer<T> onSelect;
     private final Component emptyMessage;
+    private final boolean vehicleEntries;
     private T selectedValue;
 
     public TrainListWidget(Minecraft minecraft, int width, int height, List<T> items,
                            Function<T, Path> archive, Function<T, Component> label,
-                           Function<T, String> detail, Function<T, ListEntryImage> image, Consumer<T> onSelect) {
-        this(minecraft, width, height, items, archive, label, detail, image, onSelect,
-                Component.translatable("gui.unrealtrainmod.models.empty"));
-    }
-
-    public TrainListWidget(Minecraft minecraft, int width, int height, List<T> items,
-                           Function<T, Path> archive, Function<T, Component> label,
                            Function<T, String> detail, Function<T, ListEntryImage> image,
-                           Consumer<T> onSelect, Component emptyMessage) {
+                           Consumer<T> onSelect, Component emptyMessage, boolean vehicleEntries) {
         super(minecraft, width, height, 0, 40);
         this.emptyMessage = emptyMessage;
         this.items = List.copyOf(items);
@@ -58,6 +56,7 @@ public final class TrainListWidget<T> extends ObjectSelectionList<TrainListWidge
         this.detail = detail;
         this.image = image;
         this.onSelect = onSelect;
+        this.vehicleEntries = vehicleEntries;
     }
 
     public void filter(String query) {
@@ -183,6 +182,11 @@ public final class TrainListWidget<T> extends ObjectSelectionList<TrainListWidge
                 return;
             }
             var texture = owner.image.apply(item);
+            // Native RTM artwork fills the row; generated screenshots have a positive pixel scale.
+            if (owner.vehicleEntries && (texture == null || texture.pixelScale() > 0)) {
+                renderVehicleButton(graphics, texture, left, top, width - 4, height);
+                return;
+            }
             if (texture != null) {
                 int contentWidth = width - 4;
                 float scale = texture.pixelScale() > 0 ? texture.pixelScale()
@@ -205,6 +209,62 @@ public final class TrainListWidget<T> extends ObjectSelectionList<TrainListWidge
                     left + 3, top + 3, GuiTheme.TEXT, false);
             graphics.drawString(font, font.plainSubstrByWidth(owner.detail.apply(item), width - 8),
                     left + 3, top + 16, GuiTheme.MUTED, false);
+        }
+
+        private void renderVehicleButton(GuiGraphics graphics, ListEntryImage texture,
+                                         int left, int top, int width, int height) {
+            // The 512x512 template contains a 320x64 button with its divider at x=90.
+            int divider = width * 90 / 320;
+            graphics.enableScissor(left, top, left + width, top + height);
+            RenderSystem.enableBlend();
+            RenderSystem.defaultBlendFunc();
+            try {
+                graphics.blit(VEHICLE_BUTTON_BACKGROUND, left, top, width, height,
+                        0, 0, 320, 64, 512, 512);
+                if (texture != null) {
+                    int imageLeft = left + divider + 4;
+                    int w = (int)Math.floor(texture.width() * texture.pixelScale());
+                    int h = (int)Math.floor(texture.height() * texture.pixelScale());
+                    graphics.enableScissor(imageLeft, top + 2, left + width - 4, top + height - 2);
+                    try {
+                        graphics.blit(texture.id(), imageLeft, top + (height - h) / 2,
+                                w, h, 0, 0, texture.width(), texture.height(), texture.width(), texture.height());
+                    } finally {
+                        graphics.disableScissor();
+                    }
+                }
+                var font = owner.minecraft.font;
+                float textScale = 1.5f;
+                var label = owner.label.apply(item).copy().withStyle(style -> style.withBold(true));
+                var lines = font.split(label, (int)((divider - 6) / textScale));
+                int count = Math.min(lines.size(), (int)((height - 4) / (font.lineHeight * textScale)));
+                graphics.enableScissor(left + 3, top + 2, left + divider - 3, top + height - 2);
+                graphics.pose().pushPose();
+                try {
+                    graphics.pose().translate(left + divider / 2.0f,
+                            top + (height - count * font.lineHeight * textScale) / 2, 0);
+                    graphics.pose().scale(textScale, textScale, 1);
+                    for (int i = 0; i < count; i++) {
+                        var line = lines.get(i);
+                        int x = -font.width(line) / 2;
+                        int y = i * font.lineHeight;
+                        graphics.pose().pushPose();
+                        try {
+                            graphics.pose().translate(1 / textScale, 1 / textScale, 0);
+                            graphics.drawString(font, line, x, y, 0xFFFFFFFF, false);
+                        } finally {
+                            graphics.pose().popPose();
+                        }
+                        graphics.drawString(font, line, x, y, 0xFF202020, false);
+                    }
+                } finally {
+                    graphics.pose().popPose();
+                    graphics.disableScissor();
+                }
+            } finally {
+                RenderSystem.disableBlend();
+                graphics.disableScissor();
+            }
         }
     }
 }

@@ -49,14 +49,14 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.lwjgl.opengl.GL11;
 
-/** Persistent IR thumbnails. Disk preparation is separate from render-thread generation and texture ownership. */
+/** Persistent model thumbnails. Disk preparation is separate from render-thread generation and texture ownership. */
 public final class ClientThumbnailManager extends SimplePreparableReloadListener<ClientThumbnailManager.Prepared> {
     public static final ClientThumbnailManager INSTANCE = new ClientThumbnailManager();
     private static final Logger LOGGER = LoggerFactory.getLogger(ClientThumbnailManager.class);
     private static final float VEHICLE_GUI_PIXELS_PER_BLOCK = 8;
     private static final float RAIL_GUI_PIXELS_PER_BLOCK = 27.6f;
     // Bump when framing, lighting, import appearance or alpha processing changes.
-    private static final String RECIPE = "7:" + PreviewRenderer.THUMBNAIL_WIDTH + "x" + PreviewRenderer.THUMBNAIL_HEIGHT
+    private static final String RECIPE = "8:" + PreviewRenderer.THUMBNAIL_WIDTH + "x" + PreviewRenderer.THUMBNAIL_HEIGHT
             + ":capture-ppb=" + PreviewRenderer.THUMBNAIL_PIXELS_PER_BLOCK
             + ":vehicle-gui-ppb=" + VEHICLE_GUI_PIXELS_PER_BLOCK + ":rail-gui-ppb=" + RAIL_GUI_PIXELS_PER_BLOCK
             + ":distance=" + PreviewRenderer.THUMBNAIL_DISTANCE
@@ -89,9 +89,9 @@ public final class ClientThumbnailManager extends SimplePreparableReloadListener
     }
 
     public ListEntryImage vehicleImage(VehicleDefinition definition) {
-        return definition.parts().getFirst().source().format() == ModelSource.Format.IR_OBJ
-                ? request(new Key(Kind.VEHICLE, definition.id()))
-                : ClientButtonTextureManager.INSTANCE.texture(definition.buttonTexture());
+        var button = ClientButtonTextureManager.INSTANCE.texture(definition.buttonTexture());
+        return definition.parts().getFirst().source().format() != ModelSource.Format.IR_OBJ && button != null
+                ? button : request(new Key(Kind.VEHICLE, definition.id()));
     }
 
     public ListEntryImage railImage(RailDefinition definition) {
@@ -149,7 +149,7 @@ public final class ClientThumbnailManager extends SimplePreparableReloadListener
     }
 
     private void fail(Key key, RuntimeException exception) {
-        if (failed.add(key)) LOGGER.warn("Unable to generate {} thumbnail {}; using text entry: {}",
+        if (failed.add(key)) LOGGER.warn("Unable to generate {} thumbnail {}; using label fallback: {}",
                 key.kind(), key.id(), exception.getMessage());
     }
 
@@ -162,9 +162,7 @@ public final class ClientThumbnailManager extends SimplePreparableReloadListener
         }
         var configs = new LinkedHashMap<Key, PackageAsset>();
         for (var definition : VehicleCatalog.all()) {
-            if (definition.parts().getFirst().source().format() == ModelSource.Format.IR_OBJ) {
-                configs.put(new Key(Kind.VEHICLE, definition.id()), definition.config());
-            }
+            configs.put(new Key(Kind.VEHICLE, definition.id()), definition.config());
         }
         for (var definition : RailCatalog.all()) {
             if (definition.source().format() == RailDefinition.Format.IR_OBJ) {

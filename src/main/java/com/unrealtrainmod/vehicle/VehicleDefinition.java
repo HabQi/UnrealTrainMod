@@ -7,19 +7,18 @@ package com.unrealtrainmod.vehicle;
 import com.unrealtrainmod.model.ModelBounds;
 import com.unrealtrainmod.model.ModelData;
 import com.unrealtrainmod.model.ModelSource;
+import com.unrealtrainmod.compat.ir.IrVehicleDefinition;
 import com.unrealtrainmod.resource.PackageAsset;
 import com.unrealtrainmod.track.geometry.TrackVector;
 import java.util.List;
-import java.util.Map;
 import net.minecraft.resources.ResourceLocation;
 
 public record VehicleDefinition(ResourceLocation id, String name, PackageAsset config, PackageAsset buttonTexture, String trainType,
                                 List<Instance> parts, ModelBounds bounds, VehicleMotionSpec motionSpec,
                                 VehiclePerformanceSpec performanceSpec, VehicleInteriorSpec interiorSpec,
-                                Map<String, Float> irControlDefaults) {
+                                IrVehicleDefinition ir) {
     public VehicleDefinition {
         parts = List.copyOf(parts);
-        irControlDefaults = Map.copyOf(irControlDefaults);
     }
     /**
      * Bounds and pivot are source-local; offset retains the original static assembly. Door actions belong to
@@ -46,17 +45,17 @@ public record VehicleDefinition(ResourceLocation id, String name, PackageAsset c
                     new TrackVector(0, 0, z), part.bounds(), part.actions());
         }).toList();
         return new VehicleDefinition(id, name, config, buttonTexture, trainType, calibrated, bounds, spec, performanceSpec,
-                interiorSpec, irControlDefaults);
+                interiorSpec, ir);
     }
 
     public VehicleDefinition withPerformanceSpec(VehiclePerformanceSpec spec) {
         return new VehicleDefinition(id, name, config, buttonTexture, trainType, parts, bounds, motionSpec, spec,
-                interiorSpec, irControlDefaults);
+                interiorSpec, ir);
     }
 
     public VehicleDefinition withInteriorSpec(VehicleInteriorSpec spec) {
         return new VehicleDefinition(id, name, config, buttonTexture, trainType, parts, bounds, motionSpec,
-                performanceSpec, spec, irControlDefaults);
+                performanceSpec, spec, ir);
     }
 
     public String packName() { return config.archive().getFileName().toString(); }

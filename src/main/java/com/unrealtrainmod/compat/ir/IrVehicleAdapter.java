@@ -118,20 +118,8 @@ final class IrVehicleAdapter {
                     new TrackVector(0, 0, z), builder.build(), VehicleActions.NONE));
         });
         return new VehicleDefinition(id, name, config, null, type, parts, bounds, spec,
-                VehiclePerformanceSpec.DEFAULT, VehicleInteriorSpec.fromBounds(bounds, floorY), readControlDefaults(json));
-    }
-
-    private static Map<String, Float> readControlDefaults(JsonObject json) throws IOException {
-        var controls = GsonHelper.getAsJsonObject(json, "controls", new JsonObject());
-        var defaults = new HashMap<String, Float>();
-        for (var entry : controls.entrySet()) {
-            float value = GsonHelper.getAsFloat(GsonHelper.convertToJsonObject(entry.getValue(), entry.getKey()), "default", 0);
-            if (!Float.isFinite(value) || value < 0 || value > 1) {
-                throw new IOException("IR control default must be between 0 and 1: " + entry.getKey());
-            }
-            defaults.put(entry.getKey(), value);
-        }
-        return Map.copyOf(defaults);
+                VehiclePerformanceSpec.DEFAULT, VehicleInteriorSpec.fromBounds(bounds, floorY),
+                IrVehicleDefinitions.read(json, rawParts.keySet(), archive, prefix));
     }
 
     private static double readFloorY(JsonObject json, Map<String, ModelBounds> rawParts, double scale,
@@ -169,7 +157,7 @@ final class IrVehicleAdapter {
 
     static JsonObject readJson(PackageArchive archive, String entry) throws IOException {
         try (var reader = new InputStreamReader(archive.open(entry), StandardCharsets.UTF_8.newDecoder())) {
-            // Keep IR trailing-comma compatibility, including animation arrays not yet interpreted.
+            // IR packages may contain trailing commas in animation arrays.
             return GsonHelper.parse(reader, true);
         }
     }

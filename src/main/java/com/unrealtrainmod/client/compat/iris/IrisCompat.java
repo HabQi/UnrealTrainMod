@@ -142,6 +142,7 @@ public final class IrisCompat {
         }
         IrisVehicleReprojection.beginFrame();
         IrisGeometryCache.beginFrame();
+        IrisRenderStats.beginFrame();
         TrackWorldRenderer.beginFrame();
         com.unrealtrainmod.client.texture.PbrLoadQueue.beginFrame(active);
     }
