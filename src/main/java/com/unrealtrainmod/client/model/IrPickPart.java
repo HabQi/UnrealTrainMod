@@ -4,12 +4,12 @@
  */
 package com.unrealtrainmod.client.model;
 
-import com.unrealtrainmod.compat.ir.IrControlDefinition;
+import com.unrealtrainmod.compat.ir.IrModelControl;
 import net.minecraft.world.phys.AABB;
 
 /** Source geometry and its render chain; non-controls participate in occlusion too. */
 public record IrPickPart(ModelPart geometry, AABB bounds, IrModelPart motion,
-                         String group, IrControlDefinition.Type type) {
+                         String key, IrModelControl control) {
     public static AABB bounds(ModelPart part) {
         double minX = Double.POSITIVE_INFINITY, minY = minX, minZ = minX;
         double maxX = Double.NEGATIVE_INFINITY, maxY = maxX, maxZ = maxX;

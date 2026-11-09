@@ -4,19 +4,28 @@
  */
 package com.unrealtrainmod.train;
 
-/** Independent traction (0..5) and service brake (0..8) notches. */
+/** Normalized controls with vehicle-specific traction notches and eight service brake notches. */
 public final class TrainControlProfile {
     public static final int BRAKE_NOTCHES = 8;
     public static final int POWER_NOTCHES = 5;
     private TrainControlProfile() {}
 
     public static TrainControlState control(int power, int brake, TrainControlState.Reverser reverser, boolean emergency) {
-        return new TrainControlState(reverser, emergency ? 0 : power / (double) POWER_NOTCHES,
+        return control(power, brake, reverser, emergency, POWER_NOTCHES);
+    }
+
+    public static TrainControlState control(int power, int brake, TrainControlState.Reverser reverser, boolean emergency,
+                                             int powerNotches) {
+        return new TrainControlState(reverser, emergency ? 0 : power / (double) powerNotches,
                 brake / (double) BRAKE_NOTCHES, emergency);
     }
 
     public static int powerNotch(TrainControlState control) {
-        return (int) Math.round(control.throttle() * POWER_NOTCHES);
+        return powerNotch(control, POWER_NOTCHES);
+    }
+
+    public static int powerNotch(TrainControlState control, int powerNotches) {
+        return (int) Math.round(control.throttle() * powerNotches);
     }
 
     public static int brakeNotch(TrainControlState control) {

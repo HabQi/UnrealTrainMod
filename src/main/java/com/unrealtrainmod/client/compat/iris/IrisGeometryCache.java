@@ -28,7 +28,6 @@ import org.joml.Matrix4f;
 
 /** Local geometry only. Light, identity, view matrices and shaders never belong to this cache. */
 public final class IrisGeometryCache {
-    private static final long LIMIT = 256L * 1024 * 1024;
     private static final long LIGHT_SOFT_LIMIT = 64L * 1024 * 1024;
     /** Helian's emissive surface multiplies the tagged color by its PBR brightness term. */
     static final float LIGHT_COLOR_SCALE = 0.55f;
@@ -45,14 +44,20 @@ public final class IrisGeometryCache {
         final Long2ObjectOpenHashMap<Range> ranges = new Long2ObjectOpenHashMap<>();
         Layout layout;
         long requestedFrame = -1;
+        long requestedNanos;
         boolean dirty;
         SharedEntry(SharedKey key) { this.key = key; }
     }
     private static final class Entry {
         final Key key;
         long requestedFrame;
+        long requestedNanos;
         Mesh gpu;
-        Entry(Key key) { this.key = key; }
+        Entry(Key key) {
+            this.key = key;
+            requestedFrame = frame;
+            requestedNanos = frameNanos;
+        }
     }
     static final class Storage implements AutoCloseable {
         final long order = nextStorageOrder++;
@@ -100,7 +105,8 @@ public final class IrisGeometryCache {
     private static final LinkedHashMap<SharedKey, SharedEntry> SHARED = new LinkedHashMap<>(64, 0.75f, true);
     private static final ArrayDeque<SharedEntry> DIRTY = new ArrayDeque<>();
     private static long frame, bytes, lightBytes, peakBytes, windowBytes, windowBuilds, windowNanos,
-            windowLightEvictions, lastLog = System.nanoTime();
+            windowMaxBuildNanos, windowBaseEvictions, windowEvictedBytes, windowLightEvictions,
+            lastLog = System.nanoTime(), frameNanos = lastLog;
     private static long sharedBytes, sharedBuilds, sharedRebuilds, sharedUploads, sharedAdded;
     private static int sharedBuffers, sharedRanges;
     private static long nextStorageOrder;
@@ -112,7 +118,14 @@ public final class IrisGeometryCache {
     public static long peakBytes() { return peakBytes; }
     public static int pending() { return PENDING.size() + DIRTY.size(); }
 
-    public static void beginFrame() { frame++; }
+    public static void beginFrame() {
+        frame++;
+        frameNanos = System.nanoTime();
+    }
+
+    private static long limitBytes() {
+        return (long) ClientConfig.IRIS_GEOMETRY_CACHE_MIB.get() * 1024 * 1024;
+    }
 
     /** Iris packs transform tangent XYZ with the normal matrix; reflected/sheared scales need CPU tangents. */
     public static boolean supportsPose(Matrix4f m) {
@@ -157,6 +170,7 @@ public final class IrisGeometryCache {
         var entry = registerOpaque(mesh, first, count, opaque);
         var view = entry.ranges.get(((long) first << 32) | (count & 0xffffffffL)).mesh;
         entry.requestedFrame = frame;
+        entry.requestedNanos = frameNanos;
         IrisRenderStats.cache(view.ready());
         if (!view.ready() && !entry.dirty) {
             entry.dirty = true;
@@ -193,8 +207,7 @@ public final class IrisGeometryCache {
                 complete = false;
                 LoggerFactory.getLogger(IrisGeometryCache.class).warn("Cannot cache shared Iris opaque geometry; keeping CPU submission", exception);
             }
-            windowNanos += System.nanoTime() - begun;
-            windowBuilds++;
+            recordBuild(begun);
         }
         return complete;
     }
@@ -234,7 +247,7 @@ public final class IrisGeometryCache {
         var view = entry.ranges.get(((long) first << 32) | (count & 0xffffffffL)).mesh;
         if (view.ready()) return true;
         long size = (long) layout(entry).vertices * IrisCompat.entityVertexSize();
-        if (bytes - entry.storage.bytes + size > LIMIT / 2) return false;
+        if (bytes - lightBytes - entry.storage.bytes + size > limitBytes() / 2) return false;
         requestVehicleOpaque(mesh, first, count, opaque);
         uploadVehicleOpaque();
         return view.ready();
@@ -286,6 +299,7 @@ public final class IrisGeometryCache {
             } else PENDING.addLast(entry);
         }
         entry.requestedFrame = frame;
+        entry.requestedNanos = frameNanos;
         IrisRenderStats.cache(hit, light);
         return entry.gpu;
     }
@@ -295,7 +309,7 @@ public final class IrisGeometryCache {
         var key = new Key(mesh, first, count, opaque, false);
         var entry = ENTRIES.get(key);
         if (entry != null) return entry.gpu != null;
-        if (bytes + (long)count * IrisCompat.entityVertexSize() > LIMIT / 2) return false;
+        if (bytes - lightBytes + (long)count * IrisCompat.entityVertexSize() > limitBytes() / 2) return false;
         entry = new Entry(key);
         ENTRIES.put(key, entry);
         build(entry);
@@ -314,7 +328,13 @@ public final class IrisGeometryCache {
         } catch (RuntimeException exception) {
             LoggerFactory.getLogger(IrisGeometryCache.class).warn("Cannot cache Iris geometry; keeping CPU submission", exception);
         }
-        windowNanos += System.nanoTime() - begun;
+        recordBuild(begun);
+    }
+
+    private static void recordBuild(long begun) {
+        long elapsed = System.nanoTime() - begun;
+        windowNanos += elapsed;
+        windowMaxBuildNanos = Math.max(windowMaxBuildNanos, elapsed);
         windowBuilds++;
     }
 
@@ -329,40 +349,54 @@ public final class IrisGeometryCache {
             built++;
         }
         long baseBytes = bytes - lightBytes;
-        if (baseBytes > LIMIT) {
+        long limit = limitBytes();
+        double retentionSeconds = ClientConfig.IRIS_GEOMETRY_CACHE_RETENTION_SECONDS.get();
+        long idleBefore = frameNanos - (long) (retentionSeconds * 1_000_000_000L);
+        if (baseBytes > limit) {
             var iterator = ENTRIES.values().iterator();
-            while (baseBytes > LIMIT && iterator.hasNext()) {
+            while (baseBytes > limit && iterator.hasNext()) {
                 var entry = iterator.next();
-                if (entry.gpu == null || entry.key.light || entry.requestedFrame >= frame - 1) continue;
+                if (entry.gpu == null || entry.key.light || entry.requestedFrame >= frame - 1
+                        || entry.requestedNanos > idleBefore) continue;
                 bytes -= entry.gpu.storage.bytes;
                 baseBytes -= entry.gpu.storage.bytes;
+                windowBaseEvictions++;
+                windowEvictedBytes += entry.gpu.storage.bytes;
                 entry.gpu.storage.close();
                 iterator.remove();
             }
         }
-        if (baseBytes > LIMIT) {
+        if (baseBytes > limit) {
             var iterator = SHARED.values().iterator();
-            while (baseBytes > LIMIT && iterator.hasNext()) {
+            while (baseBytes > limit && iterator.hasNext()) {
                 var entry = iterator.next();
-                if (entry.requestedFrame >= frame - 1) continue;
+                if (entry.storage.buffer == null || entry.requestedFrame >= frame - 1
+                        || entry.requestedNanos > idleBefore) continue;
                 baseBytes -= entry.storage.bytes;
+                windowBaseEvictions++;
+                windowEvictedBytes += entry.storage.bytes;
                 DIRTY.remove(entry);
-                releaseShared(entry);
-                iterator.remove();
+                entry.dirty = false;
+                // Keep registered ranges/layout so the next use restores this source in one upload.
+                releaseSharedStorage(entry);
             }
         }
         trimLights(0);
         if (System.nanoTime() - lastLog >= 5_000_000_000L) {
             if (ClientConfig.LOG_VEHICLE_INSTANCING_STATS.getAsBoolean() || ClientConfig.LOG_TRACK_RENDER_STATS.getAsBoolean()) {
                 LoggerFactory.getLogger("UnrealTrainMod/Iris").info(
-                        "Iris geometry cache: resident={}B lightResident={}B peak={}B softLimit={}B lightSoftLimit={}B lightOverBudget={}B lightEvictions={} pending={} builds={} upload={}B buildCpu={}ms "
+                        "Iris geometry cache: resident={}B lightResident={}B peak={}B softLimit={}B baseOverBudget={}B idleRetention={}s baseEvictions={} evicted={}B lightSoftLimit={}B lightOverBudget={}B lightEvictions={} pending={} builds={} upload={}B buildCpu={}ms maxBuildCpu={}ms "
                                 + "| opaqueShared resident={}B buffers={} registeredRanges={} builds={} rebuilds={} upload={}B added={}B",
-                        bytes, lightBytes, peakBytes, LIMIT, LIGHT_SOFT_LIMIT, Math.max(0L, lightBytes - LIGHT_SOFT_LIMIT),
+                        bytes, lightBytes, peakBytes, limit, Math.max(0L, bytes - lightBytes - limit),
+                        retentionSeconds, windowBaseEvictions, windowEvictedBytes,
+                        LIGHT_SOFT_LIMIT, Math.max(0L, lightBytes - LIGHT_SOFT_LIMIT),
                         windowLightEvictions, pending(), windowBuilds, windowBytes, windowNanos / 1_000_000.0,
+                        windowMaxBuildNanos / 1_000_000.0,
                         sharedBytes, sharedBuffers, sharedRanges, sharedBuilds, sharedRebuilds, sharedUploads, sharedAdded);
             }
             lastLog = System.nanoTime();
             windowBytes = windowBuilds = windowNanos = windowLightEvictions = 0;
+            windowMaxBuildNanos = windowBaseEvictions = windowEvictedBytes = 0;
             sharedBuilds = sharedRebuilds = sharedUploads = sharedAdded = 0;
         }
     }
@@ -421,11 +455,17 @@ public final class IrisGeometryCache {
     }
 
     private static void releaseShared(SharedEntry entry) {
+        releaseSharedStorage(entry);
+        sharedRanges -= entry.ranges.size();
+    }
+
+    private static void releaseSharedStorage(SharedEntry entry) {
         if (entry.storage.buffer != null) sharedBuffers--;
         bytes -= entry.storage.bytes;
         sharedBytes -= entry.storage.bytes;
-        sharedRanges -= entry.ranges.size();
         entry.storage.close();
+        entry.storage.bytes = 0;
+        for (var range : entry.ranges.values()) range.mesh.firstVertex = -1;
     }
 
     private static int scaleRgb(int color) {
@@ -442,6 +482,7 @@ public final class IrisGeometryCache {
         SHARED.values().forEach(entry -> entry.storage.close());
         SHARED.clear(); DIRTY.clear();
         bytes = lightBytes = peakBytes = windowBytes = windowBuilds = windowNanos = windowLightEvictions = 0;
+        windowMaxBuildNanos = windowBaseEvictions = windowEvictedBytes = 0;
         sharedBytes = sharedBuilds = sharedRebuilds = sharedUploads = sharedAdded = 0;
         sharedBuffers = sharedRanges = 0;
         lastLog = System.nanoTime();

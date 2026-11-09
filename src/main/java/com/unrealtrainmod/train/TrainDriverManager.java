@@ -7,7 +7,6 @@ package com.unrealtrainmod.train;
 import com.unrealtrainmod.UnrealTrainMod;
 import com.unrealtrainmod.entity.TrainEntity;
 import com.unrealtrainmod.compat.ir.IrReadout;
-import com.unrealtrainmod.compat.ir.IrControlDefinition;
 import com.unrealtrainmod.network.payload.TrainControlInputPayload;
 import com.unrealtrainmod.network.payload.TrainIrControlInputPayload;
 import com.unrealtrainmod.network.payload.TrainControlSyncPayload;
@@ -51,6 +50,11 @@ public final class TrainDriverManager {
     public boolean isDriver(ServerPlayer player, TrainEntity entity) {
         var session = sessions.get(player.getUUID());
         return session != null && session.player == player && session.vehicle.equals(entity.getUUID());
+    }
+
+    boolean authorized(ServerPlayer player, TrainEntity entity) {
+        var session = sessions.get(player.getUUID());
+        return session != null && session.player == player && session.vehicle.equals(entity.getUUID()) && valid(session);
     }
 
     public boolean board(ServerPlayer player, TrainEntity entity) {
@@ -118,73 +122,25 @@ public final class TrainDriverManager {
                 || sequence <= session.sequence) return null;
         session.sequence = sequence;
         session.silentTicks = 0;
+        manager.irControls().touchDriver(player);
         return session;
     }
 
     private void irInput(ServerPlayer player, TrainIrControlInputPayload payload) {
         var session = acceptInput(player, payload.session(), payload.sequence());
         if (session == null) return;
-        Feedback feedback = Feedback.NONE;
-        try {
-            if (!Float.isFinite(payload.value()) || payload.value() < 0 || payload.value() > 1) {
-                throw new IllegalArgumentException("Invalid IR control value");
-            }
-            if (payload.pulse() && payload.value() != 1) throw new IllegalArgumentException("Invalid pulse target");
-            var entity = (TrainEntity) player.getVehicle();
-            var operation = payload.operation();
-            var definition = VehicleCatalog.find(entity.getModelId()).ir();
-            var control = definition.controls().get(payload.group());
-            if (control == null) throw new IllegalArgumentException("Unknown IR control");
-            if (operation != TrainIrControlInputPayload.Operation.CLICK && payload.pulse()) {
-                throw new IllegalArgumentException("Only clicks can pulse a control");
-            }
-            if (operation == TrainIrControlInputPayload.Operation.END) {
-                if (payload.group().equals(session.irSoundGroup)) {
-                    if (control.readOnly()) feedback = irDrivingTarget(session, control.driver(), payload.value());
-                    else if (control.type() != IrControlDefinition.Type.PRESS) entity.setIrControl(payload.group(), payload.value(), false);
-                    endControlSound(session);
-                }
-            } else {
-                if (operation == TrainIrControlInputPayload.Operation.UPDATE && !payload.group().equals(session.irSoundGroup)) {
-                    throw new IllegalArgumentException("Control is not held by this session");
-                }
-                var snapshot = entity.irSnapshot();
-                float previous = definition.value(payload.group(), snapshot.values(), entity.runtimeState(),
-                        snapshot.frontCoupled(), snapshot.rearCoupled());
-                if (operation == TrainIrControlInputPayload.Operation.BEGIN) endControlSound(session);
-                if (control.readOnly()) {
-                    if (payload.pulse()) throw new IllegalArgumentException("Driving controls cannot pulse");
-                    feedback = irDrivingTarget(session, control.driver(), payload.value());
-                } else if (operation == TrainIrControlInputPayload.Operation.BEGIN && control.type() == IrControlDefinition.Type.PRESS) {
-                    if (payload.value() != 1) throw new IllegalArgumentException("Held press must be on");
-                    entity.holdIrControl(session.id, payload.group());
-                } else entity.setIrControl(payload.group(), payload.value(), payload.pulse());
-                if (feedback != Feedback.NONE) {
-                    endControlSound(session);
-                    send(session, true, feedback);
-                    return;
-                }
-                if (operation == TrainIrControlInputPayload.Operation.BEGIN) {
-                    session.irSoundGroup = payload.group();
-                    session.nativeSoundControl = control.driver();
-                    entity.beginIrControlSound(session.id, payload.group(), null, session.front.sign());
-                } else if (operation == TrainIrControlInputPayload.Operation.CLICK) {
-                    endControlSound(session);
-                    entity.clickIrControlSound(payload.group(), null, session.front.sign(), previous, payload.value());
-                }
-            }
-        } catch (IllegalArgumentException exception) {
-            endControlSound(session);
-            feedback = Feedback.IR_CONTROL_UNAVAILABLE;
-        }
+        var feedback = manager.irControls().panelInput(player, (TrainEntity)player.getVehicle(), payload, session.front.sign());
         for (var driver : sessionsFor(session.train)) send(driver, true, driver == session ? feedback : Feedback.NONE);
     }
 
     /** Model controls use the vehicle's front; keyboard/HUD controls use the driver's chosen front. */
-    private Feedback irDrivingTarget(TrainDriverSession session, IrReadout driver, float value) {
+    Feedback irDrivingTarget(ServerPlayer player, TrainEntity entity, IrReadout driver, float value) {
+        var session = sessions.get(player.getUUID());
+        if (!authorized(player, entity)) return Feedback.IR_CONTROL_UNAVAILABLE;
         var train = session.train;
         var old = train.control();
-        int power = TrainControlProfile.powerNotch(old), brake = TrainControlProfile.brakeNotch(old);
+        int notches = powerNotches(session);
+        double power = old.throttle(), brake = old.trainBrake();
         var reverser = old.reverser();
         if (driver == IrReadout.REVERSER) {
             int direction = Math.round(value * 2) - 1;
@@ -196,18 +152,25 @@ public final class TrainDriverManager {
         } else {
             if (old.emergencyBrake()) return Feedback.EMERGENCY_LOCKED;
             if (driver == IrReadout.THROTTLE) {
-                power = Math.round(value * TrainControlProfile.POWER_NOTCHES);
+                power = Math.round(value * notches) / (double)notches;
                 if (power > 0) brake = 0;
             } else if (driver == IrReadout.TRAIN_BRAKE) {
-                brake = Math.round(value * TrainControlProfile.BRAKE_NOTCHES);
+                brake = Math.round(value * TrainControlProfile.BRAKE_NOTCHES) / (double)TrainControlProfile.BRAKE_NOTCHES;
                 if (brake > 0) power = 0;
             } else if (driver == IrReadout.THROTTLE_BRAKE) {
-                power = Math.round(Math.max(0, value * 2 - 1) * TrainControlProfile.POWER_NOTCHES);
-                brake = Math.round(Math.max(0, 1 - value * 2) * TrainControlProfile.BRAKE_NOTCHES);
+                var target = TrainControlProfile.control(Math.round(Math.max(0, value * 2 - 1) * notches),
+                        Math.round(Math.max(0, 1 - value * 2) * TrainControlProfile.BRAKE_NOTCHES),
+                        reverser, false, notches);
+                power = target.throttle();
+                brake = target.trainBrake();
             } else throw new IllegalArgumentException("Unsupported driving control");
         }
-        train.setControl(TrainControlProfile.control(power, brake, reverser, old.emergencyBrake()));
+        train.setControl(new TrainControlState(reverser, power, brake, old.emergencyBrake()));
         return Feedback.NONE;
+    }
+
+    private static int powerNotches(TrainDriverSession session) {
+        return VehicleCatalog.find(session.train.member(session.vehicle).modelId()).ir().throttleNotches();
     }
 
     private void input(ServerPlayer player, TrainControlInputPayload payload) {
@@ -215,13 +178,15 @@ public final class TrainDriverManager {
         if (session == null) return;
         var action = payload.action();
         if (action == TrainControlInputPayload.Action.HEARTBEAT) return;
+        int notches = powerNotches(session);
         if (action == TrainControlInputPayload.Action.POWER_SET
-                && (payload.notch() < 0 || payload.notch() > TrainControlProfile.POWER_NOTCHES)) return;
+                && (payload.notch() < 0 || payload.notch() > notches)) return;
         if (action == TrainControlInputPayload.Action.BRAKE_SET
                 && (payload.notch() < 0 || payload.notch() > TrainControlProfile.BRAKE_NOTCHES)) return;
         var train = session.train;
         var old = train.control();
-        int power = TrainControlProfile.powerNotch(old), brake = TrainControlProfile.brakeNotch(old);
+        int powerNotch = TrainControlProfile.powerNotch(old, notches), brakeNotch = TrainControlProfile.brakeNotch(old);
+        double power = old.throttle(), brake = old.trainBrake();
         var reverser = old.reverser();
         boolean emergency = old.emergencyBrake();
         boolean controlChange = true;
@@ -231,20 +196,20 @@ public final class TrainDriverManager {
                 if (emergency) feedback = Feedback.EMERGENCY_LOCKED;
                 else if (action == TrainControlInputPayload.Action.HANDLE_UP) {
                     if (brake > 0) brake = 0;
-                    else power = Math.min(TrainControlProfile.POWER_NOTCHES, power + 1);
+                    else power = Math.min(notches, powerNotch + 1) / (double)notches;
                 } else {
                     if (power > 0) power = 0;
-                    else brake = Math.min(TrainControlProfile.BRAKE_NOTCHES, brake + 1);
+                    else brake = Math.min(TrainControlProfile.BRAKE_NOTCHES, brakeNotch + 1) / (double)TrainControlProfile.BRAKE_NOTCHES;
                 }
             }
             case POWER_SET, BRAKE_SET, POWER_UP, POWER_DOWN, BRAKE_UP, BRAKE_DOWN -> {
                 if (emergency) feedback = Feedback.EMERGENCY_LOCKED;
-                else if (action == TrainControlInputPayload.Action.POWER_SET) power = payload.notch();
-                else if (action == TrainControlInputPayload.Action.BRAKE_SET) brake = payload.notch();
-                else if (action == TrainControlInputPayload.Action.POWER_UP) power = Math.min(TrainControlProfile.POWER_NOTCHES, power + 1);
-                else if (action == TrainControlInputPayload.Action.POWER_DOWN) power = Math.max(0, power - 1);
-                else if (action == TrainControlInputPayload.Action.BRAKE_UP) brake = Math.min(TrainControlProfile.BRAKE_NOTCHES, brake + 1);
-                else brake = Math.max(0, brake - 1);
+                else if (action == TrainControlInputPayload.Action.POWER_SET) power = payload.notch() / (double)notches;
+                else if (action == TrainControlInputPayload.Action.BRAKE_SET) brake = payload.notch() / (double)TrainControlProfile.BRAKE_NOTCHES;
+                else if (action == TrainControlInputPayload.Action.POWER_UP) power = Math.min(notches, powerNotch + 1) / (double)notches;
+                else if (action == TrainControlInputPayload.Action.POWER_DOWN) power = Math.max(0, powerNotch - 1) / (double)notches;
+                else if (action == TrainControlInputPayload.Action.BRAKE_UP) brake = Math.min(TrainControlProfile.BRAKE_NOTCHES, brakeNotch + 1) / (double)TrainControlProfile.BRAKE_NOTCHES;
+                else brake = Math.max(0, brakeNotch - 1) / (double)TrainControlProfile.BRAKE_NOTCHES;
                 // A positive request selects that handle; releasing to zero never restores the other one.
                 if (!emergency) {
                     if ((action == TrainControlInputPayload.Action.POWER_SET && power > 0)
@@ -285,24 +250,20 @@ public final class TrainDriverManager {
             }
             case POWER_HANDLE_BEGIN, BRAKE_HANDLE_BEGIN -> {
                 controlChange = false;
-                endControlSound(session);
-                session.irSoundGroup = null;
-                session.nativeSoundControl = action == TrainControlInputPayload.Action.POWER_HANDLE_BEGIN
-                        ? IrReadout.THROTTLE : IrReadout.TRAIN_BRAKE;
-                ((TrainEntity) player.getVehicle()).beginIrControlSound(session.id, null, session.nativeSoundControl,
-                        session.front.sign());
+                var driver = action == TrainControlInputPayload.Action.POWER_HANDLE_BEGIN ? IrReadout.THROTTLE : IrReadout.TRAIN_BRAKE;
+                manager.irControls().beginNative(player, (TrainEntity)player.getVehicle(), driver, session.front.sign());
             }
             case HANDLE_RELEASE -> { controlChange = false; endControlSound(session); }
             case HEARTBEAT -> { }
         }
         if (controlChange && feedback == Feedback.NONE) {
-            train.setControl(TrainControlProfile.control(power, brake, reverser, emergency));
+            train.setControl(new TrainControlState(reverser, power, brake, emergency));
             var entity = (TrainEntity) player.getVehicle();
-            if (old.throttle() != train.control().throttle() && session.nativeSoundControl != IrReadout.THROTTLE) {
+            if (old.throttle() != train.control().throttle() && !manager.irControls().holdingNative(player, IrReadout.THROTTLE)) {
                 entity.clickIrControlSound(null, IrReadout.THROTTLE, session.front.sign(),
                         (float)old.throttle(), (float)train.control().throttle());
             }
-            if (old.trainBrake() != train.control().trainBrake() && session.nativeSoundControl != IrReadout.TRAIN_BRAKE) {
+            if (old.trainBrake() != train.control().trainBrake() && !manager.irControls().holdingNative(player, IrReadout.TRAIN_BRAKE)) {
                 entity.clickIrControlSound(null, IrReadout.TRAIN_BRAKE, session.front.sign(),
                         (float)old.trainBrake(), (float)train.control().trainBrake());
             }
@@ -428,9 +389,7 @@ public final class TrainDriverManager {
     void closeAll() { for (var session : List.copyOf(sessions.values())) close(session); }
 
     private void endControlSound(TrainDriverSession session) {
-        if (level.getEntity(session.vehicle) instanceof TrainEntity entity) entity.endIrControlSound(session.id);
-        session.irSoundGroup = null;
-        session.nativeSoundControl = null;
+        manager.irControls().release(session.player);
     }
 
     void trackChanged(TrackSegment segment) {
@@ -443,11 +402,12 @@ public final class TrainDriverManager {
 
     private void send(TrainDriverSession session, boolean open, Feedback feedback) {
         var train = session.train;
+        int notches = powerNotches(session);
         int direction = session.direction();
         int monitorDirection = session.updateMonitorDirection();
         var routeProfile = open ? manager.routeProfile(session, monitorDirection) : TrainRouteProfile.EMPTY;
         PacketDistributor.sendToPlayer(session.player, new TrainControlSyncPayload(session.id, level.dimension().location(),
-                train.id(), session.vehicle, session.front, open, session.sequence, TrainControlProfile.powerNotch(train.control()),
+                train.id(), session.vehicle, session.front, open, session.sequence, notches, TrainControlProfile.powerNotch(train.control(), notches),
                 TrainControlProfile.brakeNotch(train.control()),
                 train.control().reverser().inFrame(direction), train.control().emergencyBrake(),
                 direction * train.actualSpeed(), direction * train.dynamics().acceleration(), direction * train.dynamics().grade(),

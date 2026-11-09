@@ -10,7 +10,7 @@ import com.unrealtrainmod.vehicle.VehicleRuntimeState;
 public enum IrReadout {
     SPEED, THROTTLE, REVERSER, TRAIN_BRAKE, COUPLED_FRONT, COUPLED_REAR, UNAVAILABLE, THROTTLE_BRAKE;
 
-    public float sample(VehicleRuntimeState state, float maxSpeedKmh, boolean front, boolean rear) {
+    public float sample(VehicleRuntimeState state, double maxSpeedKmh, boolean front, boolean rear) {
         if (state == null) state = VehicleRuntimeState.IDLE;
         return switch (this) {
             case SPEED -> (float)(Math.abs(state.speed()) * 3.6 / maxSpeedKmh);

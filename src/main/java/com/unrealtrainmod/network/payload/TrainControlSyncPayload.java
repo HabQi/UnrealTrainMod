@@ -17,7 +17,7 @@ import net.minecraft.resources.ResourceLocation;
 
 /** Driver-facing directions and signed motion/force values; includes authoritative input acknowledgement. */
 public record TrainControlSyncPayload(UUID session, ResourceLocation dimension, UUID train, UUID vehicle, TrainCarEnd front,
-                                      boolean open, long sequence, int powerNotch, int brakeNotch, Reverser reverser,
+                                      boolean open, long sequence, int powerNotches, int powerNotch, int brakeNotch, Reverser reverser,
                                       boolean emergency, double speed, double acceleration, double grade,
                                       UUID monitorEpoch, double monitorDistance, int monitorDirection,
                                       TrainRouteProfile routeProfile,
@@ -35,6 +35,7 @@ public record TrainControlSyncPayload(UUID session, ResourceLocation dimension, 
                 buffer.writeEnum(value.front());
                 buffer.writeBoolean(value.open());
                 buffer.writeLong(value.sequence());
+                buffer.writeVarInt(value.powerNotches());
                 buffer.writeVarInt(value.powerNotch());
                 buffer.writeVarInt(value.brakeNotch());
                 buffer.writeEnum(value.reverser());
@@ -57,7 +58,7 @@ public record TrainControlSyncPayload(UUID session, ResourceLocation dimension, 
                 buffer.writeEnum(value.stopReason());
                 buffer.writeEnum(value.feedback());
             }, buffer -> new TrainControlSyncPayload(buffer.readUUID(), buffer.readResourceLocation(), buffer.readUUID(),
-                    buffer.readUUID(), buffer.readEnum(TrainCarEnd.class), buffer.readBoolean(), buffer.readLong(), buffer.readVarInt(), buffer.readVarInt(), buffer.readEnum(Reverser.class),
+                    buffer.readUUID(), buffer.readEnum(TrainCarEnd.class), buffer.readBoolean(), buffer.readLong(), buffer.readVarInt(), buffer.readVarInt(), buffer.readVarInt(), buffer.readEnum(Reverser.class),
                     buffer.readBoolean(), buffer.readDouble(), buffer.readDouble(), buffer.readDouble(),
                     buffer.readUUID(), buffer.readDouble(), buffer.readByte(), readProfile(buffer),
                     buffer.readDouble(), buffer.readDouble(),
@@ -65,6 +66,8 @@ public record TrainControlSyncPayload(UUID session, ResourceLocation dimension, 
     @Override public Type<TrainControlSyncPayload> type() { return TYPE; }
 
     public TrainControlSyncPayload {
+        if (powerNotches < 1 || powerNotches > 64 || powerNotch < 0 || powerNotch > powerNotches
+                || brakeNotch < 0 || brakeNotch > 8) throw new IllegalArgumentException("Invalid driver notches");
         if (!Double.isFinite(monitorDistance) || (monitorDirection != -1 && monitorDirection != 1)) {
             throw new IllegalArgumentException("Invalid monitor coordinates");
         }

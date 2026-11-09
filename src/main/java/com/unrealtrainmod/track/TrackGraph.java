@@ -614,11 +614,11 @@ public final class TrackGraph {
         if (old.revision() != updated.revision()) for (var listener : assemblyListeners) listener.accept(updated);
     }
 
-    /** Validate all requested passages before acquiring any movement reservations. */
+    /** Validate path identity before acquisition; the reservation manager checks physical admission and exclusivity. */
     public void validateTrailingPass(UUID id, List<UUID> owners, String pathId) {
         var value = assembly(id);
         if (!value.definition().supportsTrailingPass() || !value.paths().containsKey(pathId)
-                || value.occupant() != null && !owners.contains(value.occupant())
+                || value.trailingPass() == null && value.occupant() != null && !owners.contains(value.occupant())
                 || value.trailingPass() != null && !value.trailingPass().pathId().equals(pathId)) {
             throw new IllegalArgumentException("Turnout passage is owned by another path or consist");
         }
@@ -635,11 +635,10 @@ public final class TrackGraph {
         onChange.run();
     }
 
-    public void throwTrailingPass(UUID id, List<UUID> owners) {
+    /** Called after a movement has validated its path and acquired shared protection. */
+    public void throwTrailingPass(UUID id) {
         var old = assembly(id);
-        if (old.trailingPass() == null || !owners.contains(old.occupant())) {
-            throw new IllegalArgumentException("No owned trailing passage");
-        }
+        if (old.trailingPass() == null) throw new IllegalArgumentException("No trailing passage");
         var state = old.state();
         for (var control : old.definition().routes().get(old.trailingPass().pathId()).requirements().entrySet()) {
             state = state.withControl(control.getKey(), control.getValue());

@@ -1,6 +1,7 @@
 /* Copyright (c) 2026 HabQi; SPDX-License-Identifier: GPL-3.0-only */
 package com.unrealtrainmod.entity;
 
+import com.unrealtrainmod.UnrealTrainMod;
 import com.unrealtrainmod.wiring.ConnectorData;
 import com.unrealtrainmod.wiring.WiringManager;
 import com.unrealtrainmod.wiring.WiringSavedData;
@@ -13,6 +14,8 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
+import net.minecraft.world.damagesource.DamageSource;
+import net.minecraft.world.damagesource.DamageTypes;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.player.Player;
@@ -58,10 +61,19 @@ public final class ConnectorEntity extends Entity {
     @Override public InteractionResult interact(Player player, InteractionHand hand) {
         if (player instanceof ServerPlayer server) return WiringManager.interact(this, server, hand);
         var stack = player.getItemInHand(hand);
-        boolean action = stack.is(com.unrealtrainmod.UnrealTrainMod.TRACK_WRENCH.get())
-                || stack.is(com.unrealtrainmod.UnrealTrainMod.WIRE.get())
-                || player.isShiftKeyDown() && (stack.isEmpty() || stack.is(com.unrealtrainmod.UnrealTrainMod.INSULATOR.get()));
+        boolean action = stack.is(UnrealTrainMod.TRACK_WRENCH.get())
+                || stack.is(UnrealTrainMod.WIRE.get())
+                || player.isShiftKeyDown() && stack.isEmpty();
         return hand == InteractionHand.MAIN_HAND && player.mayBuild() && action ? InteractionResult.SUCCESS : InteractionResult.PASS;
+    }
+    @Override public boolean hurt(DamageSource source, float amount) {
+        if (!source.is(DamageTypes.PLAYER_ATTACK) || !(source.getDirectEntity() instanceof Player player)
+                || !player.mayBuild() || !player.getMainHandItem().is(UnrealTrainMod.HACKSAW.get())) return false;
+        if (player instanceof ServerPlayer server) {
+            if (!WiringManager.canReach(server, node)) return false;
+            discard();
+        }
+        return true;
     }
     @Override public void remove(RemovalReason reason) {
         super.remove(reason);

@@ -13,6 +13,7 @@ import net.minecraft.nbt.ListTag;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.util.Mth;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.item.context.UseOnContext;
@@ -48,7 +49,7 @@ public final class WiringManager {
         if (!player.mayUseItemAt(pos, context.getClickedFace(), context.getItemInHand())
                 || level.isOutsideBuildHeight(pos) || !level.getWorldBorder().isWithinBounds(pos)) return;
         var node = new ConnectorData(UUID.randomUUID(), model, Vec3.atCenterOf(pos), context.getClickedFace(),
-                Vec3.ZERO, Vec3.ZERO, 0);
+                Vec3.ZERO, new Vec3(0, Mth.wrapDegrees(180 - player.getYRot()), 0), 0);
         var entity = UnrealTrainMod.CONNECTOR.get().create(level);
         if (entity == null) return;
         entity.setUUID(node.id()); entity.apply(node);
@@ -64,8 +65,6 @@ public final class WiringManager {
         if (stack.is(UnrealTrainMod.TRACK_WRENCH.get())) {
             PacketDistributor.sendToPlayer(player, new WiringPayloads.Message(UUID.randomUUID(), WiringPayloads.View.EDITOR,
                     true, "", node.save()));
-        } else if (stack.is(UnrealTrainMod.INSULATOR.get()) && player.isShiftKeyDown()) {
-            graph.removeConnector(node.id()); entity.discard(); cancel(player); WiringSync.changed(level);
         } else if (stack.is(UnrealTrainMod.WIRE.get())) {
             if (player.isShiftKeyDown()) { cancel(player); return InteractionResult.SUCCESS; }
             var model = stack.get(ModDataComponents.SELECTED_WIRE_MODEL.get());

@@ -28,6 +28,9 @@ import com.unrealtrainmod.train.TrainDriverManager;
 import com.unrealtrainmod.train.TrainPassengerManager;
 import com.unrealtrainmod.network.payload.TrainControlInputPayload;
 import com.unrealtrainmod.network.payload.TrainIrControlInputPayload;
+import com.unrealtrainmod.network.payload.TrainIrInteractionPayload;
+import com.unrealtrainmod.network.payload.TrainIrInteractionResultPayload;
+import com.unrealtrainmod.train.IrControlManager;
 import com.unrealtrainmod.network.payload.TrainControlSyncPayload;
 import com.unrealtrainmod.network.payload.TrainWalkInputPayload;
 import com.unrealtrainmod.network.payload.TrainPassengerPosePayload;
@@ -40,12 +43,15 @@ public final class ModPayloads {
     private ModPayloads() {}
 
     public static void register(RegisterPayloadHandlersEvent event) {
-        var registrar = event.registrar("37");
+        var registrar = event.registrar("40");
         com.unrealtrainmod.wiring.WiringPayloads.register(registrar);
         registrar.playToServer(TrainControlInputPayload.TYPE, TrainControlInputPayload.STREAM_CODEC,
                 TrainDriverManager::handleInput);
         registrar.playToServer(TrainIrControlInputPayload.TYPE, TrainIrControlInputPayload.STREAM_CODEC,
                 TrainDriverManager::handleIrInput);
+        registrar.playToServer(TrainIrInteractionPayload.TYPE, TrainIrInteractionPayload.STREAM_CODEC, IrControlManager::handle);
+        registrar.playToClient(TrainIrInteractionResultPayload.TYPE, TrainIrInteractionResultPayload.STREAM_CODEC,
+                (payload, context) -> NeoForge.EVENT_BUS.post(new TrackSyncEvent(payload)));
         registrar.playToServer(TrainWalkInputPayload.TYPE, TrainWalkInputPayload.STREAM_CODEC,
                 TrainPassengerManager::handleInput);
         registrar.playToServer(TrainPassengerPosePayload.TYPE, TrainPassengerPosePayload.STREAM_CODEC,

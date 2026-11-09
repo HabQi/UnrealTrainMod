@@ -15,7 +15,7 @@ import net.minecraft.resources.ResourceLocation;
 public record TrainIrControlInputPayload(UUID session, long sequence, String group, float value, boolean pulse,
                                          Operation operation)
         implements CustomPacketPayload {
-    public enum Operation { CLICK, BEGIN, UPDATE, END }
+    public enum Operation { CLICK, BEGIN, UPDATE, END, HEARTBEAT }
     public static final Type<TrainIrControlInputPayload> TYPE = new Type<>(
             ResourceLocation.fromNamespaceAndPath(UnrealTrainMod.MODID, "train_ir_control_input"));
     public static final StreamCodec<RegistryFriendlyByteBuf, TrainIrControlInputPayload> STREAM_CODEC = StreamCodec.of(

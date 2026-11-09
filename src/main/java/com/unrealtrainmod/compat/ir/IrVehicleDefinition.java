@@ -9,13 +9,19 @@ import java.util.List;
 import java.util.Map;
 
 /** Logical control, animation and sound definitions contain no client runtime objects. */
-public record IrVehicleDefinition(Map<String, IrControlDefinition> controls,
-                                   List<IrAnimationDefinition> animations, float maxSpeedKmh, IrVehicleSounds sounds, IrLightingDefinition lighting) {
-    public static final IrVehicleDefinition NONE = new IrVehicleDefinition(Map.of(), List.of(), 200, IrVehicleSounds.NONE, IrLightingDefinition.NONE);
+public record IrVehicleDefinition(Map<String, IrControlDefinition> controls, Map<String, IrModelControl> modelControls,
+                                   List<IrAnimationDefinition> animations, double maxSpeedKmh, int throttleNotches,
+                                   IrVehicleSounds sounds, IrLightingDefinition lighting) {
+    public static final IrVehicleDefinition NONE = new IrVehicleDefinition(Map.of(), Map.of(), List.of(), 200, 5, IrVehicleSounds.NONE, IrLightingDefinition.NONE);
 
     public IrVehicleDefinition {
         controls = Map.copyOf(controls);
+        modelControls = Map.copyOf(modelControls);
         animations = List.copyOf(animations);
+    }
+
+    public IrVehicleDefinition withMaxSpeedKmh(double speed) {
+        return speed == maxSpeedKmh ? this : new IrVehicleDefinition(controls, modelControls, animations, speed, throttleNotches, sounds, lighting);
     }
 
     public float value(String group, Map<String, Float> values, VehicleRuntimeState state, boolean front, boolean rear) {

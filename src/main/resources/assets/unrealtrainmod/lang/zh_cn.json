@@ -1,7 +1,7 @@
 {
   "itemGroup.unrealtrainmod": "UnrealTrainMod",
   "item.unrealtrainmod.hacksaw": "钢锯",
-  "item.unrealtrainmod.hacksaw.tooltip": "主手持钢锯左键拆除一段 UTM 铁轨；道岔整体拆除，占用时禁止操作。",
+  "item.unrealtrainmod.hacksaw.tooltip": "主手持钢锯左键拆除 UTM 铁轨或绝缘子；道岔整体拆除，占用轨道禁止操作，绝缘子关联电线一并清理。",
   "item.unrealtrainmod.hacksaw.required": "只能使用钢锯左键拆除 UTM 铁轨。",
   "item.unrealtrainmod.hacksaw.removed": "已拆除所选轨道。",
   "item.unrealtrainmod.hacksaw.blocked": "轨道或道岔被车辆占用，暂不能拆除。",
@@ -17,7 +17,7 @@
   "gui.unrealtrainmod.train_debug.occupancy": "占用区间：%s；同段冲突区间：%s（仅报告）",
   "gui.unrealtrainmod.train_debug.interval": "  %s [%s, %s]",
   "gui.unrealtrainmod.train_debug.conflict": "冲突列车 %s；轨道 %s [%s, %s]",
-  "gui.unrealtrainmod.train_debug.turnout": "道岔 %s；占用车辆：%s",
+  "gui.unrealtrainmod.train_debug.turnout": "道岔 %s；保护代表车辆：%s",
   "gui.unrealtrainmod.train_debug.missing": "目标车辆未加载或已移除：%s",
   "gui.unrealtrainmod.train_debug.unavailable": "列车诊断数据不可用；请检查成员身份、资源和存储。",
   "gui.unrealtrainmod.train_debug.clipped": "……更多诊断内容请使用 /utm train info 查询。",
@@ -27,16 +27,23 @@
   "unrealtrainmod.configuration.showActivationWarning.tooltip": "仅为娱乐用途",
   "unrealtrainmod.configuration.section.unrealtrainmod.client.toml": "客户端设置",
   "unrealtrainmod.configuration.section.unrealtrainmod.client.toml.title": "UnrealTrainMod 客户端设置",
+  "unrealtrainmod.configuration.category.debugLogs": "Debug日志",
+  "unrealtrainmod.configuration.category.performance": "性能",
+  "unrealtrainmod.configuration.category.general": "常规",
   "unrealtrainmod.configuration.sortTranslucentTriangles": "透明三角形排序",
   "unrealtrainmod.configuration.sortTranslucentTriangles.tooltip": "默认关闭。未启用静态透明批次时控制车辆透明三角形排序。原生路径关闭此项后仍保留深度计算、索引上传和相邻绘制合并；Iris 动态透明模式仍使用 CPU 顶点提交。启用静态透明批次时忽略此项。适用于世界、预览与 Iris；关闭时重叠透明表面的混合可能不正确。",
   "unrealtrainmod.configuration.useStaticTranslucentBatches": "静态透明批次（性能对照）",
   "unrealtrainmod.configuration.useStaticTranslucentBatches.tooltip": "默认开启。按材质分组绘制静态透明批次，GPU 路径跳过三角形收集、深度计算、排序及动态索引上传。Iris 复用共享 GPU 几何，在不透明光照完成后绘制，避免每帧重写透明顶点。优先于透明排序开关。适用于世界、预览与 Iris；重叠透明表面的混合可能不正确。",
+  "unrealtrainmod.configuration.irisGeometryCacheMiB": "Iris 几何缓存容量（MiB）",
+  "unrealtrainmod.configuration.irisGeometryCacheMiB.tooltip": "软预算范围 64～4096 MiB，默认 1024，按需分配。用于 Iris 车辆、静态透明、物品和轨道部件；提高容量可减少转头时重复上传模型。使用中和最近看过的几何允许超预算，不包含 PBR 纹理及独立车灯缓存。菜单预热最多使用一半预算，修改后无需重载模型。",
+  "unrealtrainmod.configuration.irisGeometryCacheRetentionSeconds": "Iris 几何缓存保留时间（秒）",
+  "unrealtrainmod.configuration.irisGeometryCacheRetentionSeconds.tooltip": "超预算时，几何至少闲置多久才允许回收，范围 0～60 秒，默认 10。转动视角后短暂保留刚看过的模型；当前帧和上一帧使用的几何始终受保护。未超预算时不按时间清理。修改后无需重载模型，不改变独立车灯缓存。",
   "unrealtrainmod.configuration.useVehicleInstancing": "车辆不透明实例化（实验性）",
   "unrealtrainmod.configuration.useVehicleInstancing.tooltip": "默认开启，可关闭后对照。跨可见车辆合并相同 GPU 几何范围与渲染状态的 CUTOUT 及 MIXED 不透明部分，进行索引实例化绘制。不透明绘制按材质分组，透明阶段与 CPU 回退不参与实例化。需要 OpenGL 3.3 和实例化 Shader，不满足时自动使用普通路径。修改后立即生效，无需重载模型。",
   "unrealtrainmod.configuration.logVehicleInstancingStats": "输出车辆渲染统计",
   "unrealtrainmod.configuration.logVehicleInstancingStats.tooltip": "默认关闭。按约五秒窗口分别统计世界与预览的绘制、实例、实际提交三角形、车型数量，以及姿态、脚本、入队、不透明和透明阶段的 CPU 均值与阶段最大值。CPU 分项包含嵌套关系，不能相加；分别异步采样不透明与透明阶段 GPU 时间线跨度，不含两个阶段之间的其它游戏绘制，也不是整帧 GPU 时间。另列原生连续范围合批的姿态编号、签名、归组、排序、合并、清理耗时及工作区扩容计数，模型加载时补充 IR 批次构成。关闭后停止统计并在下次车辆队列帧释放查询。",
   "unrealtrainmod.configuration.useTrackRenderStateCache": "轨道渲染状态复用（实验性）",
-  "unrealtrainmod.configuration.useTrackRenderStateCache.tooltip": "默认关闭。世界轨道绘制共用渲染类型、Shader 程序、贴图采样器和固定方向光；同时开启材质分组时，同材质批次跨网格连续绘制，否则保留原提交顺序。不重建几何，不改变每帧 4 次构建与 4 个批次上传的预算。下一帧起生效；预览与缩略图保持各自的状态作用域。",
+  "unrealtrainmod.configuration.useTrackRenderStateCache.tooltip": "默认开启，可关闭后对照。世界轨道绘制共用渲染类型、Shader 程序、贴图采样器和固定方向光；同时开启材质分组时，同材质批次跨网格连续绘制，否则保留原提交顺序。不重建几何，不改变每帧 4 次构建与 4 个批次上传的预算。下一帧起生效；预览与缩略图保持各自的状态作用域。",
   "unrealtrainmod.configuration.groupTrackDrawsByMaterial": "轨道按材质分组绘制",
   "unrealtrainmod.configuration.groupTrackDrawsByMaterial.tooltip": "默认开启，在轨道渲染状态复用开启时生效。固定轨道按材质分组；道岔刚性部件还按共享网格与归属区块组织实例绘制。材质间提交顺序会改变。下一帧生效，不重建固定几何或重启动画；预览和缩略图不变。",
   "unrealtrainmod.configuration.turnoutAnimationDurationSeconds": "道岔动画时长（秒）",
@@ -192,7 +199,7 @@
   "gui.unrealtrainmod.track_curve.mode_curve": "当前：显式曲线参数",
   "gui.unrealtrainmod.track_curve.pending": "正在提交参数……",
   "gui.unrealtrainmod.track_curve.hint": "修改会实时预览；应用后切换铺设器施工。",
-  "gui.unrealtrainmod.driving.ir_control_unavailable": "该视觉控件暂不可用，或请求的数值无效。",
+  "gui.unrealtrainmod.driving.ir_control_unavailable": "该控件暂不可操作，或请求的数值无效。",
   "gui.unrealtrainmod.driving.ir.title": "控制面板",
   "gui.unrealtrainmod.driving.ir.search": "搜索标签或控制组……",
   "gui.unrealtrainmod.driving.ir.search_short": "搜索……",
@@ -202,6 +209,7 @@
   "gui.unrealtrainmod.driving.ir.on": "开",
   "gui.unrealtrainmod.driving.ir.off": "关",
   "gui.unrealtrainmod.driving.ir.pulse": "触发",
+  "gui.unrealtrainmod.driving.ir.hold": "按住",
   "gui.unrealtrainmod.driving.ir.visual_only": "控制显示动作与音效，不模拟设备物理或电气联锁",
   "gui.unrealtrainmod.driving.ir.details": "%s｜当前 %s｜默认 %s",
   "gui.unrealtrainmod.driving.ir.type.continuous": "连续型",
@@ -262,12 +270,12 @@
   "commands.unrealtrainmod.train.state.consist_not_ready": "编组尚未恢复或路线需要重建；请先恢复所有成员并启动、停稳后再操作",
   "commands.unrealtrainmod.train.state.coupling_rejected": "连挂条件不满足：两列须使用同线路上的空闲端部车钩，第二列整体沿轨调整不得超过 0.5 格，所选车钩距离不得超过默认间隙加 1 格",
   "commands.unrealtrainmod.train.state.uncouple_required": "重新绑定要求单车；请先用撬棍或 /utm train uncouple <vehicle> <front|rear> 解开相连车钩",
-  "commands.unrealtrainmod.train.state.turnout_operation_blocked": "车辆或调整扫过区域触及道岔保护区；请将整列移出道岔后再连挂或解编",
+  "commands.unrealtrainmod.train.state.turnout_operation_blocked": "道岔操作受占用保护限制",
   "commands.unrealtrainmod.train.state.not_coupled": "所选车钩未连接其他车辆，无需解编",
   "commands.unrealtrainmod.train.state.unbound": "尚未绑定轨道，请使用 /utm train bind",
   "commands.unrealtrainmod.train.state.insufficient_route": "路线不足：整列所有转向架必须同时位于同一条有效路线内；请调整线路、车辆参数，或单车的放置及绑定位置",
   "commands.unrealtrainmod.train.state.degenerate_geometry": "车辆姿态无法求解：转向架采样点重合或连线近乎竖直，请调整线路或转向架参数",
-  "commands.unrealtrainmod.train.state.turnout_occupied": "道岔被其他编组占用；整列已停稳，请等待对方整列离开后手动启动",
+  "commands.unrealtrainmod.train.state.turnout_occupied": "挤岔通行受占用保护限制；整列已停稳，请等待其他编组离开或挤岔通路开通后手动启动",
   "commands.unrealtrainmod.train.state.turnout_route_unavailable": "道岔进路不允许本列沿此方向通过或当前通路已失效；请检查开通状态与占用",
   "commands.unrealtrainmod.turnout.info": "道岔 %s：%s，%s，状态版本 %s；%s",
   "commands.unrealtrainmod.turnout.port": "端口 %s：%s，位置 (%s, %s, %s)，向外 yaw=%s°",
@@ -278,8 +286,8 @@
   "commands.unrealtrainmod.turnout.removed": "已整体拆除道岔 %s，保留外接轨道",
   "commands.unrealtrainmod.turnout.error": "道岔操作失败：%s",
   "commands.unrealtrainmod.turnout.free": "空闲",
-  "commands.unrealtrainmod.turnout.occupied": "被车辆 %s 占用",
-  "commands.unrealtrainmod.turnout.waiting": "保留车辆 %s 的占用，等待其重新加载核对",
+  "commands.unrealtrainmod.turnout.occupied": "保护代表车辆 %s；可共享已开通通路，全部编组退出前保持保护",
+  "commands.unrealtrainmod.turnout.waiting": "保护代表车辆 %s 未加载；保留保护，等待重新加载核对",
   "commands.unrealtrainmod.turnout.left": "左开",
   "commands.unrealtrainmod.turnout.right": "右开",
   "commands.unrealtrainmod.turnout.straight": "直向开通",
@@ -322,7 +330,7 @@
   "item.unrealtrainmod.turnout_builder.permission": "需要权限等级 2；三个节点必须同高",
   "item.unrealtrainmod.turnout_builder.aim_turnout": "请瞄准道岔所属方块；存在施工草稿时扳手优先编辑节点",
   "item.unrealtrainmod.turnout_builder.ambiguous": "此方块关联多个道岔，请选择归属明确的方块",
-  "item.unrealtrainmod.turnout_builder.occupied": "车辆 %s 占用此道岔，整车退出前不能切换",
+  "item.unrealtrainmod.turnout_builder.occupied": "此道岔仍受占用保护（代表车辆 %s），全部编组退出前不能切换",
   "item.unrealtrainmod.turnout_builder.switched": "道岔已切换：%s",
   "item.unrealtrainmod.track_wrench.turnout": "无施工草稿时：右键道岔方块切换开通线路",
   "commands.unrealtrainmod.track.error.vehicle_present": "施工区域被轨道车辆覆盖",
@@ -388,11 +396,11 @@
   "gui.unrealtrainmod.train_map.position": "X %s / Y %s / Z %s",
   "gui.unrealtrainmod.train_map.select_hint": "点击列车列表、车辆标记或道岔查看详情。拖动地图平移，滚轮缩放。立交按平面投影叠加；红色只表示已有同段重叠报告。",
   "gui.unrealtrainmod.train_map.controls": "控制位置：%s",
-  "gui.unrealtrainmod.train_map.occupant": "占用车辆：%s",
+  "gui.unrealtrainmod.train_map.occupant": "保护代表车辆：%s",
   "gui.unrealtrainmod.train_map.none": "无",
   "commands.unrealtrainmod.turnout.trailing_info": "从 %s 端反向通行：%s；退出后恢复为%s",
   "commands.unrealtrainmod.turnout.trailing_approach": "尚未挤开，首个转向架到达 A 前最后 10% 弧长时触发",
-  "commands.unrealtrainmod.turnout.trailing_return": "已挤开，等待整列退出保护区",
+  "commands.unrealtrainmod.turnout.trailing_return": "已挤开，允许共享开通通路，等待全部编组退出保护区后回弹",
   "gui.unrealtrainmod.track_curve.outward_hint": "已有端点使用有向控制柄，选定终点后不会自动翻向；可手动调节方向，恢复自动可清除本端设置。",
   "gui.unrealtrainmod.track_curve.automatic_horizontal_hint": "自动控制柄随线路计算；另一端使用有向控制柄时，本端随其控制点逐渐收直。修改数值可手动调整。",
   "gui.unrealtrainmod.track_curve.turnout_automatic_hint": "自动末端随 A 的共用控制点逐渐收直；B/C 分别计算。手动修改可固定本端参数，已有外线方向保持锁定。",
@@ -403,7 +411,7 @@
   "key.unrealtrainmod.driving.emergency": "紧急制动／停车后解除",
   "key.unrealtrainmod.driving.door_left": "开／关本车左门",
   "key.unrealtrainmod.driving.door_right": "开／关本车右门",
-  "key.unrealtrainmod.driving.cursor": "按住操作驾驶台和三维控件",
+  "key.unrealtrainmod.driving.cursor": "按住操作驾驶台／手持钥匙操作三维控件",
   "gui.unrealtrainmod.driving.console.toward_front": "朝车头",
   "gui.unrealtrainmod.driving.console.toward_back": "朝车尾",
   "gui.unrealtrainmod.driving.console.at_rest": "静止",
@@ -472,7 +480,7 @@
   "commands.unrealtrainmod.train.coupler_pending": "等待旧双车连接迁移",
   "item.unrealtrainmod.crowbar.coupled": "车辆已自动连挂，整列已停稳制动",
   "item.unrealtrainmod.key": "钥匙",
-  "item.unrealtrainmod.key.tooltip": "非潜行时主手持钥匙右键车辆进入驾驶；每个编组最多三人，上车后可切换物品",
+  "item.unrealtrainmod.key.tooltip": "非潜行时主手持钥匙右键车辆进入驾驶；每个编组最多三人，上车后可切换物品。主手或副手持钥匙，第一人称按住光标键（默认左 Alt）可操作附近 IR 非驾驶控件；司机操作本车无需继续手持钥匙",
   "item.unrealtrainmod.key.required": "请主手持钥匙右键车辆进入驾驶",
   "item.unrealtrainmod.key.driver_limit": "该编组已有 %s 名司机，无法加入驾驶",
   "item.unrealtrainmod.key.coupling_overflow": "连挂后每个编组最多保留 %s 名司机；优先保留参考列司机，你已自动下车",
@@ -502,13 +510,15 @@
   ,"gui.unrealtrainmod.driving.ir.3d.press": "按住鼠标左键触发，松开复位"
   ,"gui.unrealtrainmod.driving.ir.3d.toggle": "点击鼠标左键切换开／关"
   ,"gui.unrealtrainmod.driving.ir.3d.drag": "按住左键上下拖动，或滚轮调节"
+  ,"gui.unrealtrainmod.driving.ir.3d.driving_required": "需要驾驶这辆车才能操作此控件"
+  ,"gui.unrealtrainmod.driving.ir.3d.key_required": "主手或副手持钥匙可操作此控件"
   ,"item.unrealtrainmod.insulator": "绝缘子"
   ,"item.unrealtrainmod.wire": "电线"
   ,"entity.unrealtrainmod.connector": "绝缘子"
   ,"wiring.unrealtrainmod.selected": "当前模型：%s"
   ,"wiring.unrealtrainmod.select_hint": "右击空气选择模型；物品可重复使用"
   ,"wiring.unrealtrainmod.wire_hint": "依次右击两个绝缘子连接；潜行右击空气取消选点"
-  ,"wiring.unrealtrainmod.connector_hint": "右击方块表面放置；潜行右击已有绝缘子拆除它和关联电线"
+  ,"wiring.unrealtrainmod.connector_hint": "右击方块表面放置，初始水平朝向面向玩家；主手持钢锯左击拆除并清理关联电线"
   ,"wiring.unrealtrainmod.unselected": "请先右击空气选择可用模型"
   ,"wiring.unrealtrainmod.start": "已选择起点；右击另一个绝缘子连接，再点起点取消"
   ,"wiring.unrealtrainmod.remove_start": "已选择拆线起点；空手潜行右击另一端选择电线型号"
@@ -525,6 +535,7 @@
   ,"wiring.unrealtrainmod.wire_models": "选择电线模型"
   ,"wiring.unrealtrainmod.connector_models": "选择绝缘子模型"
   ,"wiring.unrealtrainmod.empty": "没有可用模型，请将 RTM ZIP 放入 mods/Packages_RTM 并重启"
+  ,"wiring.unrealtrainmod.model_count": "共 %s 个模型"
   ,"wiring.unrealtrainmod.apply": "应用"
   ,"wiring.unrealtrainmod.cancel": "取消"
   ,"wiring.unrealtrainmod.reset": "恢复原值"

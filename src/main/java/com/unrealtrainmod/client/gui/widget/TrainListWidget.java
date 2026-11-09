@@ -117,6 +117,7 @@ public final class TrainListWidget<T> extends ObjectSelectionList<TrainListWidge
             }
         }
         setScrollAmount(0);
+        revealSelected();
     }
 
     public void select(T item) {
@@ -126,6 +127,18 @@ public final class TrainListWidget<T> extends ObjectSelectionList<TrainListWidge
             ensureVisible(row);
             break;
         }
+    }
+
+    @Override
+    public void setRectangle(int width, int height, int x, int y) {
+        super.setRectangle(width, height, x, y);
+        clampScrollAmount();
+        revealSelected();
+    }
+
+    private void revealSelected() {
+        var row = getSelected();
+        if (row != null) ensureVisible(row);
     }
 
     @Override
@@ -220,7 +233,7 @@ public final class TrainListWidget<T> extends ObjectSelectionList<TrainListWidge
                 return;
             }
             var texture = owner.image.apply(item);
-            // Native RTM artwork fills the row; generated screenshots have a positive pixel scale.
+            // Native RTM artwork is fitted without cropping; screenshots retain their fixed pixel scale.
             if (owner.vehicleEntries && (texture == null || texture.pixelScale() > 0)) {
                 renderVehicleButton(graphics, texture, left, top, width - 4, height);
                 return;
@@ -228,9 +241,9 @@ public final class TrainListWidget<T> extends ObjectSelectionList<TrainListWidge
             if (texture != null) {
                 int contentWidth = width - 4;
                 float scale = texture.pixelScale() > 0 ? texture.pixelScale()
-                        : Math.max((float)contentWidth / texture.width(), (float)height / texture.height());
-                int imageWidth = (int)Math.ceil(texture.width() * scale);
-                int imageHeight = (int)Math.ceil(texture.height() * scale);
+                        : Math.min((float)contentWidth / texture.width(), (float)height / texture.height());
+                int imageWidth = texture.pixelScale() > 0 ? (int)Math.ceil(texture.width() * scale) : Math.round(texture.width() * scale);
+                int imageHeight = texture.pixelScale() > 0 ? (int)Math.ceil(texture.height() * scale) : Math.round(texture.height() * scale);
                 graphics.enableScissor(left, top, left + contentWidth, top + height);
                 RenderSystem.enableBlend();
                 RenderSystem.defaultBlendFunc();

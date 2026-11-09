@@ -19,6 +19,7 @@ public record VehicleDefinition(ResourceLocation id, String name, PackageAsset c
                                 IrVehicleDefinition ir) {
     public VehicleDefinition {
         parts = List.copyOf(parts);
+        if (ir != IrVehicleDefinition.NONE) ir = ir.withMaxSpeedKmh(performanceSpec.maxSpeed() * 3.6);
     }
     /**
      * Bounds and pivot are source-local; offset retains the original static assembly. Door actions belong to

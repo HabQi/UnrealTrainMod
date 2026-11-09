@@ -73,7 +73,6 @@ public final class TrainModelScreen extends BaseTrainScreen {
         int rightWidth = panelWidth - listWidth - gap * 3;
         search.setRectangle(listWidth, 18, left + gap, top + 32);
         list.setRectangle(listWidth, Math.max(35, panelHeight - 112), left + gap, top + 56);
-        list.clampScrollAmount();
         preview.setRectangle(rightWidth, Math.max(30, panelHeight - (expanded ? 144 : 112)), rightX, top + 32);
         reset.setRectangle(24, 20, preview.getRight() - 28, preview.getY() + 4);
         apply.setRectangle(120, 20, left + panelWidth - gap - 120, top + panelHeight - 30);

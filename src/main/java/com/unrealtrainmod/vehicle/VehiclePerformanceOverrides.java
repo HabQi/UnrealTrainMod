@@ -30,7 +30,7 @@ public final class VehiclePerformanceOverrides {
             }
             try (var reader = Files.newBufferedReader(file, StandardCharsets.UTF_8)) { json = GsonHelper.parse(reader); }
         } catch (IOException | RuntimeException exception) {
-            LOGGER.error("Unable to read vehicle performance overrides {}; keeping defaults", file, exception);
+            LOGGER.error("Unable to read vehicle performance overrides {}; keeping imported performance", file, exception);
             return;
         }
         for (var entry : json.entrySet()) {
@@ -65,7 +65,7 @@ public final class VehiclePerformanceOverrides {
                         number(value, "brakeReleaseTime", base.brakeReleaseTime()));
                 vehicles.put(id, definition.withPerformanceSpec(spec));
             } catch (RuntimeException exception) {
-                LOGGER.error("{}: invalid performance override for {}; keeping defaults: {}", file, id, exception.getMessage());
+                LOGGER.error("{}: invalid performance override for {}; keeping imported performance: {}", file, id, exception.getMessage());
             }
         }
     }

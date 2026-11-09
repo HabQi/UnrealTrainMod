@@ -46,13 +46,38 @@ final class IrSoundDefinitions {
             LOGGER.warn("IR {} in {}: sounds must be an object; ignoring vehicle sounds",
                     GsonHelper.getAsString(json, "name"), archive.path());
         }
+        var propertyData = json.get("properties");
+        var properties = propertyData != null && propertyData.isJsonObject() ? propertyData.getAsJsonObject() : new JsonObject();
+        float pitchRange = 0.25f;
+        try {
+            var pitch = sounds.get("engine_pitch_range");
+            if (pitch != null) {
+                if (!pitch.isJsonPrimitive() || !pitch.getAsJsonPrimitive().isNumber()) {
+                    throw new IllegalArgumentException("expected a number");
+                }
+                float value = pitch.getAsFloat();
+                if (!Float.isFinite(value) || value < 0 || value > 1) throw new IllegalArgumentException("expected a finite value within 0..1");
+                pitchRange = value;
+            }
+        } catch (RuntimeException exception) {
+            LOGGER.warn("IR {} sounds.engine_pitch_range: {}; using 0.25", label, exception.getMessage());
+        }
         return new IrVehicleSounds(read(sounds.get("wheels"), archive, prefix, label + " sounds.wheels", 32),
                 read(sounds.get("idle"), archive, prefix, label + " sounds.idle", 80),
                 read(sounds.get("running"), archive, prefix, label + " sounds.running", 80),
                 read(sounds.get("horn"), archive, prefix, label + " sounds.horn", 128),
                 read(sounds.get("bell"), archive, prefix, label + " sounds.bell", 128),
                 read(sounds.get("couple"), archive, prefix, label + " sounds.couple", 40), engines, horns, bells,
-                controls(sounds.get("controls"), archive, prefix, label, bindings), ridingVolume);
+                controls(sounds.get("controls"), archive, prefix, label, bindings), ridingVolume,
+                flag(properties, "horn_sustained", false, label), flag(properties, "toggle_bell", true, label), pitchRange);
+    }
+
+    private static boolean flag(JsonObject properties, String key, boolean fallback, String label) {
+        var value = properties.get(key);
+        if (value == null) return fallback;
+        if (value.isJsonPrimitive() && value.getAsJsonPrimitive().isBoolean()) return value.getAsBoolean();
+        LOGGER.warn("IR {} properties.{}: expected a boolean; using {}", label, key, fallback);
+        return fallback;
     }
 
     private static Map<String, IrControlSound> controls(JsonElement element, PackageArchive archive, String prefix,

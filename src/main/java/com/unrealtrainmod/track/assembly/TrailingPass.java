@@ -4,5 +4,5 @@
  */
 package com.unrealtrainmod.track.assembly;
 
-/** Server-only passage, owned by the assembly's persisted occupant. */
+/** Server-only passage; its persisted protection representative may transfer between remaining consists. */
 public record TrailingPass(String pathId, JunctionState returnState) {}

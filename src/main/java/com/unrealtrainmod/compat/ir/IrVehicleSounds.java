@@ -13,9 +13,10 @@ public record IrVehicleSounds(VehicleSoundSequence wheels, VehicleSoundSequence 
                               VehicleSoundSequence running, VehicleSoundSequence horn,
                               VehicleSoundSequence bell, VehicleSoundSequence couple,
                               Set<String> engineGroups, Set<String> hornGroups, Set<String> bellGroups,
-                              Map<String, IrControlSound> controls, float ridingVolume) {
+                              Map<String, IrControlSound> controls, float ridingVolume,
+                              boolean hornSustained, boolean toggleBell, float enginePitchRange) {
     public static final IrVehicleSounds NONE = new IrVehicleSounds(null, null, null, null, null, null,
-            Set.of(), Set.of(), Set.of(), Map.of(), 1);
+            Set.of(), Set.of(), Set.of(), Map.of(), 1, false, true, 0.25f);
 
     public IrVehicleSounds {
         engineGroups = Set.copyOf(engineGroups);
@@ -23,4 +24,12 @@ public record IrVehicleSounds(VehicleSoundSequence wheels, VehicleSoundSequence 
         bellGroups = Set.copyOf(bellGroups);
         controls = Map.copyOf(controls);
     }
+
+    public IrControlDefinition.Type controlType(String group, IrControlDefinition.Type authored) {
+        if (hornGroups.contains(group)) return IrControlDefinition.Type.PRESS;
+        if (bellGroups.contains(group)) return toggleBell ? IrControlDefinition.Type.TOGGLE : IrControlDefinition.Type.PRESS;
+        return authored;
+    }
+
+    public boolean heldButton(String group) { return hornGroups.contains(group) || bellGroups.contains(group) && !toggleBell; }
 }

@@ -13,33 +13,37 @@ import net.minecraft.nbt.CompoundTag;
 
 /** Server-owned values and edge clocks; no animation matrices are loaded on the server. */
 public final class IrVehicleState {
-    private enum BellMode { OFF, SUSTAINED, PULSE }
+    private enum SoundMode { OFF, SUSTAINED, PULSE }
     private IrVehicleDefinition definition = IrVehicleDefinition.NONE;
     private final Map<String, Float> values = new HashMap<>();
     private final Map<String, Long> releases = new HashMap<>();
     private final Map<UUID, String> heldPresses = new HashMap<>();
     private final ArrayList<IrVehicleSnapshot.Clock> clocks = new ArrayList<>();
+    private final ArrayList<Float> animationValues = new ArrayList<>();
     private final Map<String, IrControlSoundState> soundStates = new HashMap<>();
     private final Map<UUID, String> soundOwners = new HashMap<>();
     private final Map<String, Float> moveValues = new HashMap<>();
     private boolean dirty, front, rear;
-    private boolean bellActive, bellPulse;
-    private long bellActivations, frontCouplings, rearCouplings;
+    private boolean bellActive, bellPulse, hornActive, hornPulse;
+    private long bellActivations, hornActivations, frontCouplings, rearCouplings;
 
     public void bind(IrVehicleDefinition next, VehicleRuntimeState runtime, boolean coupledFront, boolean coupledRear) {
         if (definition == next) return;
         definition = next;
         front = coupledFront; rear = coupledRear;
-        releases.clear(); heldPresses.clear(); clocks.clear();
+        releases.clear(); heldPresses.clear(); clocks.clear(); animationValues.clear();
         soundStates.clear(); soundOwners.clear(); moveValues.clear();
         next.controls().forEach((group, control) -> {
             if (control.readOnly() || control.type() == IrControlDefinition.Type.PRESS) values.remove(group);
         });
-        bellActive = bellMode(runtime) != BellMode.OFF;
-        bellPulse = false;
-        bellActivations = frontCouplings = rearCouplings = 0;
+        bellActive = soundMode(definition.sounds().bellGroups(), runtime) != SoundMode.OFF;
+        hornActive = soundMode(definition.sounds().hornGroups(), runtime) != SoundMode.OFF;
+        bellPulse = hornPulse = false;
+        bellActivations = hornActivations = frontCouplings = rearCouplings = 0;
         for (var animation : next.animations()) {
-            clocks.add(new IrVehicleSnapshot.Clock(animation.value(next, values, runtime, front, rear) >= 0.95f, Long.MIN_VALUE));
+            float value = animation.value(next, values, runtime, front, rear);
+            animationValues.add(value);
+            clocks.add(new IrVehicleSnapshot.Clock(value >= 0.95f, Long.MIN_VALUE, 0, Long.MIN_VALUE));
         }
         dirty = true;
     }
@@ -70,18 +74,40 @@ public final class IrVehicleState {
             if (entry.getValue() > tick) continue;
             values.put(entry.getKey(), 0f); iterator.remove(); dirty = true;
         }
-        var mode = bellMode(runtime);
-        boolean nextBell = mode != BellMode.OFF;
-        if (nextBell && !bellActive) {
-            bellPulse = mode == BellMode.PULSE;
+        var mode = soundMode(definition.sounds().bellGroups(), runtime);
+        boolean nextBell = mode != SoundMode.OFF;
+        if (nextBell && (!bellActive || bellPulse && mode == SoundMode.SUSTAINED)) {
+            bellPulse = mode == SoundMode.PULSE;
             bellActivations++;
             dirty = true;
         }
         bellActive = nextBell;
+        mode = soundMode(definition.sounds().hornGroups(), runtime);
+        boolean nextHorn = mode != SoundMode.OFF;
+        if (nextHorn && (!hornActive || hornPulse && mode == SoundMode.SUSTAINED)) {
+            hornPulse = mode == SoundMode.PULSE;
+            hornActivations++;
+            dirty = true;
+        }
+        hornActive = nextHorn;
         for (int i = 0; i < clocks.size(); i++) {
-            boolean active = definition.animations().get(i).value(definition, values, runtime, front, rear) >= 0.95f;
-            if (active != clocks.get(i).active()) {
-                clocks.set(i, new IrVehicleSnapshot.Clock(active, tick)); dirty = true;
+            var animation = definition.animations().get(i);
+            float value = animation.value(definition, values, runtime, front, rear);
+            var clock = clocks.get(i);
+            boolean active = value >= 0.95f, edge = active != clock.active();
+            long events = clock.soundEvents(), soundTick = clock.soundTick();
+            if (animation.sound() != null) {
+                if (animation.mode() == IrAnimationDefinition.Mode.VALUE && value != animationValues.get(i)) {
+                    if (soundTick == Long.MIN_VALUE || tick - soundTick >= IrAnimationDefinition.MOVEMENT_TICKS) events++;
+                    soundTick = tick;
+                } else if (edge && (active || animation.mode() == IrAnimationDefinition.Mode.PLAY_BOTH)) {
+                    events++;
+                    soundTick = tick;
+                }
+            }
+            animationValues.set(i, value);
+            if (edge || events != clock.soundEvents() || soundTick != clock.soundTick()) {
+                clocks.set(i, new IrVehicleSnapshot.Clock(active, edge ? tick : clock.tick(), events, soundTick)); dirty = true;
             }
         }
         for (var entry : moveValues.entrySet()) {
@@ -148,15 +174,14 @@ public final class IrVehicleState {
         dirty = true;
     }
 
-    private BellMode bellMode(VehicleRuntimeState runtime) {
-        if (definition.sounds().bell() == null) return BellMode.OFF;
+    private SoundMode soundMode(java.util.Set<String> groups, VehicleRuntimeState runtime) {
         boolean pulse = false;
-        for (String group : definition.sounds().bellGroups()) {
+        for (String group : groups) {
             if (definition.value(group, values, runtime, front, rear) < 0.5f) continue;
-            if (!releases.containsKey(group)) return BellMode.SUSTAINED;
+            if (!releases.containsKey(group)) return SoundMode.SUSTAINED;
             pulse = true;
         }
-        return pulse ? BellMode.PULSE : BellMode.OFF;
+        return pulse ? SoundMode.PULSE : SoundMode.OFF;
     }
 
     /** Only called after the server commits a new coupling, never while restoring a consist. */
@@ -168,7 +193,7 @@ public final class IrVehicleState {
 
     public IrVehicleSnapshot snapshot() {
         return new IrVehicleSnapshot(values, clocks, soundStates, front, rear,
-                bellActivations, bellPulse, frontCouplings, rearCouplings);
+                bellActivations, bellPulse, hornActivations, hornPulse, frontCouplings, rearCouplings);
     }
 
     public CompoundTag saveValues() {
@@ -188,11 +213,11 @@ public final class IrVehicleState {
 
     public void clear() {
         definition = IrVehicleDefinition.NONE;
-        values.clear(); releases.clear(); heldPresses.clear(); clocks.clear();
+        values.clear(); releases.clear(); heldPresses.clear(); clocks.clear(); animationValues.clear();
         soundStates.clear(); soundOwners.clear(); moveValues.clear();
         front = rear = false;
-        bellActive = bellPulse = false;
-        bellActivations = frontCouplings = rearCouplings = 0;
+        bellActive = bellPulse = hornActive = hornPulse = false;
+        bellActivations = hornActivations = frontCouplings = rearCouplings = 0;
         dirty = true;
     }
 }

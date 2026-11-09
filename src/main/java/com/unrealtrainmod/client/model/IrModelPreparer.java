@@ -8,7 +8,6 @@ import com.unrealtrainmod.client.ClientConfig;
 import com.unrealtrainmod.client.renderer.RenderBatch;
 import com.unrealtrainmod.client.RenderCategory;
 import com.unrealtrainmod.compat.ir.IrAnimatrix;
-import com.unrealtrainmod.compat.ir.IrControlDefinition;
 import com.unrealtrainmod.compat.ir.IrLightingDefinition;
 import com.unrealtrainmod.compat.ir.IrModelComponent;
 import com.unrealtrainmod.compat.ir.IrModelComponents;
@@ -101,11 +100,6 @@ final class IrModelPreparer {
         for (var part : parts) if (part.visible()) visibleNames.add(part.name());
         var pickBounds = new HashMap<ModelPart, net.minecraft.world.phys.AABB>();
         for (var part : parts) if (part.visible() && !part.batches().isEmpty()) pickBounds.put(part, IrPickPart.bounds(part));
-        var controlNames = new LinkedHashMap<String, List<String>>();
-        for (var part : parts) {
-            String key = IrModelComponents.controlKey(part.name());
-            if (key != null) controlNames.computeIfAbsent(key, ignored -> new ArrayList<>()).add(part.name());
-        }
         var result = new HashMap<IrVehicleDefinition, IrModelBinding>();
         // Shared configurations reuse the same packed index arrays; the cache ends with this source preparation.
         var packedSelections = new HashMap<PackingKey, PartSelection.Packed>();
@@ -188,19 +182,9 @@ final class IrModelPreparer {
             for (var role : VehiclePartRole.values()) picking.put(role, new ArrayList<>());
             for (var part : parts) {
                 if (!pickBounds.containsKey(part)) continue;
-                String key = IrModelComponents.controlKey(part.name()), group = null;
-                IrControlDefinition.Type type = null;
-                if (key != null) {
-                    var names = controlNames.get(key);
-                    if (names.stream().noneMatch(name -> IrModelComponents.token(name, "NOINTERACT"))) {
-                        group = names.stream().sorted().map(name -> IrModelComponents.attribute(name, "CG"))
-                                .filter(java.util.Objects::nonNull).findFirst().orElse(key);
-                        type = names.stream().anyMatch(name -> IrModelComponents.token(name, "PRESS")) ? IrControlDefinition.Type.PRESS
-                                : names.stream().anyMatch(name -> IrModelComponents.token(name, "TOGGLE")) ? IrControlDefinition.Type.TOGGLE
-                                : IrControlDefinition.Type.CONTINUOUS;
-                    }
-                }
-                picking.get(IrModelComponents.role(part.name())).add(new IrPickPart(part, pickBounds.get(part), motions.get(part), group, type));
+                String key = IrModelComponents.controlKey(part.name());
+                var control = key == null ? null : definition.modelControls().get(key);
+                picking.get(IrModelComponents.role(part.name())).add(new IrPickPart(part, pickBounds.get(part), motions.get(part), key, control));
             }
             picking.replaceAll((role, values) -> List.copyOf(values));
             result.put(definition, new IrModelBinding(Map.copyOf(staticSelections), Map.copyOf(moving), Map.copyOf(frames), Map.copyOf(picking)));

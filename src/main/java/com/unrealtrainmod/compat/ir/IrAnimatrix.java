@@ -40,6 +40,30 @@ public final class IrAnimatrix {
     public Map<String, Integer> groups() { return groups; }
     public int frameCount() { return frameCount; }
 
+    /** Lightweight timing scan for sounds: no numeric matrices, SRT frames or model geometry. */
+    public static int countFrames(PackageAsset asset) throws IOException {
+        var counts = new HashMap<String, Integer>();
+        var names = new ArrayList<String>();
+        int frames = 0;
+        try (var reader = new BufferedReader(new InputStreamReader(asset.open(), StandardCharsets.UTF_8.newDecoder()))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (line.isBlank()) continue;
+                if (line.startsWith("O ")) {
+                    if (!names.isEmpty() && frames == 0) throw new IOException("Animation track contains no frames: " + asset);
+                    for (String name : names) counts.put(name, frames);
+                    names.clear(); names.add(line.substring(2)); frames = 0;
+                } else if (line.startsWith("A ") && !names.isEmpty()) names.add(line.substring(2));
+                else if (line.startsWith("M ") && !names.isEmpty()) frames++;
+                else throw new IOException("Invalid animation directive: " + asset);
+            }
+        }
+        if (!names.isEmpty() && frames == 0) throw new IOException("Animation track contains no frames: " + asset);
+        for (String name : names) counts.put(name, frames);
+        if (counts.isEmpty()) throw new IOException("Animation contains no frames: " + asset);
+        return counts.values().stream().mapToInt(Integer::intValue).max().orElseThrow();
+    }
+
     public static IrAnimatrix read(PackageAsset asset, float scale) throws IOException {
         var tracks = new ArrayList<Track>();
         var groups = new HashMap<String, Integer>();

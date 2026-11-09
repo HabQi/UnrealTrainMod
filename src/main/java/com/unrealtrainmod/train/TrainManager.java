@@ -59,6 +59,7 @@ public final class TrainManager {
     private static final Map<ServerLevel, TrainManager> LEVELS = new IdentityHashMap<>();
     private final ServerLevel level;
     private final TrainDriverManager drivers;
+    private final IrControlManager irControls;
     private final TrainPassengerManager passengers;
     private final Map<UUID, TrainConsist> trains = new HashMap<>();
     private final Map<UUID, UUID> entityTrains = new HashMap<>();
@@ -89,11 +90,13 @@ public final class TrainManager {
 
     private TrainManager(ServerLevel level) {
         this.level = level;
+        this.irControls = new IrControlManager(level, this);
         this.drivers = new TrainDriverManager(level, this);
         this.passengers = new TrainPassengerManager(level, this);
     }
 
     public TrainDriverManager drivers() { return drivers; }
+    public IrControlManager irControls() { return irControls; }
     public TrainPassengerManager passengers() { return passengers; }
 
     public static TrainManager get(ServerLevel level) {
@@ -162,17 +165,24 @@ public final class TrainManager {
 
     private static void playerClone(PlayerEvent.Clone event) {
         UUID original = event.getOriginal().getUUID();
-        for (var manager : LEVELS.values()) manager.passengers.playerReplaced(original);
+        for (var manager : LEVELS.values()) {
+            manager.passengers.playerReplaced(original);
+            manager.irControls.forget(original);
+        }
     }
 
     private static void playerLoggedOut(PlayerEvent.PlayerLoggedOutEvent event) {
         UUID player = event.getEntity().getUUID();
-        for (var manager : LEVELS.values()) manager.passengers.playerReplaced(player);
+        for (var manager : LEVELS.values()) {
+            manager.passengers.playerReplaced(player);
+            manager.irControls.forget(player);
+        }
     }
 
     private void close() {
         passengers.closeAll();
         drivers.closeAll();
+        irControls.close();
         if (graph != null) {
             graph.removeSegmentListener(listener);
             graph.removeAssemblyListener(assemblyListener);
@@ -1139,8 +1149,7 @@ public final class TrainManager {
         var actual = currentAreas(entities);
         var alignment = swept(actual, candidate.areas());
         var intervals = TrackOccupancyManager.footprint(combined, candidate.progress());
-        if (reservations.touchesTurnout(alignment, intervals)) return StopReason.TURNOUT_OPERATION_BLOCKED;
-        check(combined, alignment, intervals);
+        var protection = check(combined, alignment, intervals);
 
         // All incoming members move by the same route translation, including reversed members.
         var moving = new TrainConsist(second.id(), incoming, second.configuredSpeed() * direction, second.couplings());
@@ -1155,7 +1164,6 @@ public final class TrainManager {
         var start = calculate(moving, secondEntities, accepted, motion);
         var startSweep = swept(previous, start.areas());
         var startIntervals = couplingFootprint(combined, first.cars().size(), accepted - destination);
-        if (reservations.touchesTurnout(startSweep, startIntervals)) return StopReason.TURNOUT_OPERATION_BLOCKED;
         check(combined, startSweep, startIntervals);
         previous = start.areas();
         while (accepted != destination) {
@@ -1163,11 +1171,11 @@ public final class TrainManager {
             var step = calculate(moving, secondEntities, next, motion);
             var sweep = swept(previous, step.areas());
             var footprint = couplingFootprint(combined, first.cars().size(), next - destination);
-            if (reservations.touchesTurnout(sweep, footprint)) return StopReason.TURNOUT_OPERATION_BLOCKED;
             check(combined, sweep, footprint);
             previous = step.areas();
             accepted = next;
         }
+        if (!protection.acquire(memberIds(combined))) return StopReason.TURNOUT_OCCUPIED;
         remove(first);
         remove(second);
         put(combined);
@@ -1184,6 +1192,7 @@ public final class TrainManager {
             for (var end : TrainCarEnd.values()) car.entity().setCouplingEnabled(end, false);
         }
         restored.add(combined.id());
+        reservations.releaseOutside(memberIds(combined), candidate.areas(), intervals);
         if (automatic) drivers.coupled(first, second, combined);
         couplingSound(reference, pair.referenceEnd(), other, pair.otherEnd());
         sync(combined);
@@ -1220,16 +1229,18 @@ public final class TrainManager {
             var selected = new TrainCoupling.End(member.getUUID(), end);
             var peer = train.peer(member.getUUID(), end);
             if (peer == null) return StopReason.NOT_COUPLED;
-            var entities = stoppedMembers(train);
-            if (reservations.touchesTurnout(currentAreas(entities), occupancy.intervals(train.id()))) return StopReason.TURNOUT_OPERATION_BLOCKED;
+            stoppedMembers(train);
             var links = train.couplings().stream().filter(link -> link.peer(selected) == null).toList();
             var parts = partition(train, train.cars(), links, train.window());
             // Validate both new coordinate frames before changing identity or driver ownership.
             for (var part : parts) {
                 var partEntities = part.cars().stream().map(car -> (TrainEntity) level.getEntity(car.entityId())).toList();
-                checkCheckpoint(part, calculate(part, partEntities, part.progress()));
+                var candidate = calculate(part, partEntities, part.progress());
+                checkCheckpoint(part, candidate);
+                check(part, candidate.areas(), TrackOccupancyManager.footprint(part, part.progress()));
             }
             installParts(train, parts, true);
+            reservations.refreshLoaded();
             member.setCouplingEnabled(end, false);
             ((TrainEntity) level.getEntity(peer.vehicle())).setCouplingEnabled(peer.end(), false);
             drivers.split(train, parts);
@@ -1382,6 +1393,7 @@ public final class TrainManager {
             return;
         }
         drivers.tick();
+        irControls.tick();
         var couplingVehicles = autoCouplingVehicles();
         for (var train : List.copyOf(trains.values())) tryAutoCouple(train, couplingVehicles);
         for (var train : List.copyOf(trains.values())) {
@@ -1434,7 +1446,7 @@ public final class TrainManager {
             // The last braking tick still travels in the old direction before reaching zero.
             if (nextSpeed == 0 && oldSpeed != 0) train.dynamics().update(oldSpeed, acceleration, grade);
             double movementDirection = Math.signum(remaining);
-            var context = new TrackTraversalContext(owners, true, train.planningDirection() > 0);
+            var context = TrainRouteWindow.context(train, true);
             boolean tryStraight = couplingPeers.isEmpty();
             while (remaining != 0 && train.simulationActive()) {
                 maintainWindow(train, entities);
@@ -1458,7 +1470,12 @@ public final class TrainManager {
                     step = calculateStep(train, entities, previous, next, motion, context);
                     try {
                         actions = turnoutMovement.propose(motion, context, progress, next);
-                        for (var action : actions) graph.validateTrailingPass(action.assemblyId(), owners, action.pathId());
+                        for (var action : actions) {
+                            if (action.begin() && !reservations.canBeginTrailingPass(action.assemblyId(), owners)) {
+                                throw new StateException(StopReason.TURNOUT_OCCUPIED);
+                            }
+                            graph.validateTrailingPass(action.assemblyId(), owners, action.pathId());
+                        }
                     } catch (IllegalArgumentException exception) {
                         throw new StateException(StopReason.TURNOUT_ROUTE_UNAVAILABLE, exception);
                     }
@@ -1466,7 +1483,7 @@ public final class TrainManager {
                 double next = step.candidate().progress();
                 if (!step.reservations().acquire(owners)) throw new StateException(StopReason.TURNOUT_OCCUPIED);
                 for (var action : actions) if (action.begin()) graph.beginTrailingPass(action.assemblyId(), owners, action.pathId());
-                for (var action : actions) if (action.throwSwitch()) graph.throwTrailingPass(action.assemblyId(), owners);
+                for (var action : actions) if (action.throwSwitch()) graph.throwTrailingPass(action.assemblyId());
                 // Commit each accepted substep before release can restore a turnout and notify route observers.
                 commit(train, step.candidate(), step.intervals(), false);
                 moved = true;

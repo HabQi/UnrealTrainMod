@@ -27,7 +27,7 @@ import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.phys.AABB;
 import org.joml.Vector3f;
 
-/** One mutex per turnout. Ownership stays an entity UUID, while checks cover its entire consist. */
+/** Shared turnout protection, represented by one vehicle UUID until every consist has cleared. */
 public final class TrackReservationManager {
     private final ServerLevel level;
     private final TrackGraph graph;
@@ -161,12 +161,12 @@ public final class TrackReservationManager {
         }
     }
 
-    /** Checks every target before acquiring any lock. Call before accepting a movement sample. */
+    /** Checks every target before establishing protection. Call before accepting a movement sample. */
     public boolean acquire(List<UUID> owners, List<AABB> areas, List<Interval> intervals) {
         return query(areas, intervals).acquire(owners);
     }
 
-    /** Geometry is evaluated once; ownership is read again when this movement acquires its locks. */
+    /** Geometry is evaluated once; pending trailing passages are checked again at acquisition. */
     public Query query(List<AABB> areas, List<Interval> intervals) {
         var touched = new ArrayList<UUID>();
         for (UUID id : candidates(areas, intervals)) {
@@ -186,8 +186,11 @@ public final class TrackReservationManager {
 
         public boolean available(List<UUID> owners) {
             for (UUID id : assemblies) {
-                UUID owner = graph.assembly(id).occupant();
-                if (owner != null && !owners.contains(owner)) return false;
+                var assembly = graph.assembly(id);
+                // Before the throw, admitting another consist could put it on the path about to close.
+                // Existing footprints also cover fragments split from the original passing consist.
+                if (pendingTrailingPass(assembly) && !owners.contains(assembly.occupant())
+                        && !groupTouches(assembly, owners)) return false;
             }
             return true;
         }
@@ -216,23 +219,38 @@ public final class TrackReservationManager {
         for (UUID id : heldBy(List.of(vehicle))) releaseOrTransfer(graph.assembly(id), List.of(vehicle));
     }
 
-    /** Destruction can leave two independent fragments on one turnout; never restore its switch between them. */
+    /** Sharing, uncoupling and destruction must not restore a switch between remaining consists. */
     private void releaseOrTransfer(TrackAssemblyInstance assembly, List<UUID> previous) {
-        var excluded = new HashSet<>(previous);
+        setOccupant(assembly, otherOccupant(assembly, previous));
+    }
+
+    /** A new trailing passage is exclusive even when its protection representative belongs to this consist. */
+    public boolean canBeginTrailingPass(UUID assemblyId, List<UUID> owners) {
+        var assembly = graph.assembly(assemblyId);
+        return (assembly.occupant() == null || owners.contains(assembly.occupant()))
+                && otherOccupant(assembly, owners) == null;
+    }
+
+    private static boolean pendingTrailingPass(TrackAssemblyInstance assembly) {
+        var passage = assembly.trailingPass();
+        return passage != null && !TrackTransitionResolver.isPathEnabled(assembly, passage.pathId());
+    }
+
+    private boolean groupTouches(TrackAssemblyInstance assembly, List<UUID> group) {
+        if (touches(assembly, List.of(), occupancy.apply(group.getFirst()))) return true;
+        for (UUID member : group) {
+            if (level.getEntity(member) instanceof TrainEntity entity && !entity.isRemoved()
+                    && touches(assembly, List.of(area(entity)), List.of())) return true;
+        }
+        return false;
+    }
+
+    private UUID otherOccupant(TrackAssemblyInstance assembly, List<UUID> excludedMembers) {
+        var excluded = new HashSet<>(excludedMembers);
         for (UUID representative : representatives.get()) {
             var group = members.apply(representative);
             if (group.stream().anyMatch(excluded::contains)) continue;
-            boolean covered = touches(assembly, List.of(), occupancy.apply(representative));
-            for (UUID member : group) {
-                if (covered) break;
-                if (level.getEntity(member) instanceof TrainEntity entity && !entity.isRemoved()) {
-                    covered = touches(assembly, List.of(area(entity)), List.of());
-                }
-            }
-            if (covered) {
-                setOccupant(assembly, representative);
-                return;
-            }
+            if (groupTouches(assembly, group)) return representative;
         }
         // Deferred/unregistered vehicles can still have a physical rail footprint.
         for (UUID id : loadedVehicles.get()) {
@@ -240,18 +258,10 @@ public final class TrackReservationManager {
             if (level.getEntity(id) instanceof TrainEntity entity && !entity.isRemoved()
                     && (entity.getRailAnchor() != null || entity.hasInvalidAnchor())
                     && touches(assembly, List.of(area(entity)), occupancy.apply(id))) {
-                setOccupant(assembly, id);
-                return;
+                return id;
             }
         }
-        setOccupant(assembly, null);
-    }
-
-    public boolean touchesTurnout(List<AABB> areas, List<Interval> intervals) {
-        for (UUID id : candidates(areas, intervals)) {
-            if (touches(graph.assembly(id), areas, intervals)) return true;
-        }
-        return false;
+        return null;
     }
 
     private boolean touches(TrackAssemblyInstance assembly, List<AABB> areas, List<Interval> intervals) {

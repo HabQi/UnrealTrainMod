@@ -8,11 +8,13 @@ import com.unrealtrainmod.compat.ir.IrVehicleDefinition;
 import com.unrealtrainmod.compat.ir.IrVehicleSnapshot;
 import com.unrealtrainmod.compat.ir.IrVehicleSounds;
 import com.unrealtrainmod.compat.ir.IrControlSoundState;
+import com.unrealtrainmod.compat.ir.IrAnimationDefinition;
 import com.unrealtrainmod.entity.TrainEntity;
 import com.unrealtrainmod.vehicle.VehicleCatalog;
 import com.unrealtrainmod.vehicle.VehicleDefinition;
 import com.unrealtrainmod.track.geometry.TrackVector;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
 import net.minecraft.client.Minecraft;
@@ -41,7 +43,7 @@ public final class VehicleSoundManager implements ResourceManagerReloadListener 
             level = mc.level;
             generation = PackageSoundLibrary.generation();
         }
-        if (mc.level == null || mc.isPaused()) return;
+        if (mc.level == null || mc.isPaused() || !mc.level.tickRateManager().runsNormally()) return;
         var iterator = vehicles.values().iterator();
         while (iterator.hasNext()) {
             var controller = iterator.next();
@@ -90,6 +92,7 @@ public final class VehicleSoundManager implements ResourceManagerReloadListener 
     public void clear() {
         vehicles.values().forEach(Controller::close);
         vehicles.clear();
+        AnimationSoundTimings.clear();
         level = null;
     }
 
@@ -98,7 +101,7 @@ public final class VehicleSoundManager implements ResourceManagerReloadListener 
         private final IrVehicleDefinition definition;
         private final IrVehicleSounds sounds;
         private final SoundSequencePlayer wheels, idle, running, horn, bell, frontCouple, rearCouple;
-        private final SoundSequencePlayer[] animations;
+        private final IrAnimationSoundPlayer[] animations;
         private final Map<String, ControlSoundPlayer> controls = new HashMap<>();
         private float working;
 
@@ -115,8 +118,14 @@ public final class VehicleSoundManager implements ResourceManagerReloadListener 
             var motion = model.motionSpec();
             frontCouple = new SoundSequencePlayer(sounds.couple(), new TrackVector(0, -motion.trackDatum(), motion.frontCouplerOffset()));
             rearCouple = new SoundSequencePlayer(sounds.couple(), new TrackVector(0, -motion.trackDatum(), motion.rearCouplerOffset()));
-            animations = definition.animations().stream().map(animation -> new SoundSequencePlayer(animation.sound()))
-                    .toArray(SoundSequencePlayer[]::new);
+            var distinct = new LinkedHashMap<IrAnimationDefinition, IrAnimationSoundPlayer>();
+            for (int i = 0; i < definition.animations().size(); i++) {
+                var animation = definition.animations().get(i);
+                if (animation.sound() != null && !distinct.containsKey(animation)) {
+                    distinct.put(animation, new IrAnimationSoundPlayer(animation, i));
+                }
+            }
+            animations = distinct.values().toArray(IrAnimationSoundPlayer[]::new);
         }
 
         void tick(Vec3 listener, boolean enabled) {
@@ -129,24 +138,21 @@ public final class VehicleSoundManager implements ResourceManagerReloadListener 
             boolean engine = active(sounds.engineGroups());
             float throttle = (float)state.throttle();
             working += Math.clamp((engine ? throttle : 0) - working, -0.05f, 0.05f);
+            float pitch = Math.clamp(1 - sounds.enginePitchRange() + working * sounds.enginePitchRange(), 0.5f, 2);
             wheels.update(entity, speed >= 0.05, (float)Math.clamp(speed / (30 / 3.6), 0, 1),
                     (float)(0.8 + 0.4 * Math.clamp(speed / (120 / 3.6), 0, 1)), distanceSquared, enabled);
-            idle.update(entity, engine, sounds.running() == null ? 1 : 1 - working, 1, distanceSquared, enabled);
-            running.update(entity, engine, working, 0.8f + 0.4f * throttle, distanceSquared, enabled);
-            horn.update(entity, active(sounds.hornGroups()), 1, 1, distanceSquared, enabled);
+            idle.update(entity, engine, sounds.running() == null ? 1 : 1 - working,
+                    sounds.running() == null ? pitch : 1, distanceSquared, enabled);
+            running.update(entity, engine, working, pitch, distanceSquared, enabled);
+            horn.updateTriggered(entity, active(sounds.hornGroups()), snapshot.hornActivations(),
+                    snapshot.hornPulse() || !sounds.hornSustained(), 1, 1, distanceSquared, enabled);
             bell.updateTriggered(entity, active(sounds.bellGroups()), snapshot.bellActivations(), snapshot.bellPulse(),
                     1, 1, distanceSquared, enabled);
             if (sounds.couple() != null) {
                 frontCouple.updateEvent(entity, snapshot.frontCouplings(), listener, enabled);
                 rearCouple.updateEvent(entity, snapshot.rearCouplings(), listener, enabled);
             }
-            for (int i = 0; i < animations.length; i++) {
-                // Use the same authoritative edge clocks as the visual animation when available.
-                boolean active = i < snapshot.clocks().size() ? snapshot.clocks().get(i).active()
-                        : definition.animations().get(i).value(definition, snapshot.values(), state,
-                                snapshot.frontCoupled(), snapshot.rearCoupled()) >= 0.95f;
-                animations[i].update(entity, active, 1, 1, distanceSquared, enabled);
-            }
+            for (var animation : animations) animation.update(entity, distanceSquared, enabled);
             controls.forEach((key, player) -> player.update(entity,
                     snapshot.controlSounds().getOrDefault(key, IrControlSoundState.IDLE), listener, enabled));
         }

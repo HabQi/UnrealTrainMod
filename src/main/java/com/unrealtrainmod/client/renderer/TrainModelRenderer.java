@@ -57,16 +57,7 @@ public final class TrainModelRenderer {
                 long poseStart = stats == null ? 0L : System.nanoTime();
                 pose.pushPose();
                 try {
-                    if (vehiclePose != null) {
-                        var transform = vehiclePose.partTransform(instance.definition());
-                        var p = transform.position();
-                        pose.translate(p.x(), p.y(), p.z());
-                        pose.mulPose(transform.rotation());
-                    } else {
-                        var offset = instance.offset();
-                        pose.translate(offset.x(), offset.y(), offset.z());
-                        if (instance.definition().reversedBogie()) pose.mulPose(Axis.YP.rotationDegrees(180));
-                    }
+                    transformInstance(instance, vehiclePose, pose);
                     if (stats != null) stats.addPose(System.nanoTime() - poseStart);
                     if (instance.definition().source().format() == ModelSource.Format.IR_OBJ) {
                         if (stats != null) stats.irSelection(instance.visibleParts(), false, queue.lights());
@@ -96,6 +87,20 @@ public final class TrainModelRenderer {
         } finally {
             queue.lights(previousLights);
             if (stats != null) stats.addSubmission(System.nanoTime() - submitStart);
+        }
+    }
+
+    /** Rendering and model picking use the same source-local instance frame. */
+    public static void transformInstance(LoadedModel.Instance instance, VehiclePose vehiclePose, PoseStack pose) {
+        if (vehiclePose != null) {
+            var transform = vehiclePose.partTransform(instance.definition());
+            var p = transform.position();
+            pose.translate(p.x(), p.y(), p.z());
+            pose.mulPose(transform.rotation());
+        } else {
+            var offset = instance.offset();
+            pose.translate(offset.x(), offset.y(), offset.z());
+            if (instance.definition().reversedBogie()) pose.mulPose(Axis.YP.rotationDegrees(180));
         }
     }
 

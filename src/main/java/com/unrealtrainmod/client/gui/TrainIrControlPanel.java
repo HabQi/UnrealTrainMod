@@ -35,7 +35,7 @@ public final class TrainIrControlPanel {
     private static List<IrControlDefinition> all = List.of(), rows = List.of();
     private static EditBox search;
     private static String query = "", dragging;
-    private static boolean expanded, dirty, scrollDragging;
+    private static boolean expanded, dirty, scrollDragging, heldButton;
     private static double scrollGrab;
     private static int offset, ticks;
     private static float target, sent;
@@ -179,7 +179,8 @@ public final class TrainIrControlPanel {
             switch (control.type()) {
                 case TOGGLE -> button(graphics, font, action, text(value >= 0.5f ? "on" : "off"), true,
                         value >= 0.5f ? GREEN : MUTED, mouseX, mouseY);
-                case PRESS -> button(graphics, font, action, text("pulse"), true, CYAN, mouseX, mouseY);
+                case PRESS -> button(graphics, font, action, text(definition.sounds().heldButton(control.group()) ? "hold" : "pulse"),
+                        true, CYAN, mouseX, mouseY);
                 case CONTINUOUS -> {
                     panel(graphics, action, 0xFF1A2834);
                     int x = action.x() + Math.round(value * (action.width() - 6));
@@ -229,7 +230,14 @@ public final class TrainIrControlPanel {
             if (!action.contains(x, y)) continue;
             switch (control.type()) {
                 case TOGGLE -> request(control.group(), value(control.group()) >= 0.5f ? 0 : 1, false);
-                case PRESS -> request(control.group(), 1, true);
+                case PRESS -> {
+                    finishDrag();
+                    if (definition.sounds().heldButton(control.group())) {
+                        dragging = control.group(); heldButton = true;
+                        target = sent = 1;
+                        request(dragging, 1, false, Operation.BEGIN);
+                    } else request(control.group(), 1, true);
+                }
                 case CONTINUOUS -> {
                     finishDrag();
                     float current = value(control.group());
@@ -244,7 +252,7 @@ public final class TrainIrControlPanel {
         return true;
     }
 
-    static void drag(double x, double y) {
+    public static void drag(double x, double y) {
         if (scrollDragging) {
             var list = list();
             var thumb = scrollbar();
@@ -257,7 +265,7 @@ public final class TrainIrControlPanel {
                     / (list.height() - thumb.height())), 0L, (long)maximum);
             return;
         }
-        if (dragging == null) return;
+        if (dragging == null || heldButton) return;
         for (int i = 0; i < visibleRows() && offset + i < rows.size(); i++) if (rows.get(offset + i).group().equals(dragging)) {
             var action = action(row(i));
             target = (float)Math.clamp((x - action.x() - 3) / (action.width() - 6), 0, 1);
@@ -268,8 +276,8 @@ public final class TrainIrControlPanel {
     static void finishDrag() {
         scrollDragging = false;
         if (dragging == null) return;
-        request(dragging, target, false, Operation.END);
-        dragging = null;
+        request(dragging, heldButton ? 0 : target, false, Operation.END);
+        dragging = null; heldButton = false;
     }
 
     static boolean scroll(double x, double y, double delta) {
@@ -279,11 +287,11 @@ public final class TrainIrControlPanel {
         return true;
     }
 
-    public static void rejectPending() { dragging = null; scrollDragging = false; pending.clear(); }
+    public static void rejectPending() { dragging = null; heldButton = scrollDragging = false; pending.clear(); }
 
     public static void reset() {
         finishDrag();
-        dragging = null; scrollDragging = false; pending.clear(); expanded = false;
+        dragging = null; heldButton = scrollDragging = false; pending.clear(); expanded = false;
         definition = IrVehicleDefinition.NONE; vehicle = null;
         all = rows = List.of(); search = null; query = ""; language = null;
         offset = ticks = 0; dirty = false;

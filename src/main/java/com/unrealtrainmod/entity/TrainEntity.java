@@ -158,8 +158,13 @@ public final class TrainEntity extends Entity {
     }
 
     public void beginIrControlSound(UUID owner, String group, IrReadout driver, int front) {
+        beginIrControlSound(owner, irSoundComponent(group, driver, front));
+    }
+
+    public void beginIrControlSound(UUID owner, String component) {
         updateIrState(irSnapshot.frontCoupled(), irSnapshot.rearCoupled());
-        irState.pressSound(owner, irSoundComponent(group, driver, front), runtimeState);
+        var definition = VehicleCatalog.find(getModelId()).ir();
+        irState.pressSound(owner, component != null && definition.sounds().controls().containsKey(component) ? component : null, runtimeState);
         updateIrState(irSnapshot.frontCoupled(), irSnapshot.rearCoupled());
     }
 
@@ -177,9 +182,12 @@ public final class TrainEntity extends Entity {
 
     public void clickIrControlSound(String group, IrReadout driver, int front,
                                      float previous, float value) {
+        clickIrControlSound(irSoundComponent(group, driver, front), previous, value);
+    }
+
+    public void clickIrControlSound(String component, float previous, float value) {
         updateIrState(irSnapshot.frontCoupled(), irSnapshot.rearCoupled());
-        String component = irSoundComponent(group, driver, front);
-        if (component == null) return;
+        if (component == null || !VehicleCatalog.find(getModelId()).ir().sounds().controls().containsKey(component)) return;
         irState.clickSound(component, previous, value);
         updateIrState(irSnapshot.frontCoupled(), irSnapshot.rearCoupled());
     }

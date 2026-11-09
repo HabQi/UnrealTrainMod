@@ -15,9 +15,12 @@ import net.minecraft.nbt.Tag;
 /** One immutable tracked snapshot. MIN_VALUE means an initially settled playback instance. */
 public record IrVehicleSnapshot(Map<String, Float> values, List<Clock> clocks,
                                  Map<String, IrControlSoundState> controlSounds, boolean frontCoupled, boolean rearCoupled,
-                                 long bellActivations, boolean bellPulse, long frontCouplings, long rearCouplings) {
-    public static final IrVehicleSnapshot EMPTY = new IrVehicleSnapshot(Map.of(), List.of(), Map.of(), false, false, 0, false, 0, 0);
-    public record Clock(boolean active, long tick) {}
+                                 long bellActivations, boolean bellPulse, long hornActivations, boolean hornPulse,
+                                 long frontCouplings, long rearCouplings) {
+    public static final IrVehicleSnapshot EMPTY = new IrVehicleSnapshot(Map.of(), List.of(), Map.of(), false, false, 0, false, 0, false, 0, 0);
+    public record Clock(boolean active, long tick, long soundEvents, long soundTick) {
+        public static final Clock SETTLED = new Clock(false, Long.MIN_VALUE, 0, Long.MIN_VALUE);
+    }
 
     public IrVehicleSnapshot {
         values = Map.copyOf(values);
@@ -32,6 +35,7 @@ public record IrVehicleSnapshot(Map<String, Float> values, List<Clock> clocks,
         for (var clock : clocks) {
             var entry = new CompoundTag();
             entry.putBoolean("Active", clock.active()); entry.putLong("Tick", clock.tick());
+            entry.putLong("SoundEvents", clock.soundEvents()); entry.putLong("SoundTick", clock.soundTick());
             list.add(entry);
         }
         tag.put("Clocks", list);
@@ -48,6 +52,7 @@ public record IrVehicleSnapshot(Map<String, Float> values, List<Clock> clocks,
         tag.putBoolean("Front", frontCoupled); tag.putBoolean("Rear", rearCoupled);
         tag.putLong("BellActivations", bellActivations);
         tag.putBoolean("BellPulse", bellPulse);
+        tag.putLong("HornActivations", hornActivations); tag.putBoolean("HornPulse", hornPulse);
         tag.putLong("FrontCouplings", frontCouplings);
         tag.putLong("RearCouplings", rearCouplings);
         return tag;
@@ -58,7 +63,7 @@ public record IrVehicleSnapshot(Map<String, Float> values, List<Clock> clocks,
         var list = tag.getList("Clocks", Tag.TAG_COMPOUND);
         for (int i = 0; i < list.size(); i++) {
             var entry = list.getCompound(i);
-            clocks.add(new Clock(entry.getBoolean("Active"), entry.getLong("Tick")));
+            clocks.add(new Clock(entry.getBoolean("Active"), entry.getLong("Tick"), entry.getLong("SoundEvents"), entry.getLong("SoundTick")));
         }
         var sounds = new HashMap<String, IrControlSoundState>();
         var soundTag = tag.getCompound("ControlSounds");
@@ -69,6 +74,7 @@ public record IrVehicleSnapshot(Map<String, Float> values, List<Clock> clocks,
         }
         return new IrVehicleSnapshot(loadValues(tag.getCompound("Values")), clocks, sounds,
                 tag.getBoolean("Front"), tag.getBoolean("Rear"), tag.getLong("BellActivations"), tag.getBoolean("BellPulse"),
+                tag.getLong("HornActivations"), tag.getBoolean("HornPulse"),
                 tag.getLong("FrontCouplings"), tag.getLong("RearCouplings"));
     }
 

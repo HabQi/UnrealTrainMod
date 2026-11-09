@@ -47,7 +47,8 @@ public record IrLightingDefinition(float interiorLevel, Map<String, Rule> object
                                       Map<String, IrControlDefinition> controls, PackageArchive archive, String prefix) {
         var logger = LoggerFactory.getLogger(IrLightingDefinition.class);
         float interior = 0.4f;
-        var properties = GsonHelper.getAsJsonObject(json, "properties", new JsonObject());
+        var propertyData = json.get("properties");
+        var properties = propertyData != null && propertyData.isJsonObject() ? propertyData.getAsJsonObject() : new JsonObject();
         if (properties.has("interior_light_level")) {
             try { interior = unit(GsonHelper.getAsFloat(properties, "interior_light_level")); }
             catch (RuntimeException exception) { logger.warn("IR {}: invalid interior_light_level; using 0.4", archive.path()); }

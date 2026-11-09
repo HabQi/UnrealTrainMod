@@ -21,6 +21,7 @@ import com.unrealtrainmod.client.item.CachedObjLoader;
 import com.unrealtrainmod.client.sound.VehicleSoundManager;
 import com.unrealtrainmod.client.gui.ActivationWarningOverlay;
 import com.unrealtrainmod.client.gui.TrainDebugOverlay;
+import com.unrealtrainmod.client.gui.screen.ModConfigScreen;
 import com.unrealtrainmod.client.network.ClientPayloadHandlers;
 import com.unrealtrainmod.client.map.TrainMapClient;
 import com.unrealtrainmod.client.renderer.TrainModelRenderer;
@@ -41,7 +42,6 @@ import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.fml.common.Mod;
 import net.neoforged.fml.config.ModConfig;
-import net.neoforged.neoforge.client.gui.ConfigurationScreen;
 import net.neoforged.neoforge.client.gui.IConfigScreenFactory;
 import net.neoforged.neoforge.client.event.EntityRenderersEvent;
 import net.neoforged.neoforge.client.event.RegisterClientReloadListenersEvent;
@@ -111,7 +111,7 @@ public class UnrealTrainModClient {
         com.unrealtrainmod.client.wiring.WiringClient.register(NeoForge.EVENT_BUS);
         container.registerConfig(ModConfig.Type.CLIENT, ClientConfig.SPEC);
         // Expose the client configuration in the Mods screen.
-        container.registerExtensionPoint(IConfigScreenFactory.class, ConfigurationScreen::new);
+        container.registerExtensionPoint(IConfigScreenFactory.class, ModConfigScreen::new);
         NeoForge.EVENT_BUS.addListener(UnrealTrainModClient::onGameShuttingDown);
         NeoForge.EVENT_BUS.addListener(ActivationWarningOverlay::render);
         NeoForge.EVENT_BUS.addListener(TrainDebugOverlay::render);
@@ -131,6 +131,13 @@ public class UnrealTrainModClient {
         NeoForge.EVENT_BUS.addListener(TrainDrivingClient::unload);
         NeoForge.EVENT_BUS.addListener(TrainDrivingClient::logout);
         NeoForge.EVENT_BUS.addListener(TrainDrivingClient::clonePlayer);
+        NeoForge.EVENT_BUS.addListener(com.unrealtrainmod.client.TrainCursorClient::tick);
+        NeoForge.EVENT_BUS.addListener(com.unrealtrainmod.client.TrainCursorClient::openingScreen);
+        NeoForge.EVENT_BUS.addListener(com.unrealtrainmod.client.TrainCursorClient::render);
+        NeoForge.EVENT_BUS.addListener(com.unrealtrainmod.client.TrainCursorClient::unload);
+        NeoForge.EVENT_BUS.addListener(com.unrealtrainmod.client.TrainCursorClient::logout);
+        NeoForge.EVENT_BUS.addListener(com.unrealtrainmod.client.TrainCursorClient::clonePlayer);
+        NeoForge.EVENT_BUS.addListener(com.unrealtrainmod.client.IrControlInteraction::onSync);
         NeoForge.EVENT_BUS.addListener(TrainWalkingClient::onState);
         NeoForge.EVENT_BUS.addListener(TrainWalkingClient::movement);
         NeoForge.EVENT_BUS.addListener(TrainWalkingClient::tick);

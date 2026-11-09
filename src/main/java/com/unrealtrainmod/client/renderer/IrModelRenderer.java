@@ -64,18 +64,8 @@ public final class IrModelRenderer {
             float value = animation.value(definition, controls.values(), runtime, controls.frontCoupled(), controls.rearCoupled());
             var frames = binding.animations().get(i);
             if (frames == null) continue;
-            boolean active = value >= 0.95f;
-            if (animation.mode() == IrAnimationDefinition.Mode.VALUE) percentages[i] = value;
-            else if (animation.mode() == IrAnimationDefinition.Mode.LOOP) {
-                percentages[i] = entity != null && active ? (float)((time * animation.framesPerTick() / frames.frameCount()) % 1) : 0;
-            } else {
-                var clock = i < controls.clocks().size() ? controls.clocks().get(i) : null;
-                boolean settled = entity == null || clock == null || clock.tick() == Long.MIN_VALUE;
-                if (clock != null && entity != null) active = clock.active();
-                float progress = settled ? 1 : (float)Math.clamp((time - clock.tick()) * animation.framesPerTick() / frames.frameCount(), 0, 1);
-                percentages[i] = animation.mode() == IrAnimationDefinition.Mode.PLAY_FORWARD
-                        ? (active ? progress : 0) : (active ? progress : 1 - progress);
-            }
+            var clock = i < controls.clocks().size() ? controls.clocks().get(i) : null;
+            percentages[i] = animation.percentage(value, clock, frames.frameCount(), time, entity != null);
         }
         var frame = new Frame(distance, definition, controls, runtime, percentages, time);
         if (cached != null) {

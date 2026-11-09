@@ -27,7 +27,7 @@ final class IrVehicleDefinitions {
     private IrVehicleDefinitions() {}
 
     static IrVehicleDefinition read(JsonObject json, Map<String, ModelBounds> parts, float scale,
-                                     PackageArchive archive, String prefix) throws IOException {
+                                     PackageArchive archive, String prefix, IrVehicleProperties properties) throws IOException {
         var defaults = new HashMap<String, Float>();
         var configured = GsonHelper.getAsJsonObject(json, "controls", new JsonObject());
         for (var entry : configured.entrySet()) {
@@ -41,13 +41,14 @@ final class IrVehicleDefinitions {
             if (key != null) objects.computeIfAbsent(key, ignored -> new ArrayList<>()).add(name);
         }
         var controls = new LinkedHashMap<String, IrControlDefinition>();
+        var modelControls = new LinkedHashMap<String, IrModelControl>();
         var engines = new HashSet<String>();
         var horns = new HashSet<String>();
         var bells = new HashSet<String>();
         var soundBindings = new LinkedHashMap<String, IrSoundDefinitions.Binding>();
         for (var entry : objects.entrySet()) {
             String key = entry.getKey(), group = null, label = null;
-            boolean toggle = false, press = false;
+            boolean toggle = false, press = false, noInteract = false;
             for (String name : entry.getValue()) {
                 String cg = IrModelComponents.attribute(name, "CG");
                 if (group == null && cg != null) group = cg;
@@ -55,6 +56,7 @@ final class IrVehicleDefinitions {
                 if (label == null && text != null) label = text.replace('^', ' ');
                 toggle |= IrModelComponents.token(name, "TOGGLE");
                 press |= IrModelComponents.token(name, "PRESS");
+                noInteract |= IrModelComponents.token(name, "NOINTERACT");
             }
             if (group == null) group = key;
             if (key.startsWith("ENGINE_START_")) engines.add(group);
@@ -70,6 +72,7 @@ final class IrVehicleDefinitions {
                     : IrControlDefinition.Type.CONTINUOUS;
             var control = new IrControlDefinition(group, label, type, defaults.getOrDefault(group, base), driver);
             controls.merge(group, control, IrVehicleDefinitions::merge);
+            modelControls.put(key, new IrModelControl(group, type, !noInteract));
             var bounds = new ModelBounds.Builder();
             for (String name : entry.getValue()) bounds.include(parts.get(name));
             var center = bounds.build();
@@ -103,10 +106,18 @@ final class IrVehicleDefinitions {
         }
         defaults.forEach((group, value) -> controls.putIfAbsent(group,
                 new IrControlDefinition(group, group, IrControlDefinition.Type.CONTINUOUS, value, null)));
-        float speed = number(GsonHelper.getAsJsonObject(json, "properties", new JsonObject()), "max_speed_kmh", 200);
-        if (speed <= 0) throw new IOException("IR max_speed_kmh must be positive");
-        return new IrVehicleDefinition(controls, animations, speed,
-                IrSoundDefinitions.read(json, archive, prefix, engines, horns, bells, soundBindings),
+        var sounds = IrSoundDefinitions.read(json, archive, prefix, engines, horns, bells, soundBindings);
+        controls.replaceAll((group, control) -> {
+            var type = sounds.controlType(group, control.type());
+            return type == control.type() ? control : new IrControlDefinition(group, control.label(), type, control.defaultValue(), control.driver());
+        });
+        modelControls.replaceAll((key, control) -> {
+            var type = sounds.controlType(control.group(), control.type());
+            return type == control.type() ? control : new IrModelControl(control.group(), type, control.interactive());
+        });
+        return new IrVehicleDefinition(controls, modelControls, animations, properties.performance().maxSpeed() * 3.6,
+                properties.throttleNotches(),
+                sounds,
                 IrLightingDefinition.read(json, parts, scale, controls, archive, prefix));
     }
 

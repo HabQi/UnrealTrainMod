@@ -160,6 +160,7 @@ public final class TrackAssemblyInstance {
     public TrailingPass trailingPass() { return trailingPass; }
     public String modelId() { return modelId; }
     public UUID id() { return id; }
+    /** Protection representative, not an exclusive right to enter the turnout. */
     public UUID occupant() { return occupant; }
     public TrackAssemblyDefinition definition() { return definition; }
     public TrackVector origin() { return origin; }

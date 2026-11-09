@@ -1,7 +1,7 @@
 {
   "itemGroup.unrealtrainmod": "UnrealTrainMod",
   "item.unrealtrainmod.hacksaw": "Hacksaw",
-  "item.unrealtrainmod.hacksaw.tooltip": "Left-click with a hacksaw in your main hand to remove one UTM track segment. Turnouts are removed as a whole. Occupied track is protected.",
+  "item.unrealtrainmod.hacksaw.tooltip": "Left-click with a hacksaw in your main hand to remove UTM track or an insulator. Turnouts are removed as a whole, occupied track is protected, and an insulator's wires are removed with it.",
   "item.unrealtrainmod.hacksaw.required": "Use a hacksaw to left-click and remove UTM track.",
   "item.unrealtrainmod.hacksaw.removed": "Selected track removed.",
   "item.unrealtrainmod.hacksaw.blocked": "A vehicle occupies this track or turnout. Removal is blocked.",
@@ -17,7 +17,7 @@
   "gui.unrealtrainmod.train_debug.occupancy": "Occupied intervals: %s; same-segment conflicts: %s (report only)",
   "gui.unrealtrainmod.train_debug.interval": "  %s [%s, %s]",
   "gui.unrealtrainmod.train_debug.conflict": "Conflicting train %s; segment %s [%s, %s]",
-  "gui.unrealtrainmod.train_debug.turnout": "Turnout %s; occupying vehicle: %s",
+  "gui.unrealtrainmod.train_debug.turnout": "Turnout %s; protection representative vehicle: %s",
   "gui.unrealtrainmod.train_debug.missing": "Target vehicle is unloaded or removed: %s",
   "gui.unrealtrainmod.train_debug.unavailable": "Train diagnostics unavailable. Check member identity, resources and storage.",
   "gui.unrealtrainmod.train_debug.clipped": "... Use /utm train info for more diagnostics.",
@@ -27,16 +27,23 @@
   "unrealtrainmod.configuration.showActivationWarning.tooltip": "For entertainment purposes only",
   "unrealtrainmod.configuration.section.unrealtrainmod.client.toml": "Client Settings",
   "unrealtrainmod.configuration.section.unrealtrainmod.client.toml.title": "UnrealTrainMod Client Settings",
+  "unrealtrainmod.configuration.category.debugLogs": "Debug Logs",
+  "unrealtrainmod.configuration.category.performance": "Performance",
+  "unrealtrainmod.configuration.category.general": "General",
   "unrealtrainmod.configuration.sortTranslucentTriangles": "Sort Translucent Triangles",
   "unrealtrainmod.configuration.sortTranslucentTriangles.tooltip": "Disabled by default. Controls vehicle translucent triangle sorting when static batches are disabled. On the native path, depth calculation, index uploads and adjacent draw merging remain active when disabled; Iris dynamic transparency retains CPU vertex submission. Ignored while static batches are enabled. Applies to world, preview and Iris rendering. Overlapping translucent surfaces may blend incorrectly when disabled.",
   "unrealtrainmod.configuration.useStaticTranslucentBatches": "Static Translucent Batches (Performance Comparison)",
   "unrealtrainmod.configuration.useStaticTranslucentBatches.tooltip": "Enabled by default. Groups static translucent batches by material, skipping triangle collection, depth calculation, sorting and dynamic index uploads on the GPU path. Iris reuses shared GPU geometry after opaque lighting instead of rewriting translucent vertices each frame. Overrides translucent triangle sorting. Applies to world, preview and Iris rendering. Overlapping translucent surfaces may blend incorrectly.",
+  "unrealtrainmod.configuration.irisGeometryCacheMiB": "Iris Geometry Cache (MiB)",
+  "unrealtrainmod.configuration.irisGeometryCacheMiB.tooltip": "Soft geometry budget from 64 to 4096 MiB, default 1024. Allocated on demand for Iris vehicles, static transparency, items and track parts. Larger budgets reduce uploads when turning between models. Active and recently viewed geometry may exceed the budget. PBR textures and the separate light cache are excluded. Menu prewarming uses up to half the budget. Takes effect without reloading models.",
+  "unrealtrainmod.configuration.irisGeometryCacheRetentionSeconds": "Iris Geometry Retention (seconds)",
+  "unrealtrainmod.configuration.irisGeometryCacheRetentionSeconds.tooltip": "Minimum idle time before over-budget geometry can be evicted, from 0 to 60 seconds, default 10. Keeps recently viewed models cached while turning the camera. Current and previous frame geometry is always protected. Entries remain cached while under budget. Takes effect without reloading models; the separate light cache is unchanged.",
   "unrealtrainmod.configuration.useVehicleInstancing": "Vehicle Opaque Instancing (Experimental)",
   "unrealtrainmod.configuration.useVehicleInstancing.tooltip": "Enabled by default; disable for side-by-side comparison. Instances CUTOUT and the opaque portion of MIXED batches across visible vehicles sharing GPU geometry and render state. Opaque draws are grouped by material; translucent passes and CPU fallback are not instanced. Requires OpenGL 3.3 and the instanced model shader, otherwise the normal path is used automatically. Takes effect immediately without reloading models.",
   "unrealtrainmod.configuration.logVehicleInstancingStats": "Log Vehicle Render Statistics",
   "unrealtrainmod.configuration.logVehicleInstancingStats.tooltip": "Disabled by default. Reports five-second windows per world or preview queue: draws, instances, submitted triangles, model counts, and CPU means and stage maxima for pose, scripts, queueing, opaque and translucent rendering. CPU scopes overlap and must not be added. Separately samples asynchronous GPU timeline spans for opaque and translucent passes, excluding intervening game rendering; these are not full-frame GPU times. Also reports native range-merge timings for pose IDs, signatures, bucketing, sorting, merging and cleanup, workspace growth, and IR batch layout during model loading. Disabling stops statistics and releases queries at the next vehicle queue frame.",
   "unrealtrainmod.configuration.useTrackRenderStateCache": "Track Render State Reuse (Experimental)",
-  "unrealtrainmod.configuration.useTrackRenderStateCache.tooltip": "Disabled by default. Reuses render types, shader programs, samplers and fixed direction lights across world track draws. With material grouping enabled, batches sharing a material are drawn consecutively across meshes; otherwise submission order is preserved. Does not rebuild geometry or change the four-build/four-upload budgets. Takes effect on the next frame; previews and thumbnails keep their own state scopes.",
+  "unrealtrainmod.configuration.useTrackRenderStateCache.tooltip": "Enabled by default; disable for comparison. Reuses render types, shader programs, samplers and fixed direction lights across world track draws. With material grouping enabled, batches sharing a material are drawn consecutively across meshes; otherwise submission order is preserved. Does not rebuild geometry or change the four-build/four-upload budgets. Takes effect on the next frame; previews and thumbnails keep their own state scopes.",
   "unrealtrainmod.configuration.groupTrackDrawsByMaterial": "Group Track Draws by Material",
   "unrealtrainmod.configuration.groupTrackDrawsByMaterial.tooltip": "Enabled by default, active with track render state reuse. Groups static world track batches by material; rigid turnout parts also group by shared mesh and owning chunk for instancing. Changes submission order between materials. Takes effect next frame without rebuilding fixed geometry or restarting animations. Previews and thumbnails are unchanged.",
   "unrealtrainmod.configuration.turnoutAnimationDurationSeconds": "Turnout Animation Duration (seconds)",
@@ -199,7 +206,7 @@
   "gui.unrealtrainmod.track_curve.mode_curve": "Explicit curve parameters",
   "gui.unrealtrainmod.track_curve.pending": "Applying parameters...",
   "gui.unrealtrainmod.track_curve.hint": "Live preview. Apply, then use the Rail Placer to build.",
-  "gui.unrealtrainmod.driving.ir_control_unavailable": "This visual control is unavailable or the requested value is invalid.",
+  "gui.unrealtrainmod.driving.ir_control_unavailable": "This control cannot be operated now, or the requested value is invalid.",
   "gui.unrealtrainmod.driving.ir.title": "Control panel",
   "gui.unrealtrainmod.driving.ir.search": "Search label or group...",
   "gui.unrealtrainmod.driving.ir.search_short": "Search...",
@@ -209,6 +216,7 @@
   "gui.unrealtrainmod.driving.ir.on": "On",
   "gui.unrealtrainmod.driving.ir.off": "Off",
   "gui.unrealtrainmod.driving.ir.pulse": "Trigger",
+  "gui.unrealtrainmod.driving.ir.hold": "Hold",
   "gui.unrealtrainmod.driving.ir.visual_only": "Controls visual actions and sounds; no equipment physics or electrical interlocks",
   "gui.unrealtrainmod.driving.ir.details": "%s | value %s | default %s",
   "gui.unrealtrainmod.driving.ir.type.continuous": "Continuous",
@@ -269,12 +277,12 @@
   "commands.unrealtrainmod.train.state.consist_not_ready": "consist recovery is pending or its route is stale; restore all members, then start and stop before this operation",
   "commands.unrealtrainmod.train.state.coupling_rejected": "coupling requires free end couplers on two consists sharing a route, at most 0.5 blocks of whole-second-consist adjustment, and coupler separation no greater than the default gap plus 1 block",
   "commands.unrealtrainmod.train.state.uncouple_required": "rebinding requires a single car; disconnect its couplers with the crowbar or /utm train uncouple <vehicle> <front|rear> first",
-  "commands.unrealtrainmod.train.state.turnout_operation_blocked": "a vehicle or adjustment sweep touches a turnout protection area; move the whole consist clear before coupling or uncoupling",
+  "commands.unrealtrainmod.train.state.turnout_operation_blocked": "turnout operation is restricted by occupancy protection",
   "commands.unrealtrainmod.train.state.not_coupled": "the selected coupler is free; no uncoupling is needed",
   "commands.unrealtrainmod.train.state.unbound": "not bound to a track; use /utm train bind",
   "commands.unrealtrainmod.train.state.insufficient_route": "insufficient route: every bogie of the whole consist must fit on the same valid route; adjust the track, vehicle parameters, or a single car's placement or binding",
   "commands.unrealtrainmod.train.state.degenerate_geometry": "cannot solve vehicle pose: bogie samples coincide or their chord is nearly vertical; adjust the track or bogie offsets",
-  "commands.unrealtrainmod.train.state.turnout_occupied": "turnout occupied by another consist; stopped, wait until its entire consist clears and start manually",
+  "commands.unrealtrainmod.train.state.turnout_occupied": "trailing passage blocked by occupancy protection; stopped, wait for other consists to clear or the trailing path to open, then start manually",
   "commands.unrealtrainmod.train.state.turnout_route_unavailable": "This turnout path does not permit the consist in this direction, or its passage is no longer valid; check controls and occupancy",
   "commands.unrealtrainmod.turnout.info": "Turnout %s: %s, %s, state revision %s; %s",
   "commands.unrealtrainmod.turnout.port": "Port %s: %s at (%s, %s, %s), outward yaw=%s degrees",
@@ -285,8 +293,8 @@
   "commands.unrealtrainmod.turnout.removed": "Removed entire turnout %s, preserving external tracks",
   "commands.unrealtrainmod.turnout.error": "Turnout operation failed: %s",
   "commands.unrealtrainmod.turnout.free": "free",
-  "commands.unrealtrainmod.turnout.occupied": "occupied by vehicle %s",
-  "commands.unrealtrainmod.turnout.waiting": "holding occupancy for vehicle %s until it reloads",
+  "commands.unrealtrainmod.turnout.occupied": "protection representative vehicle %s; open paths may be shared, protection remains until all consists clear",
+  "commands.unrealtrainmod.turnout.waiting": "protection representative vehicle %s is unloaded; protection remains pending reload and verification",
   "commands.unrealtrainmod.turnout.left": "left-hand",
   "commands.unrealtrainmod.turnout.right": "right-hand",
   "commands.unrealtrainmod.turnout.straight": "straight open",
@@ -329,7 +337,7 @@
   "item.unrealtrainmod.turnout_builder.permission": "Requires permission level 2; all three nodes must have the same height",
   "item.unrealtrainmod.turnout_builder.aim_turnout": "Aim at a turnout block; the wrench edits nodes while a construction draft exists",
   "item.unrealtrainmod.turnout_builder.ambiguous": "This block belongs to multiple turnouts; choose an unambiguous block",
-  "item.unrealtrainmod.turnout_builder.occupied": "Vehicle %s occupies this turnout; wait until the entire vehicle leaves",
+  "item.unrealtrainmod.turnout_builder.occupied": "Turnout protected (representative vehicle %s); all consists must clear before switching",
   "item.unrealtrainmod.turnout_builder.switched": "Turnout switched: %s",
   "item.unrealtrainmod.track_wrench.turnout": "Without a construction draft: use on a turnout block to switch the enabled line",
   "commands.unrealtrainmod.track.error.vehicle_present": "A rail vehicle covers the construction area",
@@ -395,11 +403,11 @@
   "gui.unrealtrainmod.train_map.position": "X %s / Y %s / Z %s",
   "gui.unrealtrainmod.train_map.select_hint": "Select a train in the list, a vehicle marker or a turnout. Drag to pan; scroll to zoom. Heights overlap in this projection. Red indicates reported same-track overlap only.",
   "gui.unrealtrainmod.train_map.controls": "Controls: %s",
-  "gui.unrealtrainmod.train_map.occupant": "Occupant vehicle: %s",
+  "gui.unrealtrainmod.train_map.occupant": "Protection representative vehicle: %s",
   "gui.unrealtrainmod.train_map.none": "None",
   "commands.unrealtrainmod.turnout.trailing_info": "Trailing passage from %s: %s; restores to %s after exit",
   "commands.unrealtrainmod.turnout.trailing_approach": "Approaching; the leading bogie throws the turnout in the final 10% of arc length before A",
-  "commands.unrealtrainmod.turnout.trailing_return": "Thrown; waiting for the entire consist to clear the protection area",
+  "commands.unrealtrainmod.turnout.trailing_return": "Thrown; open path may be shared, waiting for all consists to clear before restoring",
   "gui.unrealtrainmod.track_curve.outward_hint": "Connected endpoints use directed handles and do not flip toward a new endpoint. Adjust the angle manually, or restore automatic to clear this endpoint setting.",
   "gui.unrealtrainmod.track_curve.automatic_horizontal_hint": "Automatic handles follow the alignment. Opposite a directed handle, this end gradually straightens toward its control point. Edit a value to adjust manually.",
   "gui.unrealtrainmod.track_curve.turnout_automatic_hint": "Automatic exits straighten toward A's shared control point, independently for B and C. Edit a value to set this exit manually. Existing external-line directions stay locked.",
@@ -410,7 +418,7 @@
   "key.unrealtrainmod.driving.emergency": "Emergency brake / release at rest",
   "key.unrealtrainmod.driving.door_left": "Open/close left door of this car",
   "key.unrealtrainmod.driving.door_right": "Open/close right door of this car",
-  "key.unrealtrainmod.driving.cursor": "Hold to use driving and 3D controls",
+  "key.unrealtrainmod.driving.cursor": "Hold to use the driving HUD / key-operated 3D controls",
   "gui.unrealtrainmod.driving.console.toward_front": "To front",
   "gui.unrealtrainmod.driving.console.toward_back": "To rear",
   "gui.unrealtrainmod.driving.console.at_rest": "At rest",
@@ -479,7 +487,7 @@
   "commands.unrealtrainmod.train.coupler_pending": "legacy two-car coupling migration pending",
   "item.unrealtrainmod.crowbar.coupled": "Cars coupled automatically; consist stopped with brakes applied",
   "item.unrealtrainmod.key": "Key",
-  "item.unrealtrainmod.key.tooltip": "Right-click a vehicle with a key in your main hand while not sneaking to drive; up to three drivers per consist. You may switch items after boarding",
+  "item.unrealtrainmod.key.tooltip": "Right-click a vehicle with a key in your main hand while not sneaking to drive; up to three drivers per consist. Hold a key in either hand and hold the cursor key (Left Alt by default) in first person to use nearby IR non-driving controls. Drivers may switch items and operate their own car without holding a key",
   "item.unrealtrainmod.key.required": "Hold a key in your main hand and right-click the vehicle to drive",
   "item.unrealtrainmod.key.driver_limit": "This consist already has %s drivers; you cannot join",
   "item.unrealtrainmod.key.coupling_overflow": "Coupling keeps up to %s drivers, prioritizing the reference train. You have been dismounted",
@@ -509,13 +517,15 @@
   ,"gui.unrealtrainmod.driving.ir.3d.press": "Hold left mouse button; release to reset"
   ,"gui.unrealtrainmod.driving.ir.3d.toggle": "Left click to switch on/off"
   ,"gui.unrealtrainmod.driving.ir.3d.drag": "Drag up/down or scroll to adjust"
+  ,"gui.unrealtrainmod.driving.ir.3d.driving_required": "You must be driving this vehicle to use this control"
+  ,"gui.unrealtrainmod.driving.ir.3d.key_required": "Hold a key in either hand to use this control"
   ,"item.unrealtrainmod.insulator": "Insulator"
   ,"item.unrealtrainmod.wire": "Wire"
   ,"entity.unrealtrainmod.connector": "Insulator"
   ,"wiring.unrealtrainmod.selected": "Selected model: %s"
   ,"wiring.unrealtrainmod.select_hint": "Right-click air to select a model; this item is reusable"
   ,"wiring.unrealtrainmod.wire_hint": "Right-click two insulators to connect; sneak-use in air to cancel"
-  ,"wiring.unrealtrainmod.connector_hint": "Use on a block face to place; sneak-use on an insulator to remove it and its wires"
+  ,"wiring.unrealtrainmod.connector_hint": "Use on a block face to place with its initial horizontal facing toward you; left-click with a hacksaw in your main hand to remove it and its wires"
   ,"wiring.unrealtrainmod.unselected": "Right-click air to select an available model first"
   ,"wiring.unrealtrainmod.start": "Start selected; use another insulator to connect, or the same one to cancel"
   ,"wiring.unrealtrainmod.remove_start": "Removal start selected; sneak-use an empty main hand on the other endpoint"
@@ -532,6 +542,7 @@
   ,"wiring.unrealtrainmod.wire_models": "Select wire model"
   ,"wiring.unrealtrainmod.connector_models": "Select insulator model"
   ,"wiring.unrealtrainmod.empty": "No models available; place an RTM ZIP in mods/Packages_RTM and restart"
+  ,"wiring.unrealtrainmod.model_count": "%s models available"
   ,"wiring.unrealtrainmod.apply": "Apply"
   ,"wiring.unrealtrainmod.cancel": "Cancel"
   ,"wiring.unrealtrainmod.reset": "Reset"

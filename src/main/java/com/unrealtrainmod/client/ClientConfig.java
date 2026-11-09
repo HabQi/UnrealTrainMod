@@ -32,6 +32,22 @@ public final class ClientConfig {
             .translation("unrealtrainmod.configuration.useStaticTranslucentBatches")
             .define("useStaticTranslucentBatches", true);
 
+    public static final ModConfigSpec.IntValue IRIS_GEOMETRY_CACHE_MIB = BUILDER
+            .comment("Soft GPU geometry cache budget in MiB for Iris vehicles, static transparency, items and track parts.",
+                    "Larger budgets reduce repeated uploads when looking between detailed models; memory is allocated on demand.",
+                    "Active and recently used geometry may exceed this budget. PBR textures and the separate light cache are excluded.",
+                    "Menu prewarming uses at most half this budget. Changes apply without reloading models.")
+            .translation("unrealtrainmod.configuration.irisGeometryCacheMiB")
+            .defineInRange("irisGeometryCacheMiB", 1024, 64, 4096);
+
+    public static final ModConfigSpec.DoubleValue IRIS_GEOMETRY_CACHE_RETENTION_SECONDS = BUILDER
+            .comment("Minimum idle time in seconds before Iris base geometry can be evicted when over budget.",
+                    "Keeps recently viewed models resident while turning the camera. Does not expire entries while under budget.",
+                    "Current and previous frame geometry is always protected, including when set to zero.",
+                    "Changes apply without reloading models; the separate light cache is unchanged.")
+            .translation("unrealtrainmod.configuration.irisGeometryCacheRetentionSeconds")
+            .defineInRange("irisGeometryCacheRetentionSeconds", 10.0, 0.0, 60.0);
+
     public static final ModConfigSpec.BooleanValue USE_VEHICLE_INSTANCING = BUILDER
             .comment("Instance vehicle CUTOUT and MIXED opaque passes across all visible vehicles by shared mesh range.",
                     "Applies to native world and preview rendering; Iris uses separate material grouping and opaque range merging.",
@@ -72,14 +88,14 @@ public final class ClientConfig {
 
     public static final ModConfigSpec.BooleanValue USE_TRACK_RENDER_STATE_CACHE = BUILDER
             .comment("Reuse render type, shader program, samplers and direction lights across consecutive native track draws.",
-                    "Disabled by default to compare against the original per-mesh draw path on identical cached geometry.",
+                    "Enabled by default; disable to compare against the original per-mesh draw path on identical cached geometry.",
                     "All paths reuse cached geometry and keep the same build/upload budgets without re-laying tracks.",
                     "When groupTrackDrawsByMaterial is enabled, visible batches are grouped across meshes.",
                     "Only controls the native backend; Iris uses its own draw state scope.",
                     "Affects world tracks from the next frame; rail preview and thumbnails always use their own",
                     "short-lived state scope.")
             .translation("unrealtrainmod.configuration.useTrackRenderStateCache")
-            .define("useTrackRenderStateCache", false);
+            .define("useTrackRenderStateCache", true);
 
     public static final ModConfigSpec.BooleanValue GROUP_TRACK_DRAWS_BY_MATERIAL = BUILDER
             .comment("Group visible world track batches by render type across meshes before drawing.",

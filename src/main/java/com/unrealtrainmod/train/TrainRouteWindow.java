@@ -126,7 +126,15 @@ final class TrainRouteWindow {
     }
 
     static TrackTraversalContext context(TrainConsist train, boolean candidates) {
-        return new TrackTraversalContext(train.cars().stream().map(TrainCarState::entityId).toList(), candidates, train.planningDirection() > 0);
+        var occupied = new HashSet<UUID>();
+        for (var car : train.cars()) if (car.anchor() != null) occupied.add(car.anchor().segmentId());
+        var window = train.window();
+        if (window != null) {
+            var core = window.core(train);
+            for (int i = core.first(); i < core.end(); i++) occupied.add(window.route().connections().get(i).segmentId());
+        }
+        return new TrackTraversalContext(train.cars().stream().map(TrainCarState::entityId).toList(), candidates,
+                train.planningDirection() > 0, occupied);
     }
 
     boolean pathsEnabledAt(TrackGraph graph, TrainConsist train, double at, TrackTraversalContext context) {

@@ -34,28 +34,34 @@ final class SoundSequencePlayer {
 
     void update(TrainEntity entity, boolean requested, float volume, float pitch, double distanceSquared,
                 boolean enabled) {
-        update(entity, requested, 0, false, false, volume, pitch, distanceSquared, enabled);
+        update(entity, requested, 0, false, false, false, volume, pitch, distanceSquared, enabled);
     }
 
     /** The server distinguishes held controls from auto-released pulses, even across multiple snapshots. */
     void updateTriggered(TrainEntity entity, boolean requested, long counter, boolean pulse, float volume, float pitch,
                          double distanceSquared, boolean enabled) {
-        update(entity, requested, counter, false, pulse, volume, pitch, distanceSquared, enabled);
+        update(entity, requested, counter, false, pulse, false, volume, pitch, distanceSquared, enabled);
+    }
+
+    /** A live event received while timing metadata was pending may start when that metadata is ready. */
+    void updateAnimation(TrainEntity entity, boolean requested, long counter, boolean pendingEvent,
+                          double distanceSquared, boolean enabled) {
+        update(entity, requested, counter, false, false, pendingEvent, 1, 1, distanceSquared, enabled);
     }
 
     void updateEvent(TrainEntity entity, long counter, Vec3 listener, boolean enabled) {
-        update(entity, false, counter, true, true, 1, 1,
+        update(entity, false, counter, true, true, false, 1, 1,
                 PackageSoundInstance.position(entity, offset).distanceToSqr(listener), enabled);
     }
 
-    private void update(TrainEntity entity, boolean requested, long counter, boolean eventOnly, boolean pulse,
+    private void update(TrainEntity entity, boolean requested, long counter, boolean eventOnly, boolean pulse, boolean pendingEvent,
                         float volume, float pitch, double distanceSquared, boolean enabled) {
         if (definition == null) return;
         boolean withinRange = enabled && definition.volume() > 0
                 && distanceSquared < (double)definition.distance() * definition.distance();
         boolean changed = observed && requested != active;
         boolean resumed = !observed || !audible;
-        boolean triggered = !resumed && counter > previousCounter;
+        boolean triggered = pendingEvent || !resumed && counter > previousCounter;
         observed = true;
         previousCounter = counter;
         active = requested;
@@ -65,7 +71,7 @@ final class SoundSequencePlayer {
             phase(Phase.IDLE);
             return;
         }
-        if (resumed) {
+        if (resumed && !triggered) {
             // A newly observed/ranged-in vehicle only resumes an already sustained loop.
             oneShot = false;
             phase(requested && !pulse && definition.looping() ? Phase.MAIN : Phase.IDLE);

@@ -21,7 +21,6 @@ import com.unrealtrainmod.vehicle.VehicleActions;
 import com.unrealtrainmod.vehicle.VehicleDefinition;
 import com.unrealtrainmod.vehicle.VehicleInteriorSpec;
 import com.unrealtrainmod.vehicle.VehicleMotionSpec;
-import com.unrealtrainmod.vehicle.VehiclePerformanceSpec;
 import com.unrealtrainmod.vehicle.VehiclePartRole;
 import com.unrealtrainmod.track.geometry.TrackVector;
 import java.io.IOException;
@@ -73,6 +72,7 @@ final class IrVehicleAdapter {
         var json = readJson(archive, config.entry());
         String name = GsonHelper.getAsString(json, "name");
         if (name.isBlank()) throw new IOException("name must not be blank");
+        var properties = IrVehicleProperties.read(json, type, config.toString());
         String reference = GsonHelper.getAsString(json, "model");
         if (!reference.toLowerCase(Locale.ROOT).endsWith(".obj")) throw new IOException("IR model must be OBJ: " + reference);
         if (reference.indexOf(':') < 0) reference = "immersiverailroading:" + reference;
@@ -119,8 +119,8 @@ final class IrVehicleAdapter {
                     new TrackVector(0, 0, z), builder.build(), VehicleActions.NONE));
         });
         return new VehicleDefinition(id, name, config, null, type, parts, bounds, spec,
-                VehiclePerformanceSpec.DEFAULT, VehicleInteriorSpec.fromBounds(bounds, floorY),
-                IrVehicleDefinitions.read(json, rawParts, scale, archive, prefix));
+                properties.performance(), VehicleInteriorSpec.fromBounds(bounds, floorY),
+                IrVehicleDefinitions.read(json, rawParts, scale, archive, prefix, properties));
     }
 
     private static double readFloorY(Map<String, ModelBounds> rawParts, double scale,
