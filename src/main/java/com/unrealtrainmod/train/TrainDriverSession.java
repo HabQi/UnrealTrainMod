@@ -4,6 +4,7 @@
  */
 package com.unrealtrainmod.train;
 
+import com.unrealtrainmod.compat.ir.IrReadout;
 import java.util.UUID;
 import net.minecraft.server.level.ServerPlayer;
 
@@ -16,6 +17,8 @@ public final class TrainDriverSession {
     final TrainCarEnd front;
     long sequence;
     int silentTicks;
+    String irSoundGroup;
+    IrReadout nativeSoundControl;
     int monitorDirection;
     final TrainMonitorPath monitorPath = new TrainMonitorPath();
 

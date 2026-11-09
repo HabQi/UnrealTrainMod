@@ -15,7 +15,8 @@ import net.minecraft.resources.ResourceLocation;
 public final class LoadReport {
     private static final Logger LOGGER = LoggerFactory.getLogger(LoadReport.class);
     public enum Kind {
-        RTM_VEHICLE("RTM vehicles"), IR_VEHICLE("IR vehicles"), RTM_RAIL("RTM rails"), IR_RAIL("IR rails");
+        RTM_VEHICLE("RTM vehicles"), IR_VEHICLE("IR vehicles"), RTM_RAIL("RTM rails"), IR_RAIL("IR rails"),
+        RTM_CONNECTOR("RTM connectors"), RTM_WIRE("RTM wires");
 
         private final String label;
         Kind(String label) { this.label = label; }

@@ -23,10 +23,14 @@ import com.unrealtrainmod.vehicle.VehicleRuntimeState;
 import com.unrealtrainmod.compat.ir.IrVehicleDefinition;
 import com.unrealtrainmod.compat.ir.IrVehicleSnapshot;
 import com.unrealtrainmod.compat.ir.IrVehicleState;
+import com.unrealtrainmod.compat.ir.IrReadout;
+import com.unrealtrainmod.compat.ir.IrControlSound;
 import com.unrealtrainmod.track.geometry.TrackVector;
 import java.util.UUID;
 import java.util.Locale;
 import java.util.List;
+import java.util.Map;
+import java.util.Comparator;
 import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.Tag;
@@ -128,6 +132,12 @@ public final class TrainEntity extends Entity {
 
     public IrVehicleSnapshot irSnapshot() { return irSnapshot; }
 
+    public void recordIrCouplingSound(TrainCarEnd end) {
+        updateIrState(irSnapshot.frontCoupled(), irSnapshot.rearCoupled());
+        irState.coupled(end == TrainCarEnd.FRONT);
+        updateIrState(irSnapshot.frontCoupled(), irSnapshot.rearCoupled());
+    }
+
     /** Changes are published only when values, coupling ends or trigger edges actually change. */
     public void updateIrState(boolean front, boolean rear) {
         var definition = VehicleCatalog.find(getModelId());
@@ -145,6 +155,43 @@ public final class TrainEntity extends Entity {
         boolean changed = irState.set(group, value, pulse, level().getGameTime());
         updateIrState(irSnapshot.frontCoupled(), irSnapshot.rearCoupled());
         return changed;
+    }
+
+    public void beginIrControlSound(UUID owner, String group, IrReadout driver, int front) {
+        updateIrState(irSnapshot.frontCoupled(), irSnapshot.rearCoupled());
+        irState.pressSound(owner, irSoundComponent(group, driver, front), runtimeState);
+        updateIrState(irSnapshot.frontCoupled(), irSnapshot.rearCoupled());
+    }
+
+    public void holdIrControl(UUID owner, String group) {
+        updateIrState(irSnapshot.frontCoupled(), irSnapshot.rearCoupled());
+        irState.holdPress(owner, group, level().getGameTime());
+        updateIrState(irSnapshot.frontCoupled(), irSnapshot.rearCoupled());
+    }
+
+    public void endIrControlSound(UUID owner) {
+        irState.releasePress(owner, level().getGameTime());
+        irState.releaseSound(owner);
+        updateIrState(irSnapshot.frontCoupled(), irSnapshot.rearCoupled());
+    }
+
+    public void clickIrControlSound(String group, IrReadout driver, int front,
+                                     float previous, float value) {
+        updateIrState(irSnapshot.frontCoupled(), irSnapshot.rearCoupled());
+        String component = irSoundComponent(group, driver, front);
+        if (component == null) return;
+        irState.clickSound(component, previous, value);
+        updateIrState(irSnapshot.frontCoupled(), irSnapshot.rearCoupled());
+    }
+
+    private String irSoundComponent(String group, IrReadout driver, int front) {
+        var model = VehicleCatalog.find(getModelId());
+        if (model == null) return null;
+        return model.ir().sounds().controls().entrySet().stream()
+                .filter(entry -> driver != null ? entry.getValue().driver() == driver : entry.getValue().group().equals(group))
+                .max(Comparator.<Map.Entry<String, IrControlSound>>comparingDouble(
+                        entry -> entry.getValue().position().z() * front).thenComparing(Map.Entry::getKey))
+                .map(Map.Entry::getKey).orElse(null);
     }
 
     /** Independent authored RTM front/tail texture layers; persisted and tracked for every observer. */

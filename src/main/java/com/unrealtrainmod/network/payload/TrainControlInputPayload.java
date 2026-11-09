@@ -21,7 +21,8 @@ public record TrainControlInputPayload(UUID session, long sequence, Action actio
         HEARTBEAT, HANDLE_UP, HANDLE_DOWN, REVERSER_NEXT, EMERGENCY_APPLY, EMERGENCY_RELEASE,
         DOOR_LEFT_OPEN, DOOR_LEFT_CLOSE, DOOR_RIGHT_OPEN, DOOR_RIGHT_CLOSE,
         POWER_SET, BRAKE_SET, POWER_UP, POWER_DOWN, BRAKE_UP, BRAKE_DOWN,
-        HEAD_LIGHT_ON, HEAD_LIGHT_OFF, TAIL_LIGHT_ON, TAIL_LIGHT_OFF
+        HEAD_LIGHT_ON, HEAD_LIGHT_OFF, TAIL_LIGHT_ON, TAIL_LIGHT_OFF,
+        POWER_HANDLE_BEGIN, BRAKE_HANDLE_BEGIN, HANDLE_RELEASE
     }
     public static final Type<TrainControlInputPayload> TYPE = new Type<>(
             ResourceLocation.fromNamespaceAndPath(UnrealTrainMod.MODID, "train_control_input"));

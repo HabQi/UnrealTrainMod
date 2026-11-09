@@ -12,8 +12,12 @@ import com.unrealtrainmod.client.model.LoadedModel;
 import com.unrealtrainmod.client.model.PartSelection;
 import com.unrealtrainmod.client.renderer.ModelDrawSink;
 import com.unrealtrainmod.client.renderer.RenderBatch;
+import com.unrealtrainmod.client.renderer.SurfaceLighting;
+import com.unrealtrainmod.client.renderer.IrFlareRenderer;
 import com.unrealtrainmod.client.renderer.TrainModelRenderer;
 import com.unrealtrainmod.compat.rtm.script.VehicleScriptManager;
+import com.unrealtrainmod.compat.ir.IrLightingDefinition;
+import net.minecraft.resources.ResourceLocation;
 import com.unrealtrainmod.entity.TrainEntity;
 import com.unrealtrainmod.model.IndexedMesh;
 import com.unrealtrainmod.vehicle.VehiclePose;
@@ -41,11 +45,13 @@ public final class IrisModelRenderer {
         private RenderBatch batch;
         private PoseStack.Pose pose;
         private int light;
+        private float emission;
 
-        void set(RenderBatch batch, PoseStack.Pose pose, int light) {
+        void set(RenderBatch batch, PoseStack.Pose pose, int light, float emission) {
             this.batch = batch;
             this.pose = pose;
             this.light = light;
+            this.emission = emission;
         }
         RenderBatch batch() { return batch; }
         PoseStack.Pose pose() { return pose; }
@@ -265,14 +271,15 @@ public final class IrisModelRenderer {
         private boolean ready, poseReady;
         private VehiclePose vehiclePose;
         private int lights;
+        private final List<IrFlareRenderer.Flare> flares = new ArrayList<>();
 
-        private void addCommand(RenderBatch batch, PoseStack.Pose pose, int light) {
+        private void addCommand(RenderBatch batch, PoseStack.Pose pose, int light, float emission) {
             if (commandCount == commandPool.size()) {
                 commandPool.add(new Command());
                 IrisRenderStats.commandPoolGrew();
             }
             var command = commandPool.get(commandCount++);
-            command.set(batch, pose, light);
+            command.set(batch, pose, light, emission);
             commands.add(command);
         }
 
@@ -300,6 +307,7 @@ public final class IrisModelRenderer {
 
         private void resetFrame() {
             commands.clear();
+            flares.clear();
             prepared.clear();
             for (int i = 0; i < commandCount; i++) commandPool.get(i).clear();
             for (int i = 0; i < preparedCount; i++) preparedPool.get(i).clear();
@@ -385,17 +393,26 @@ public final class IrisModelRenderer {
                 multiRanges = null;
             }
         }
+        @Override public boolean worldView() { return true; }
         @Override public int lights() { return lights; }
         @Override public void lights(int value) { lights = value; }
         @Override public void submitGeometry(LoadedModel.Source source, PartSelection selection,
                                              PoseStack.Pose pose, int light, boolean directionalLighting) {
+            submitGeometry(source, selection, pose, light, directionalLighting, SurfaceLighting.NONE);
+        }
+        @Override public void submitGeometry(LoadedModel.Source source, PartSelection selection,
+                                             PoseStack.Pose pose, int light, boolean directionalLighting, SurfaceLighting lighting) {
             PoseStack.Pose local = null;
             for (var batch : selection.batches()) {
                 if (!batch.lightLayer().enabled(lights)) continue;
                 if (local == null) local = pose.copy();
-                addCommand(batch, local, batch.lightLayer().emissive()
-                        ? LightTexture.FULL_BRIGHT : light);
+                addCommand(batch, local, batch.lightLayer().emissive() ? LightTexture.FULL_BRIGHT : lighting.light(light),
+                        batch.lightLayer().emissive() ? 1 : lighting.emission());
             }
+        }
+        @Override public void submitFlare(IrLightingDefinition.Flare flare,
+                                          ResourceLocation texture, PoseStack.Pose pose, int color, float strength) {
+            flares.add(new IrFlareRenderer.Flare(flare, texture, pose.copy(), color, strength));
         }
     }
     /** Stable ascending view-Z sort; no objects are allocated per triangle. */
@@ -480,7 +497,7 @@ public final class IrisModelRenderer {
         boolean supported = false;
         for (var command : snapshot.commands) {
             if (shadow && command.batch().category() == RenderCategory.BLEND) continue;
-            var material = IrisBatch.get(command.batch());
+            var material = IrisBatch.get(command.batch(), command.emission >= 1);
             // One submission shares a local pose across its batches; each view prepares it independently.
             if (local != command.pose()) {
                 local = command.pose();
@@ -497,6 +514,12 @@ public final class IrisModelRenderer {
                     ? IrisGeometryCache.requestVehicle(material.clippedMesh, material.firstClipped, material.clippedCount, false) : null;
             if (material.solidCount != 0) material.solidType();
             snapshot.addPrepared(material, posed, view, command.light(), solidGpu, clippedGpu, lightGpu);
+        }
+        if (!shadow) for (var flare : snapshot.flares) {
+            var localPose = new PoseStack();
+            localPose.last().pose().set(viewPose.last().pose()).mul(flare.pose().pose());
+            IrFlareRenderer.enqueue(flare.definition(), flare.texture(), localPose.last(), RenderSystem.getModelViewMatrix(),
+                    RenderSystem.getProjectionMatrix(), flare.color(), flare.strength());
         }
         if (!IrisGeometryCache.uploadVehicleOpaque()) {
             for (int i = 0; i < snapshot.prepared.size(); i++) {
@@ -682,6 +705,7 @@ public final class IrisModelRenderer {
 
     public static void beginFrame() {
         IrisTranslucentQueue.clear();
+        IrFlareRenderer.clear();
         var iterator = ENTITIES.entrySet().iterator();
         while (iterator.hasNext()) {
             var entry = iterator.next(); var snapshot = entry.getValue();
@@ -695,6 +719,7 @@ public final class IrisModelRenderer {
     }
 
     public static void clear() {
+        IrFlareRenderer.release();
         IrisVehicleReprojection.reset();
         ENTITIES.values().forEach(Snapshot::close);
         ENTITIES.clear();

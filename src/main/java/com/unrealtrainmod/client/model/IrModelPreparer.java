@@ -8,6 +8,8 @@ import com.unrealtrainmod.client.ClientConfig;
 import com.unrealtrainmod.client.renderer.RenderBatch;
 import com.unrealtrainmod.client.RenderCategory;
 import com.unrealtrainmod.compat.ir.IrAnimatrix;
+import com.unrealtrainmod.compat.ir.IrControlDefinition;
+import com.unrealtrainmod.compat.ir.IrLightingDefinition;
 import com.unrealtrainmod.compat.ir.IrModelComponent;
 import com.unrealtrainmod.compat.ir.IrModelComponents;
 import com.unrealtrainmod.compat.ir.IrVehicleDefinition;
@@ -36,7 +38,7 @@ final class IrModelPreparer {
     private static final Logger LOGGER = LoggerFactory.getLogger(IrModelPreparer.class);
     private record Resource(PackageAsset asset, float scale) {}
     private record Missing(ModelSource source, Resource resource, int track) {}
-    private record Selection(VehiclePartRole role, IrModelComponent component, List<IrAnimationBinding> animations) {}
+    private record Selection(VehiclePartRole role, IrModelComponent component, List<IrAnimationBinding> animations, IrLightingDefinition.Rule lighting) {}
     private record PackingKey(List<ModelPart> parts, boolean ordered) {}
     private record MaterialState(ResourceLocation texture, MaterialRenderMode mode, boolean doubleSided) {}
     private record VertexMaterial(float[] vertices, int[] colors, MaterialState material) {}
@@ -85,10 +87,11 @@ final class IrModelPreparer {
         }
     }
     private final ModelCache cache;
+    private final TexturePool textures;
     private final Map<Resource, IrAnimatrix> resources = new HashMap<>();
     private final Set<Missing> missing = new HashSet<>();
 
-    IrModelPreparer(ModelCache cache) { this.cache = cache; }
+    IrModelPreparer(ModelCache cache, TexturePool textures) { this.cache = cache; this.textures = textures; }
 
     Map<IrVehicleDefinition, IrModelBinding> prepare(ModelSource source, List<ModelPart> parts,
             List<IrModelComponent> components, Set<IrVehicleDefinition> definitions, List<RenderBatch> batches) {
@@ -96,6 +99,13 @@ final class IrModelPreparer {
         for (var component : components) for (String name : component.objects()) namedComponents.put(name, component);
         var visibleNames = new HashSet<String>();
         for (var part : parts) if (part.visible()) visibleNames.add(part.name());
+        var pickBounds = new HashMap<ModelPart, net.minecraft.world.phys.AABB>();
+        for (var part : parts) if (part.visible() && !part.batches().isEmpty()) pickBounds.put(part, IrPickPart.bounds(part));
+        var controlNames = new LinkedHashMap<String, List<String>>();
+        for (var part : parts) {
+            String key = IrModelComponents.controlKey(part.name());
+            if (key != null) controlNames.computeIfAbsent(key, ignored -> new ArrayList<>()).add(part.name());
+        }
         var result = new HashMap<IrVehicleDefinition, IrModelBinding>();
         // Shared configurations reuse the same packed index arrays; the cache ends with this source preparation.
         var packedSelections = new HashMap<PackingKey, PartSelection.Packed>();
@@ -142,8 +152,9 @@ final class IrModelPreparer {
                         && component.translation().y() == 0 && component.translation().z() == 0) component = null;
                 var chain = chains.getOrDefault(part.name(), List.of());
                 var role = component == null ? IrModelComponents.role(part.name()) : component.role();
-                if (component == null && chain.isEmpty()) staticParts.computeIfAbsent(role, ignored -> new ArrayList<>()).add(part);
-                else selected.computeIfAbsent(new Selection(role, component, List.copyOf(chain)), ignored -> new ArrayList<>()).add(part);
+                var lighting = definition.lighting().objects().get(part.name());
+                if (component == null && chain.isEmpty() && lighting == null) staticParts.computeIfAbsent(role, ignored -> new ArrayList<>()).add(part);
+                else selected.computeIfAbsent(new Selection(role, component, List.copyOf(chain), lighting), ignored -> new ArrayList<>()).add(part);
             }
             var staticSelections = new EnumMap<VehiclePartRole, PartSelection>(VehiclePartRole.class);
             var moving = new EnumMap<VehiclePartRole, List<IrModelPart>>(VehiclePartRole.class);
@@ -156,14 +167,43 @@ final class IrModelPreparer {
             selected.forEach((key, objects) -> {
                 var selection = pack(objects, true, packedSelections, stats);
                 batches.addAll(selection.batches());
-                moving.get(key.role()).add(new IrModelPart(key.component(), selection, key.animations()));
+                ResourceLocation flareTexture = null;
+                if (key.lighting() != null && key.lighting().flare() != null && key.lighting().flare().enabled()) {
+                    try { flareTexture = textures.flare(key.lighting().flare().texture()); }
+                    catch (IOException | RuntimeException exception) {
+                        LOGGER.warn("IR {}: disabling flare texture {}: {}", source.model(),
+                                key.lighting().flare().texture(), exception.getMessage());
+                    }
+                }
+                moving.get(key.role()).add(new IrModelPart(key.component(), selection, key.animations(), key.lighting(), flareTexture));
                 if (key.component() == null) stats.animationOnly++;
                 else if (key.animations().isEmpty()) stats.componentOnly++;
                 else stats.combined++;
                 if (key.component() != null && key.component().kind() == IrModelComponent.Kind.WHEEL) stats.wheels++;
             });
             moving.replaceAll((role, values) -> List.copyOf(values));
-            result.put(definition, new IrModelBinding(Map.copyOf(staticSelections), Map.copyOf(moving), Map.copyOf(frames)));
+            var motions = new HashMap<ModelPart, IrModelPart>();
+            moving.values().forEach(values -> values.forEach(value -> value.selection().parts().forEach(part -> motions.put(part, value))));
+            var picking = new EnumMap<VehiclePartRole, List<IrPickPart>>(VehiclePartRole.class);
+            for (var role : VehiclePartRole.values()) picking.put(role, new ArrayList<>());
+            for (var part : parts) {
+                if (!pickBounds.containsKey(part)) continue;
+                String key = IrModelComponents.controlKey(part.name()), group = null;
+                IrControlDefinition.Type type = null;
+                if (key != null) {
+                    var names = controlNames.get(key);
+                    if (names.stream().noneMatch(name -> IrModelComponents.token(name, "NOINTERACT"))) {
+                        group = names.stream().sorted().map(name -> IrModelComponents.attribute(name, "CG"))
+                                .filter(java.util.Objects::nonNull).findFirst().orElse(key);
+                        type = names.stream().anyMatch(name -> IrModelComponents.token(name, "PRESS")) ? IrControlDefinition.Type.PRESS
+                                : names.stream().anyMatch(name -> IrModelComponents.token(name, "TOGGLE")) ? IrControlDefinition.Type.TOGGLE
+                                : IrControlDefinition.Type.CONTINUOUS;
+                    }
+                }
+                picking.get(IrModelComponents.role(part.name())).add(new IrPickPart(part, pickBounds.get(part), motions.get(part), group, type));
+            }
+            picking.replaceAll((role, values) -> List.copyOf(values));
+            result.put(definition, new IrModelBinding(Map.copyOf(staticSelections), Map.copyOf(moving), Map.copyOf(frames), Map.copyOf(picking)));
             LOGGER.info("IR batching {} binding={}: staticCutout {} -> {}, animatedCutout {} -> {}; "
                             + "cutoutTriangles {} -> {}; cutoutStates={} animatedGroups={} newIndexBytes={} extraVertexBytes=0",
                     source.model(), ++bindingIndex, stats.staticBefore, stats.staticAfter, stats.movingBefore, stats.movingAfter,

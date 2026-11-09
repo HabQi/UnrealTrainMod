@@ -1185,8 +1185,20 @@ public final class TrainManager {
         }
         restored.add(combined.id());
         if (automatic) drivers.coupled(first, second, combined);
+        couplingSound(reference, pair.referenceEnd(), other, pair.otherEnd());
         sync(combined);
         return null;
+    }
+
+    private static void couplingSound(TrainEntity reference, TrainCarEnd referenceEnd,
+                                       TrainEntity other, TrainCarEnd otherEnd) {
+        boolean first = VehicleCatalog.find(reference.getModelId()).ir().sounds().couple() != null;
+        boolean second = VehicleCatalog.find(other.getModelId()).ir().sounds().couple() != null;
+        if (first && (!second || reference.getUUID().compareTo(other.getUUID()) < 0)) {
+            reference.recordIrCouplingSound(referenceEnd);
+        } else if (second) {
+            other.recordIrCouplingSound(otherEnd);
+        }
     }
 
     private static List<TrackOccupancyManager.Interval> couplingFootprint(TrainConsist combined, int fixedCount, double adjustment) {

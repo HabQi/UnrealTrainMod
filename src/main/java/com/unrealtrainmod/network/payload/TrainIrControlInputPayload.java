@@ -11,9 +11,11 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
-/** A visual control target for the vehicle owned by the driver's current session. */
-public record TrainIrControlInputPayload(UUID session, long sequence, String group, float value, boolean pulse)
+/** A control target and its physical interaction phase for the driver's current vehicle. */
+public record TrainIrControlInputPayload(UUID session, long sequence, String group, float value, boolean pulse,
+                                         Operation operation)
         implements CustomPacketPayload {
+    public enum Operation { CLICK, BEGIN, UPDATE, END }
     public static final Type<TrainIrControlInputPayload> TYPE = new Type<>(
             ResourceLocation.fromNamespaceAndPath(UnrealTrainMod.MODID, "train_ir_control_input"));
     public static final StreamCodec<RegistryFriendlyByteBuf, TrainIrControlInputPayload> STREAM_CODEC = StreamCodec.of(
@@ -23,7 +25,8 @@ public record TrainIrControlInputPayload(UUID session, long sequence, String gro
                 buffer.writeUtf(value.group());
                 buffer.writeFloat(value.value());
                 buffer.writeBoolean(value.pulse());
+                buffer.writeEnum(value.operation());
             }, buffer -> new TrainIrControlInputPayload(buffer.readUUID(), buffer.readLong(), buffer.readUtf(),
-                    buffer.readFloat(), buffer.readBoolean()));
+                    buffer.readFloat(), buffer.readBoolean(), buffer.readEnum(Operation.class)));
     @Override public Type<TrainIrControlInputPayload> type() { return TYPE; }
 }

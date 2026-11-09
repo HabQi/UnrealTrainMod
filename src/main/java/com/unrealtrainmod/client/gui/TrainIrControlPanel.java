@@ -8,6 +8,7 @@ import com.unrealtrainmod.client.TrainDrivingClient;
 import com.unrealtrainmod.compat.ir.IrControlDefinition;
 import com.unrealtrainmod.compat.ir.IrVehicleDefinition;
 import com.unrealtrainmod.vehicle.VehicleCatalog;
+import com.unrealtrainmod.network.payload.TrainIrControlInputPayload.Operation;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
@@ -131,7 +132,11 @@ public final class TrainIrControlPanel {
     }
 
     private static void request(String group, float value, boolean pulse) {
-        long sequence = TrainDrivingClient.sendIr(group, value, pulse);
+        request(group, value, pulse, Operation.CLICK);
+    }
+
+    private static void request(String group, float value, boolean pulse, Operation operation) {
+        long sequence = TrainDrivingClient.sendIr(group, value, pulse, operation);
         if (!pulse && sequence >= 0) pending.put(group, new Pending(value, sequence, ticks));
     }
 
@@ -142,7 +147,7 @@ public final class TrainIrControlPanel {
         pending.entrySet().removeIf(entry -> ticks - entry.getValue().tick() > 40
                 || (acknowledged >= entry.getValue().sequence() && actual(entry.getKey()) == entry.getValue().value()));
         if (dragging != null && target != sent) {
-            request(dragging, target, false);
+            request(dragging, target, false, Operation.UPDATE);
             sent = target;
         }
     }
@@ -226,9 +231,11 @@ public final class TrainIrControlPanel {
                 case TOGGLE -> request(control.group(), value(control.group()) >= 0.5f ? 0 : 1, false);
                 case PRESS -> request(control.group(), 1, true);
                 case CONTINUOUS -> {
+                    finishDrag();
                     float current = value(control.group());
                     dragging = control.group();
                     target = sent = current;
+                    request(dragging, current, false, Operation.BEGIN);
                     drag(x, y);
                 }
             }
@@ -261,7 +268,7 @@ public final class TrainIrControlPanel {
     static void finishDrag() {
         scrollDragging = false;
         if (dragging == null) return;
-        if (target != sent) request(dragging, target, false);
+        request(dragging, target, false, Operation.END);
         dragging = null;
     }
 
@@ -275,6 +282,7 @@ public final class TrainIrControlPanel {
     public static void rejectPending() { dragging = null; scrollDragging = false; pending.clear(); }
 
     public static void reset() {
+        finishDrag();
         dragging = null; scrollDragging = false; pending.clear(); expanded = false;
         definition = IrVehicleDefinition.NONE; vehicle = null;
         all = rows = List.of(); search = null; query = ""; language = null;

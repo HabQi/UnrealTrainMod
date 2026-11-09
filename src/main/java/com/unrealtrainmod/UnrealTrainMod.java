@@ -59,6 +59,10 @@ public class UnrealTrainMod {
     public static final DeferredRegister.Blocks BLOCKS = DeferredRegister.createBlocks(MODID);
     public static final DeferredRegister.Items ITEMS = DeferredRegister.createItems(MODID);
     public static final DeferredRegister<EntityType<?>> ENTITY_TYPES = DeferredRegister.create(Registries.ENTITY_TYPE, MODID);
+    public static final DeferredHolder<EntityType<?>, EntityType<com.unrealtrainmod.entity.ConnectorEntity>> CONNECTOR = ENTITY_TYPES.register(
+            "connector", () -> EntityType.Builder.<com.unrealtrainmod.entity.ConnectorEntity>of(
+                    com.unrealtrainmod.entity.ConnectorEntity::new, MobCategory.MISC).sized(.25f, .25f)
+                    .clientTrackingRange(16).updateInterval(20).fireImmune().build(MODID + ":connector"));
     public static final DeferredHolder<EntityType<?>, EntityType<PlacedModelEntity>> PLACED_MODEL = ENTITY_TYPES.register(
             "placed_model", () -> EntityType.Builder.<PlacedModelEntity>of(PlacedModelEntity::new, MobCategory.MISC)
                     .sized(1, 1)
@@ -84,6 +88,10 @@ public class UnrealTrainMod {
             "rail_placer", RailPlacerItem::new, new Item.Properties().stacksTo(1));
     public static final DeferredItem<TrackWrenchItem> TRACK_WRENCH = ITEMS.registerItem(
             "track_wrench", TrackWrenchItem::new, new Item.Properties().stacksTo(1));
+    public static final DeferredItem<com.unrealtrainmod.item.WiringItem> INSULATOR = ITEMS.registerItem(
+            "insulator", p -> new com.unrealtrainmod.item.WiringItem(false, p), new Item.Properties().stacksTo(1));
+    public static final DeferredItem<com.unrealtrainmod.item.WiringItem> WIRE = ITEMS.registerItem(
+            "wire", p -> new com.unrealtrainmod.item.WiringItem(true, p), new Item.Properties().stacksTo(1));
     public static final DeferredItem<TurnoutBuilderItem> TURNOUT_BUILDER = ITEMS.registerItem(
             "turnout_builder", p -> new TurnoutBuilderItem(TrackConstructionType.SIMPLE_TURNOUT, p), new Item.Properties().stacksTo(1));
     public static final DeferredItem<TurnoutBuilderItem> DIAMOND_CROSSING_BUILDER = ITEMS.registerItem(
@@ -114,6 +122,8 @@ public class UnrealTrainMod {
                 output.accept(TRACK_BUILDER.get());
                 output.accept(RAIL_PLACER.get());
                 output.accept(TRACK_WRENCH.get());
+                output.accept(INSULATOR.get());
+                output.accept(WIRE.get());
                 output.accept(TURNOUT_BUILDER.get());
                 output.accept(DIAMOND_CROSSING_BUILDER.get());
                 output.accept(SINGLE_CROSSOVER_BUILDER.get());
@@ -143,6 +153,7 @@ public class UnrealTrainMod {
         TrackBlockManager.register(NeoForge.EVENT_BUS);
         HacksawItem.register(NeoForge.EVENT_BUS);
         TrackSyncManager.register(NeoForge.EVENT_BUS);
+        com.unrealtrainmod.wiring.WiringManager.register(NeoForge.EVENT_BUS);
         TrackConstructionManager.register(NeoForge.EVENT_BUS);
         TurnoutConstructionManager.register(NeoForge.EVENT_BUS);
         TrainManager.register(NeoForge.EVENT_BUS);

@@ -19,6 +19,7 @@ final class RtmScriptTypes {
             new Type("jp.ngt.rtm.rail.util.RailPosition", RailPosition.class, "RailPosition"),
             new Type("jp.ngt.ngtlib.renderer.TESRRenderStats", TESRRenderStats.class, "TESRRenderStats"),
             new Type("jp.ngt.ngtlib.renderer.GLHelper", GLHelper.class, "GLHelper"),
+            new Type("jp.ngt.ngtlib.renderer.NGTTessellator", NGTTessellator.class, "NGTTessellator"),
             new Type("jp.ngt.rtm.entity.train.util.TrainState", RtmTrainState.class, "TrainState"),
             new Type("jp.ngt.rtm.RTMCore", RtmCore.class, "RTMCore"),
             new Type("jp.ngt.ngtlib.math.NGTMath", NGTMath.class, "NGTMath"));

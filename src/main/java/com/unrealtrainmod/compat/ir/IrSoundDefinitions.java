@@ -9,8 +9,11 @@ import com.google.gson.JsonObject;
 import com.unrealtrainmod.resource.PackageArchive;
 import com.unrealtrainmod.resource.PackageAsset;
 import com.unrealtrainmod.sound.VehicleSoundSequence;
+import com.unrealtrainmod.track.geometry.TrackVector;
 import java.io.IOException;
 import java.util.Set;
+import java.util.Map;
+import java.util.LinkedHashMap;
 import net.minecraft.util.GsonHelper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -21,20 +24,76 @@ final class IrSoundDefinitions {
 
     private IrSoundDefinitions() {}
 
+    record Binding(String group, IrReadout driver, TrackVector position) {}
+
     static IrVehicleSounds read(JsonObject json, PackageArchive archive, String prefix,
-                                 Set<String> engines, Set<String> horns) {
-        if (!json.has("sounds") || json.get("sounds").isJsonNull()) return IrVehicleSounds.NONE;
-        if (!json.get("sounds").isJsonObject()) {
+                                 Set<String> engines, Set<String> horns, Set<String> bells, Map<String, Binding> bindings) {
+        String label = archive.path() + " " + GsonHelper.getAsString(json, "name");
+        float ridingVolume = 0.75f;
+        try {
+            ridingVolume = GsonHelper.getAsFloat(json, "sound_dampening_percentage", ridingVolume);
+            if (!Float.isFinite(ridingVolume) || ridingVolume < 0 || ridingVolume > 1) {
+                throw new IllegalArgumentException("expected a finite value within 0..1");
+            }
+        } catch (RuntimeException exception) {
+            LOGGER.warn("IR {} sound_dampening_percentage: {}; using 0.75", label, exception.getMessage());
+            ridingVolume = 0.75f;
+        }
+        var sounds = new JsonObject();
+        var element = json.get("sounds");
+        if (element != null && element.isJsonObject()) sounds = element.getAsJsonObject();
+        else if (element != null && !element.isJsonNull()) {
             LOGGER.warn("IR {} in {}: sounds must be an object; ignoring vehicle sounds",
                     GsonHelper.getAsString(json, "name"), archive.path());
-            return IrVehicleSounds.NONE;
         }
-        var sounds = json.getAsJsonObject("sounds");
-        String label = archive.path() + " " + GsonHelper.getAsString(json, "name");
         return new IrVehicleSounds(read(sounds.get("wheels"), archive, prefix, label + " sounds.wheels", 32),
                 read(sounds.get("idle"), archive, prefix, label + " sounds.idle", 80),
                 read(sounds.get("running"), archive, prefix, label + " sounds.running", 80),
-                read(sounds.get("horn"), archive, prefix, label + " sounds.horn", 128), engines, horns);
+                read(sounds.get("horn"), archive, prefix, label + " sounds.horn", 128),
+                read(sounds.get("bell"), archive, prefix, label + " sounds.bell", 128),
+                read(sounds.get("couple"), archive, prefix, label + " sounds.couple", 40), engines, horns, bells,
+                controls(sounds.get("controls"), archive, prefix, label, bindings), ridingVolume);
+    }
+
+    private static Map<String, IrControlSound> controls(JsonElement element, PackageArchive archive, String prefix,
+                                                       String label, Map<String, Binding> bindings) {
+        if (element == null || element.isJsonNull()) return Map.of();
+        if (!element.isJsonObject()) {
+            LOGGER.warn("IR {} sounds.controls: expected an object", label);
+            return Map.of();
+        }
+        var result = new LinkedHashMap<String, IrControlSound>();
+        for (var entry : element.getAsJsonObject().entrySet()) {
+            try {
+                var binding = bindings.get(entry.getKey());
+                if (binding == null) throw new IOException("no matching OBJ control component");
+                var json = GsonHelper.convertToJsonObject(entry.getValue(), entry.getKey());
+                var engage = controlClip(json, "engage", archive, prefix, label, entry.getKey());
+                var move = controlClip(json, "move", archive, prefix, label, entry.getKey());
+                var disengage = controlClip(json, "disengage", archive, prefix, label, entry.getKey());
+                if (engage == null && move == null && disengage == null) continue;
+                Float percent = json.has("movePercent") ? GsonHelper.getAsFloat(json, "movePercent") : null;
+                if (percent != null && (!Float.isFinite(percent) || percent < 0 || percent > 1)) {
+                    throw new IOException("movePercent must be within 0..1");
+                }
+                result.put(entry.getKey(), new IrControlSound(binding.group(), binding.driver(), binding.position(),
+                        engage, move, disengage, percent));
+            } catch (IOException | RuntimeException exception) {
+                LOGGER.warn("IR {} sounds.controls.{}: ignoring control sound: {}",
+                        label, entry.getKey(), exception.getMessage());
+            }
+        }
+        return result;
+    }
+
+    private static PackageAsset controlClip(JsonObject json, String field, PackageArchive archive, String prefix,
+                                             String label, String key) {
+        try {
+            return clip(json, field, archive, prefix);
+        } catch (IOException | RuntimeException exception) {
+            LOGGER.warn("IR {} sounds.controls.{}.{}: ignoring clip: {}", label, key, field, exception.getMessage());
+            return null;
+        }
     }
 
     static VehicleSoundSequence read(JsonElement element, PackageArchive archive, String prefix,

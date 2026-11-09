@@ -23,16 +23,27 @@ public final class MqoParser {
     private static final Pattern CODE_PAGE = Pattern.compile("(?im)^[ \\t]*CodePage[ \\t]+([\\w-]+)");
     private static final int MAX_COUNT = 2_000_000;
     private final BufferedReader reader;
+    private final boolean ignoreEditorTransforms;
     private int lineNumber;
     private ModelBounds.Builder scannedBounds;
     private float scannedScale;
 
     private MqoParser(Reader reader) {
+        this(reader, false);
+    }
+
+    private MqoParser(Reader reader, boolean ignoreEditorTransforms) {
         this.reader = new BufferedReader(reader);
+        this.ignoreEditorTransforms = ignoreEditorTransforms;
     }
 
     public static ModelData parse(InputStream input, Charset fallback) throws IOException {
         return parse(openReader(input, fallback));
+    }
+
+    /** RTM installed-object loading uses authored vertices directly and ignores editor transform metadata. */
+    public static ModelData parseInstalledObject(InputStream input, Charset fallback) throws IOException {
+        return parse(openReader(input, fallback), true);
     }
 
     /** Scans all object vertices without retaining faces or constructing rendering geometry. */
@@ -76,7 +87,11 @@ public final class MqoParser {
     }
 
     public static ModelData parse(Reader reader) throws IOException {
-        MqoParser parser = new MqoParser(reader);
+        return parse(reader, false);
+    }
+
+    private static ModelData parse(Reader reader, boolean ignoreEditorTransforms) throws IOException {
+        MqoParser parser = new MqoParser(reader, ignoreEditorTransforms);
         try {
             return parser.readModel();
         } catch (IllegalArgumentException | IndexOutOfBoundsException e) {
@@ -171,7 +186,7 @@ public final class MqoParser {
                 case "facet" -> facet = number(line.get(1));
                 case "scale", "rotation", "translation" -> {
                     float expected = key(line).equals("scale") ? 1 : 0;
-                    for (int i = 1; i <= 3; i++) if (number(line.get(i)) != expected) {
+                    for (int i = 1; i <= 3; i++) if (number(line.get(i)) != expected && !ignoreEditorTransforms) {
                         throw error("Non-identity object transform in " + name + "; freeze transforms before importing");
                     }
                 }

@@ -37,13 +37,14 @@ public final class InstancedModelShader {
                 Uniform overlay = loaded.getUniform("OverlayUV"), alphaPass = loaded.getUniform("AlphaPass");
                 Uniform directional = loaded.getUniform("DirectionalLighting");
                 Uniform renderOrigin = loaded.getUniform("RenderOrigin");
+                Uniform emission = loaded.getUniform("SurfaceEmission");
                 int[] attributes = attributeLocations(loaded);
-                if (overlay == null || alphaPass == null || directional == null || renderOrigin == null || attributes == null) {
+                if (overlay == null || alphaPass == null || directional == null || renderOrigin == null || emission == null || attributes == null) {
                     LOGGER.error("Instanced model shader is missing required uniforms or instance attributes; "
                             + "using normal vehicle rendering");
                 } else {
                     // Minecraft owns and closes the shader program; keep only the registered callback's instance.
-                    state = new State(loaded, overlay, alphaPass, directional, renderOrigin, attributes);
+                    state = new State(loaded, overlay, alphaPass, directional, renderOrigin, emission, attributes);
                 }
             });
         } catch (IOException e) {
@@ -83,9 +84,15 @@ public final class InstancedModelShader {
     }
 
     public record State(ShaderInstance shader, Uniform overlay, Uniform alphaPass,
-                        Uniform directionalLighting, Uniform renderOrigin, int[] attributes) {
-        /** Batch-level values; matrices and light come from the instance attributes. */
+                        Uniform directionalLighting, Uniform renderOrigin, Uniform emission, int[] attributes) {
+        /** Shared track callers have no surface emission. Always reset the previous vehicle value. */
         public void prepare(int pass, boolean directional) {
+            prepare(pass, directional, 0);
+        }
+
+        /** Batch-level values; matrices and light come from the instance attributes. */
+        public void prepare(int pass, boolean directional, float strength) {
+            emission.set(strength);
             overlay.set(OverlayTexture.NO_OVERLAY & 0xffff, OverlayTexture.NO_OVERLAY >>> 16 & 0xffff);
             alphaPass.set(pass);
             directionalLighting.set(directional ? 1 : 0);

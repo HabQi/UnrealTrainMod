@@ -132,12 +132,14 @@ public final class TrainModelRenderer {
         } else if (stage == RenderLevelStageEvent.Stage.AFTER_PARTICLES) {
             // Keep the event's active target, including the fabulous particles target.
             WORLD.drawTranslucent();
+            IrFlareRenderer.draw();
         }
     }
 
-    public static void clearWorld() { WORLD.clear(); }
+    public static void clearWorld() { WORLD.clear(); IrFlareRenderer.clear(); }
     public static void closeWorld() {
         WORLD.close();
+        IrFlareRenderer.release();
         IrModelRenderer.clear();
         com.unrealtrainmod.client.compat.iris.IrisModelRenderer.clear();
         com.unrealtrainmod.client.texture.MaterialTexture.releasePbr();

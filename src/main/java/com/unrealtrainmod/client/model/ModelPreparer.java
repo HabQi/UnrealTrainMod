@@ -73,7 +73,7 @@ public final class ModelPreparer {
             }
         }
         try (var cache = new ModelCache("vehicles"); var textures = new TexturePool()) {
-            var irPreparer = new IrModelPreparer(cache);
+            var irPreparer = new IrModelPreparer(cache, textures);
             for (var definition : definitions) {
                 for (var instance : definition.parts()) {
                     var source = instance.source();

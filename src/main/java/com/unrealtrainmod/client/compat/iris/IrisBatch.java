@@ -16,8 +16,9 @@ import net.minecraft.client.renderer.RenderType;
 
 /** Resource-local alpha decisions, shared by entities, cameras and frames. */
 final class IrisBatch {
-    private static final IdentityHashMap<RenderBatch, IrisBatch> BATCHES = new IdentityHashMap<>();
+    private static final IdentityHashMap<RenderBatch, IrisBatch[]> BATCHES = new IdentityHashMap<>();
     final RenderBatch batch;
+    private final boolean emissive;
     final IndexedMesh solidMesh;
     final int firstSolid, solidCount;
     final IndexedMesh clippedMesh;
@@ -26,11 +27,18 @@ final class IrisBatch {
     final BitSet split = new BitSet();
     private final RenderType[] solidTypes = new RenderType[3], blendTypes = new RenderType[3], clippedTypes = new RenderType[3];
 
-    static IrisBatch get(RenderBatch batch) { return BATCHES.computeIfAbsent(batch, IrisBatch::new); }
+    static IrisBatch get(RenderBatch batch) { return get(batch, false); }
+    static IrisBatch get(RenderBatch batch, boolean emissive) {
+        var variants = BATCHES.computeIfAbsent(batch, ignored -> new IrisBatch[2]);
+        int index = emissive ? 1 : 0;
+        if (variants[index] == null) variants[index] = new IrisBatch(batch, emissive);
+        return variants[index];
+    }
     static void clear() { BATCHES.clear(); }
 
-    private IrisBatch(RenderBatch batch) {
+    private IrisBatch(RenderBatch batch, boolean emissive) {
         this.batch = batch;
+        this.emissive = emissive;
         forceOpaque = batch.mode() == MaterialRenderMode.OPAQUE;
         if (batch.category() == RenderCategory.CUTOUT) {
             solidMesh = batch.mesh();
@@ -74,7 +82,7 @@ final class IrisBatch {
             var texture = forceOpaque ? IrisMaterials.texture(batch.texture(), IrisMaterials.Mask.OPAQUE)
                     : batch.category() == RenderCategory.MIXED
                     ? IrisMaterials.texture(batch.texture(), IrisMaterials.Mask.SOLID) : batch.texture();
-            solidTypes[temporal] = IrisRenderTypes.get(texture, batch.doubleSided(), false, forceOpaque, temporal);
+            solidTypes[temporal] = IrisRenderTypes.get(texture, batch.doubleSided(), false, forceOpaque, temporal, emissive);
         }
         return solidTypes[temporal];
     }
@@ -102,11 +110,11 @@ final class IrisBatch {
         }
         if (blend) {
             if (blendTypes[temporal] == null) blendTypes[temporal] = IrisRenderTypes.get(
-                    IrisMaterials.texture(batch.texture(), IrisMaterials.Mask.BLEND), batch.doubleSided(), true, false, temporal);
+                    IrisMaterials.texture(batch.texture(), IrisMaterials.Mask.BLEND), batch.doubleSided(), true, false, temporal, emissive);
             return blendTypes[temporal];
         }
         if (clippedTypes[temporal] == null) clippedTypes[temporal] = IrisRenderTypes.get(
-                IrisMaterials.texture(batch.texture(), IrisMaterials.Mask.CLIPPED), batch.doubleSided(), true, false, temporal);
+                IrisMaterials.texture(batch.texture(), IrisMaterials.Mask.CLIPPED), batch.doubleSided(), true, false, temporal, emissive);
         return clippedTypes[temporal];
     }
 }

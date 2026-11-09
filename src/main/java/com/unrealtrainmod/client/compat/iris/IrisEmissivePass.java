@@ -19,7 +19,7 @@ public final class IrisEmissivePass {
 
     private IrisEmissivePass() {}
 
-    static void setDrawing(boolean value) {
+    public static void setDrawing(boolean value) {
         if (drawing == value) return;
         drawing = value;
         if (listener != null) listener.run();

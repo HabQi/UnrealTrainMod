@@ -21,6 +21,7 @@ uniform int FogShape;
 uniform vec3 Light0_Direction;
 uniform vec3 Light1_Direction;
 uniform int DirectionalLighting;
+uniform float SurfaceEmission;
 
 out float vertexDistance;
 out vec4 vertexColor;
@@ -35,7 +36,9 @@ void main() {
     vec3 posedNormal = normalize(NormalMat * Normal);
     vertexColor = DirectionalLighting != 0
         ? minecraft_mix_light(Light0_Direction, Light1_Direction, posedNormal, Color) : Color;
+    vertexColor = mix(vertexColor, Color, SurfaceEmission);
     lightMapColor = texelFetch(Sampler2, LightUV / 16, 0);
+    lightMapColor = mix(lightMapColor, vec4(1.0), SurfaceEmission);
     overlayColor = texelFetch(Sampler1, OverlayUV, 0);
     texCoord0 = UV0;
 }

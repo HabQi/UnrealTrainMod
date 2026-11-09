@@ -18,6 +18,7 @@ import com.unrealtrainmod.client.StaticModelShader;
 import com.unrealtrainmod.client.model.LoadedModel;
 import com.unrealtrainmod.client.model.PartSelection;
 import com.unrealtrainmod.compat.rtm.script.VehicleScriptManager;
+import com.unrealtrainmod.compat.ir.IrLightingDefinition;
 import com.unrealtrainmod.client.renderer.instancing.InstanceBatchKey;
 import com.unrealtrainmod.client.renderer.instancing.InstanceBuffer;
 import com.unrealtrainmod.client.renderer.instancing.InstancedModelShader;
@@ -40,9 +41,9 @@ import org.joml.Vector3f;
 /** One world view or one preview. No per-triangle objects and no vertex uploads on the normal GPU path. */
 public final class ModelRenderQueue implements ModelDrawSink, AutoCloseable {
     private record Draw(RenderBatch batch, GpuModel.Part gpu, PoseStack.Pose pose, int light,
-                        boolean directionalLighting) {}
+                        boolean directionalLighting, float emission) {}
     private record MaterialKey(ResourceLocation texture, boolean doubleSided, int alphaPass,
-                               boolean directionalLighting) {}
+                               boolean directionalLighting, float emission) {}
     private static final class PoseKey {
         private PoseStack.Pose pose;
         private int hash, id;
@@ -165,6 +166,7 @@ public final class ModelRenderQueue implements ModelDrawSink, AutoCloseable {
 
     public void resetStatistics() { stats.close(); statsFrameStarted = collectStats = false; }
 
+    @Override public boolean worldView() { return scene.equals("world"); }
     @Override public int lights() { return lights; }
     @Override public void lights(int value) { lights = value; }
 
@@ -185,12 +187,27 @@ public final class ModelRenderQueue implements ModelDrawSink, AutoCloseable {
     /** Script lighting is captured per draw; existing geometry submissions keep directional lighting. */
     public void submitGeometry(LoadedModel.Source source, PartSelection selection, PoseStack.Pose pose, int light,
                                boolean directionalLighting) {
-        submitBatches(source.gpu(), selection.batches(), pose, light, directionalLighting);
+        submitGeometry(source, selection, pose, light, directionalLighting, SurfaceLighting.NONE);
+    }
+
+    @Override public void submitGeometry(LoadedModel.Source source, PartSelection selection, PoseStack.Pose pose,
+                                          int light, boolean directionalLighting, SurfaceLighting lighting) {
+        submitBatches(source.gpu(), selection.batches(), pose, lighting.light(light), directionalLighting, lighting.emission());
+    }
+
+    @Override public void submitFlare(IrLightingDefinition.Flare flare,
+                                      ResourceLocation texture, PoseStack.Pose pose, int color, float strength) {
+        IrFlareRenderer.enqueue(flare, texture, pose, RenderSystem.getModelViewMatrix(), RenderSystem.getProjectionMatrix(), color, strength);
     }
 
     /** Static geometry submission without a vehicle definition or named-part selection. */
     public void submitBatches(GpuModel gpu, List<RenderBatch> batches, PoseStack.Pose pose, int light,
                               boolean directionalLighting) {
+        submitBatches(gpu, batches, pose, light, directionalLighting, 0);
+    }
+
+    private void submitBatches(GpuModel gpu, List<RenderBatch> batches, PoseStack.Pose pose, int light,
+                               boolean directionalLighting, float emission) {
         RenderSystem.assertOnRenderThread();
         var frameStats = statistics();
         long enqueueStart = frameStats == null ? 0L : System.nanoTime();
@@ -207,7 +224,7 @@ public final class ModelRenderQueue implements ModelDrawSink, AutoCloseable {
             boolean emissive = batch.lightLayer().emissive();
             draws.add(new Draw(batch, customShader && gpu != null ? gpu.part(batch) : null, snapshot,
                     emissive ? LightTexture.FULL_BRIGHT : light,
-                    !emissive && directionalLighting));
+                    !emissive && directionalLighting && emission < 1, emissive ? 1 : emission));
         }
         if (frameStats != null) frameStats.addEnqueue(System.nanoTime() - enqueueStart);
     }
@@ -265,7 +282,7 @@ public final class ModelRenderQueue implements ModelDrawSink, AutoCloseable {
 
     private static MaterialKey materialKey(Draw draw, boolean blended) {
         var batch = draw.batch();
-        return new MaterialKey(batch.texture(), batch.doubleSided(), batch.alphaPass(blended), draw.directionalLighting());
+        return new MaterialKey(batch.texture(), batch.doubleSided(), batch.alphaPass(blended), draw.directionalLighting(), draw.emission());
     }
 
     private static void addMaterialDraw(Map<MaterialKey, List<Draw>> materials, Draw draw, boolean blended) {
@@ -279,7 +296,7 @@ public final class ModelRenderQueue implements ModelDrawSink, AutoCloseable {
                 alphaPass == StaticModelShader.FORCE_OPAQUE), false, batch.doubleSided());
         if (draw.gpu() != null) {
             var part = draw.gpu();
-            state.prepareGpu(draw.pose(), draw.light(), alphaPass, draw.directionalLighting(), modelView, projection);
+            state.prepareGpu(draw.pose(), draw.light(), alphaPass, draw.directionalLighting(), draw.emission(), modelView, projection);
             part.mesh().draw(false, part.firstIndex(), batch.indexCount());
             if (collectStats) stats.gpuDraw(batch.indexCount());
         } else {
@@ -468,13 +485,13 @@ public final class ModelRenderQueue implements ModelDrawSink, AutoCloseable {
                 alphaPass == StaticModelShader.FORCE_OPAQUE), false, batch.doubleSided());
         var part = first.gpu();
         if (command.instanced()) {
-            state.prepareInstanced(alphaPass, first.directionalLighting(), modelView, projection);
+            state.prepareInstanced(alphaPass, first.directionalLighting(), first.emission(), modelView, projection);
             instancedMeshes.put(part.mesh(), Boolean.TRUE);
             part.mesh().drawInstanced(command.firstIndex, command.indexCount, instanceBuffer.handle(),
                     instanceBuffer.offsetOf(command.startInstance), command.instances.size(), attributes);
             if (collectStats) stats.instancedDraw(command.instances.size(), command.indexCount, command.coveredRequests);
         } else if (part != null) {
-            state.prepareGpu(first.pose(), first.light(), alphaPass, first.directionalLighting(), modelView, projection);
+            state.prepareGpu(first.pose(), first.light(), alphaPass, first.directionalLighting(), first.emission(), modelView, projection);
             part.mesh().draw(false, command.firstIndex, command.indexCount);
             if (collectStats) stats.gpuDraw(command.indexCount);
         } else {
@@ -488,7 +505,7 @@ public final class ModelRenderQueue implements ModelDrawSink, AutoCloseable {
         var part = draw.gpu();
         var batch = draw.batch();
         return new InstanceBatchKey(part.mesh(), part.firstIndex(), batch.indexCount(), batch.texture(),
-                batch.doubleSided(), batch.alphaPass(false), draw.directionalLighting());
+                batch.doubleSided(), batch.alphaPass(false), draw.directionalLighting(), draw.emission());
     }
 
     private boolean drawsOpaque(Draw draw) {
@@ -539,7 +556,7 @@ public final class ModelRenderQueue implements ModelDrawSink, AutoCloseable {
                     int alphaPass = draw.batch().alphaPass(true);
                     state.use(ModelRenderTypes.get(draw.batch().texture(), draw.batch().doubleSided(), true, false), true, draw.batch().doubleSided());
                     if (draw.gpu() != null) {
-                        state.prepareGpu(draw.pose(), draw.light(), alphaPass, draw.directionalLighting(), modelView, projection);
+                        state.prepareGpu(draw.pose(), draw.light(), alphaPass, draw.directionalLighting(), draw.emission(), modelView, projection);
                         draw.gpu().mesh().draw(true, gpuOffset[start], (end - start) * 3);
                     } else {
                         state.endGpu();
@@ -581,7 +598,7 @@ public final class ModelRenderQueue implements ModelDrawSink, AutoCloseable {
                     state.use(ModelRenderTypes.get(draw.batch().texture(), draw.batch().doubleSided(), true, false),
                             true, draw.batch().doubleSided());
                     if (draw.gpu() != null) {
-                        state.prepareGpu(draw.pose(), draw.light(), alphaPass, draw.directionalLighting(), modelView, projection);
+                        state.prepareGpu(draw.pose(), draw.light(), alphaPass, draw.directionalLighting(), draw.emission(), modelView, projection);
                         draw.gpu().mesh().draw(false, draw.gpu().firstIndex(), count);
                     } else {
                         state.endGpu();
@@ -607,7 +624,7 @@ public final class ModelRenderQueue implements ModelDrawSink, AutoCloseable {
                 state.use(ModelRenderTypes.get(batch.texture(), batch.doubleSided(), true, false), true,
                         batch.doubleSided());
                 if (draw.gpu() != null) {
-                    state.prepareGpu(draw.pose(), draw.light(), alphaPass, draw.directionalLighting(), modelView, projection);
+                    state.prepareGpu(draw.pose(), draw.light(), alphaPass, draw.directionalLighting(), draw.emission(), modelView, projection);
                     draw.gpu().mesh().draw(false, draw.gpu().firstIndex(), batch.indexCount());
                 } else {
                     state.endGpu();
@@ -623,7 +640,7 @@ public final class ModelRenderQueue implements ModelDrawSink, AutoCloseable {
         if (first == next) return true;
         return first.gpu() != null && next.gpu() != null && first.gpu().mesh() == next.gpu().mesh()
                 && first.pose() == next.pose() && first.light() == next.light()
-                && first.directionalLighting() == next.directionalLighting()
+                && first.directionalLighting() == next.directionalLighting() && first.emission() == next.emission()
                 && first.batch().alphaPass(true) == next.batch().alphaPass(true)
                 && first.batch().doubleSided() == next.batch().doubleSided()
                 && first.batch().texture().equals(next.batch().texture());
@@ -714,7 +731,8 @@ public final class ModelRenderQueue implements ModelDrawSink, AutoCloseable {
                     x = px; y = py;
                     if (draw.directionalLighting()) {
                         draw.pose().transformNormal(nx, ny, nz, normal);
-                        nx = normal.x; ny = normal.y; nz = normal.z;
+                        nx = normal.x * (1 - draw.emission()); ny = normal.y * (1 - draw.emission());
+                        nz = normal.z * (1 - draw.emission()) + draw.emission();
                     } else {
                         nx = 0; ny = 0; nz = 1;
                     }
@@ -726,7 +744,7 @@ public final class ModelRenderQueue implements ModelDrawSink, AutoCloseable {
         var shader = RenderSystem.getShader();
         if (customShader) {
             var custom = StaticModelShader.state();
-            custom.prepare(draw.pose(), draw.light(), alphaPass, draw.directionalLighting());
+            custom.prepare(draw.pose(), draw.light(), alphaPass, draw.directionalLighting(), draw.emission());
             shader = custom.shader();
         }
         shader.setDefaultUniforms(VertexFormat.Mode.TRIANGLES, modelView, projection, Minecraft.getInstance().getWindow());

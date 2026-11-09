@@ -138,6 +138,7 @@ public final class ClientModelManager extends SimplePreparableReloadListener<Pre
         TrainModelRenderer.resetStatistics();
         VehicleScriptManager.clear();
         com.unrealtrainmod.client.renderer.IrModelRenderer.clear();
+        IrControlInteraction.reset();
         com.unrealtrainmod.client.gui.TrainIrControlPanel.reset();
         ScriptDiagnostics.clear();
         models = Map.of();

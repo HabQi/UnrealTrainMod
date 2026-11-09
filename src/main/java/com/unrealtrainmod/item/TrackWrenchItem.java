@@ -38,7 +38,7 @@ public final class TrackWrenchItem extends Item {
 
     @Override
     public void appendHoverText(ItemStack stack, TooltipContext context, List<Component> lines, TooltipFlag flags) {
-        for (String key : List.of("edit", "preview", "turnout", "cancel", "permission")) {
+        for (String key : List.of("edit", "preview", "turnout", "cancel", "permission", "connector")) {
             lines.add(Component.translatable("item.unrealtrainmod.track_wrench." + key).withStyle(ChatFormatting.GRAY));
         }
     }

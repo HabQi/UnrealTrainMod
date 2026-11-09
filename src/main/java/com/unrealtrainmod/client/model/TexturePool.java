@@ -37,6 +37,8 @@ final class TexturePool implements AutoCloseable {
     private final Map<ResourceLocation, PreparedTexture> images = new HashMap<>();
     private final PbrDiscovery pbr = new PbrDiscovery();
     private int atlasPages;
+    private final java.util.Set<ResourceLocation> flareTextures = new HashSet<>();
+    private ResourceLocation defaultFlare;
 
     Entry load(PackageAsset asset) throws IOException {
         var cached = assets.get(asset);
@@ -72,6 +74,27 @@ final class TexturePool implements AutoCloseable {
         } finally {
             if (!retained) image.close();
         }
+    }
+
+    ResourceLocation flare(PackageAsset asset) throws IOException {
+        ResourceLocation id;
+        if (asset != null) id = load(asset).id();
+        else {
+            if (defaultFlare == null) {
+                var image = new NativeImage(64, 64, false);
+                for (int y = 0; y < 64; y++) for (int x = 0; x < 64; x++) {
+                    double dx = (x + 0.5 - 32) / 32, dy = (y + 0.5 - 32) / 32;
+                    double radius = Math.sqrt(dx * dx + dy * dy);
+                    int alpha = (int)Math.round(255 * Math.pow(Math.max(0, 1 - radius), 3));
+                    image.setPixelRGBA(x, y, alpha << 24 | 0xffffff);
+                }
+                defaultFlare = ResourceLocation.fromNamespaceAndPath(UnrealTrainMod.MODID, "textures/ir/default_flare");
+                images.put(defaultFlare, new PreparedTexture(image, null));
+            }
+            id = defaultFlare;
+        }
+        flareTextures.add(id);
+        return id;
     }
 
     /** Build the dual-light surface once; the selected RGBA pixel is never blended with the other source. */
@@ -148,7 +171,7 @@ final class TexturePool implements AutoCloseable {
 
     Map<ResourceLocation, PreparedTexture> takeImages(Collection<PreparedModel> models) {
         int unique = pixels.values().stream().mapToInt(List::size).sum();
-        var used = new HashSet<ResourceLocation>();
+        var used = new HashSet<ResourceLocation>(flareTextures);
         for (var model : models) for (var batch : model.batches()) used.add(batch.texture());
         var iterator = images.entrySet().iterator();
         while (iterator.hasNext()) {

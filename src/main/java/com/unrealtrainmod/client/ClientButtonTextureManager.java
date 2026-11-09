@@ -41,6 +41,8 @@ public final class ClientButtonTextureManager extends SimplePreparableReloadList
         var assets = new HashSet<PackageAsset>();
         VehicleCatalog.all().forEach(model -> assets.add(model.buttonTexture()));
         RailCatalog.all().forEach(model -> assets.add(model.buttonTexture()));
+        com.unrealtrainmod.wiring.WiringCatalog.all(false).forEach(model -> assets.add(model.buttonTexture()));
+        com.unrealtrainmod.wiring.WiringCatalog.all(true).forEach(model -> assets.add(model.buttonTexture()));
         assets.remove(null);
         var images = new HashMap<PackageAsset, NativeImage>();
         try {

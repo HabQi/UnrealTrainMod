@@ -6,6 +6,8 @@ package com.unrealtrainmod.train;
 
 import com.unrealtrainmod.UnrealTrainMod;
 import com.unrealtrainmod.entity.TrainEntity;
+import com.unrealtrainmod.compat.ir.IrReadout;
+import com.unrealtrainmod.compat.ir.IrControlDefinition;
 import com.unrealtrainmod.network.payload.TrainControlInputPayload;
 import com.unrealtrainmod.network.payload.TrainIrControlInputPayload;
 import com.unrealtrainmod.network.payload.TrainControlSyncPayload;
@@ -124,12 +126,88 @@ public final class TrainDriverManager {
         if (session == null) return;
         Feedback feedback = Feedback.NONE;
         try {
+            if (!Float.isFinite(payload.value()) || payload.value() < 0 || payload.value() > 1) {
+                throw new IllegalArgumentException("Invalid IR control value");
+            }
             if (payload.pulse() && payload.value() != 1) throw new IllegalArgumentException("Invalid pulse target");
-            ((TrainEntity) player.getVehicle()).setIrControl(payload.group(), payload.value(), payload.pulse());
+            var entity = (TrainEntity) player.getVehicle();
+            var operation = payload.operation();
+            var definition = VehicleCatalog.find(entity.getModelId()).ir();
+            var control = definition.controls().get(payload.group());
+            if (control == null) throw new IllegalArgumentException("Unknown IR control");
+            if (operation != TrainIrControlInputPayload.Operation.CLICK && payload.pulse()) {
+                throw new IllegalArgumentException("Only clicks can pulse a control");
+            }
+            if (operation == TrainIrControlInputPayload.Operation.END) {
+                if (payload.group().equals(session.irSoundGroup)) {
+                    if (control.readOnly()) feedback = irDrivingTarget(session, control.driver(), payload.value());
+                    else if (control.type() != IrControlDefinition.Type.PRESS) entity.setIrControl(payload.group(), payload.value(), false);
+                    endControlSound(session);
+                }
+            } else {
+                if (operation == TrainIrControlInputPayload.Operation.UPDATE && !payload.group().equals(session.irSoundGroup)) {
+                    throw new IllegalArgumentException("Control is not held by this session");
+                }
+                var snapshot = entity.irSnapshot();
+                float previous = definition.value(payload.group(), snapshot.values(), entity.runtimeState(),
+                        snapshot.frontCoupled(), snapshot.rearCoupled());
+                if (operation == TrainIrControlInputPayload.Operation.BEGIN) endControlSound(session);
+                if (control.readOnly()) {
+                    if (payload.pulse()) throw new IllegalArgumentException("Driving controls cannot pulse");
+                    feedback = irDrivingTarget(session, control.driver(), payload.value());
+                } else if (operation == TrainIrControlInputPayload.Operation.BEGIN && control.type() == IrControlDefinition.Type.PRESS) {
+                    if (payload.value() != 1) throw new IllegalArgumentException("Held press must be on");
+                    entity.holdIrControl(session.id, payload.group());
+                } else entity.setIrControl(payload.group(), payload.value(), payload.pulse());
+                if (feedback != Feedback.NONE) {
+                    endControlSound(session);
+                    send(session, true, feedback);
+                    return;
+                }
+                if (operation == TrainIrControlInputPayload.Operation.BEGIN) {
+                    session.irSoundGroup = payload.group();
+                    session.nativeSoundControl = control.driver();
+                    entity.beginIrControlSound(session.id, payload.group(), null, session.front.sign());
+                } else if (operation == TrainIrControlInputPayload.Operation.CLICK) {
+                    endControlSound(session);
+                    entity.clickIrControlSound(payload.group(), null, session.front.sign(), previous, payload.value());
+                }
+            }
         } catch (IllegalArgumentException exception) {
+            endControlSound(session);
             feedback = Feedback.IR_CONTROL_UNAVAILABLE;
         }
-        send(session, true, feedback);
+        for (var driver : sessionsFor(session.train)) send(driver, true, driver == session ? feedback : Feedback.NONE);
+    }
+
+    /** Model controls use the vehicle's front; keyboard/HUD controls use the driver's chosen front. */
+    private Feedback irDrivingTarget(TrainDriverSession session, IrReadout driver, float value) {
+        var train = session.train;
+        var old = train.control();
+        int power = TrainControlProfile.powerNotch(old), brake = TrainControlProfile.brakeNotch(old);
+        var reverser = old.reverser();
+        if (driver == IrReadout.REVERSER) {
+            int direction = Math.round(value * 2) - 1;
+            var target = (direction > 0 ? TrainControlState.Reverser.FORWARD
+                    : direction < 0 ? TrainControlState.Reverser.REVERSE : TrainControlState.Reverser.NEUTRAL)
+                    .inFrame(train.member(session.vehicle).direction());
+            if (target != reverser && (power != 0 || brake != 0)) return Feedback.REVERSER_LOCKED;
+            reverser = target;
+        } else {
+            if (old.emergencyBrake()) return Feedback.EMERGENCY_LOCKED;
+            if (driver == IrReadout.THROTTLE) {
+                power = Math.round(value * TrainControlProfile.POWER_NOTCHES);
+                if (power > 0) brake = 0;
+            } else if (driver == IrReadout.TRAIN_BRAKE) {
+                brake = Math.round(value * TrainControlProfile.BRAKE_NOTCHES);
+                if (brake > 0) power = 0;
+            } else if (driver == IrReadout.THROTTLE_BRAKE) {
+                power = Math.round(Math.max(0, value * 2 - 1) * TrainControlProfile.POWER_NOTCHES);
+                brake = Math.round(Math.max(0, 1 - value * 2) * TrainControlProfile.BRAKE_NOTCHES);
+            } else throw new IllegalArgumentException("Unsupported driving control");
+        }
+        train.setControl(TrainControlProfile.control(power, brake, reverser, old.emergencyBrake()));
+        return Feedback.NONE;
     }
 
     private void input(ServerPlayer player, TrainControlInputPayload payload) {
@@ -205,9 +283,30 @@ public final class TrainDriverManager {
                         || action == TrainControlInputPayload.Action.TAIL_LIGHT_ON;
                 ((TrainEntity) session.player.getVehicle()).setLight(head, enabled);
             }
+            case POWER_HANDLE_BEGIN, BRAKE_HANDLE_BEGIN -> {
+                controlChange = false;
+                endControlSound(session);
+                session.irSoundGroup = null;
+                session.nativeSoundControl = action == TrainControlInputPayload.Action.POWER_HANDLE_BEGIN
+                        ? IrReadout.THROTTLE : IrReadout.TRAIN_BRAKE;
+                ((TrainEntity) player.getVehicle()).beginIrControlSound(session.id, null, session.nativeSoundControl,
+                        session.front.sign());
+            }
+            case HANDLE_RELEASE -> { controlChange = false; endControlSound(session); }
             case HEARTBEAT -> { }
         }
-        if (controlChange && feedback == Feedback.NONE) train.setControl(TrainControlProfile.control(power, brake, reverser, emergency));
+        if (controlChange && feedback == Feedback.NONE) {
+            train.setControl(TrainControlProfile.control(power, brake, reverser, emergency));
+            var entity = (TrainEntity) player.getVehicle();
+            if (old.throttle() != train.control().throttle() && session.nativeSoundControl != IrReadout.THROTTLE) {
+                entity.clickIrControlSound(null, IrReadout.THROTTLE, session.front.sign(),
+                        (float)old.throttle(), (float)train.control().throttle());
+            }
+            if (old.trainBrake() != train.control().trainBrake() && session.nativeSoundControl != IrReadout.TRAIN_BRAKE) {
+                entity.clickIrControlSound(null, IrReadout.TRAIN_BRAKE, session.front.sign(),
+                        (float)old.trainBrake(), (float)train.control().trainBrake());
+            }
+        }
         for (var driver : sessionsFor(train)) send(driver, true, driver == session ? feedback : Feedback.NONE);
     }
 
@@ -312,6 +411,7 @@ public final class TrainDriverManager {
     }
 
     private void finish(TrainDriverSession session) {
+        endControlSound(session);
         var train = session.train;
         if (!session.player.hasDisconnected()) {
             send(session, false, Feedback.NONE);
@@ -326,6 +426,12 @@ public final class TrainDriverManager {
     }
 
     void closeAll() { for (var session : List.copyOf(sessions.values())) close(session); }
+
+    private void endControlSound(TrainDriverSession session) {
+        if (level.getEntity(session.vehicle) instanceof TrainEntity entity) entity.endIrControlSound(session.id);
+        session.irSoundGroup = null;
+        session.nativeSoundControl = null;
+    }
 
     void trackChanged(TrackSegment segment) {
         for (var session : sessions.values()) session.monitorPath.trackChanged(segment);

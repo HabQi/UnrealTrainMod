@@ -37,7 +37,7 @@ import org.slf4j.LoggerFactory;
 public final class ModelCache implements AutoCloseable {
     private static final Logger LOGGER = LoggerFactory.getLogger(ModelCache.class);
     // Bump when either the binary layout or import rules change.
-    private static final int VERSION = 4;
+    private static final int VERSION = 5;
     private static final int MAGIC = 0x55544d43;
     private final Path root = FMLPaths.GAMEDIR.get().resolve("UTM_cache").resolve("v" + VERSION);
     private final Map<Path, String> digests = new HashMap<>();

@@ -43,7 +43,8 @@ public final class ResourceLoader {
         var rails = new LinkedHashMap<ResourceLocation, RailDefinition>();
         Path rtmDirectory = modsDirectory.resolve("Packages_RTM");
         Path irDirectory = modsDirectory.resolve("Packages_IR");
-        var rtm = new RtmPackageReader(vehicles, rails, report, cache);
+        var wiring = new LinkedHashMap<ResourceLocation, com.unrealtrainmod.wiring.WiringDefinition>();
+        var rtm = new RtmPackageReader(vehicles, rails, wiring, report, cache);
         var ir = new IrPackageReader(vehicles, rails, report, cache);
         for (var path : archives(rtmDirectory, report)) {
             try (var archive = new PackageArchive(path)) {
@@ -63,6 +64,9 @@ public final class ResourceLoader {
         VehiclePerformanceOverrides.apply(configDirectory.resolve("unrealtrainmod/vehicle-performance.json"), vehicles);
         VehicleInteriorOverrides.apply(configDirectory.resolve("unrealtrainmod/vehicle-interior.json"), vehicles);
         VehicleCatalog.register(List.copyOf(vehicles.values()));
+        com.unrealtrainmod.wiring.WiringCatalog.register(wiring);
+        report.logSummary(LoadReport.Kind.RTM_CONNECTOR, rtmDirectory, "");
+        report.logSummary(LoadReport.Kind.RTM_WIRE, rtmDirectory, "client-side wire scripts");
         var railDefinitions = List.copyOf(rails.values());
         RailCatalog.register(railDefinitions);
         long scriptedModels = vehicles.values().stream().filter(definition -> definition.parts().stream()

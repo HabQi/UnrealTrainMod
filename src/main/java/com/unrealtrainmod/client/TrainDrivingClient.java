@@ -214,6 +214,7 @@ public final class TrainDrivingClient {
         boolean newSession = snapshot == null || !snapshot.session().equals(incoming.session());
         boolean newVehicle = snapshot != null && !snapshot.vehicle().equals(incoming.vehicle());
         if (newSession || newVehicle) {
+            IrControlInteraction.reset();
             sequence = incoming.sequence();
             TrainDrivingOverlay.clear();
             pendingLightVehicle = null;
@@ -225,6 +226,7 @@ public final class TrainDrivingClient {
         silence = 0;
         if (incoming.feedback() == TrainControlSyncPayload.Feedback.IR_CONTROL_UNAVAILABLE) TrainIrControlPanel.rejectPending();
         if (incoming.feedback() != TrainControlSyncPayload.Feedback.NONE && mc.player != null) {
+            IrControlInteraction.reject();
             mc.player.displayClientMessage(Component.translatable(PREFIX
                     + incoming.feedback().name().toLowerCase(Locale.ROOT)), true);
         }
@@ -240,6 +242,7 @@ public final class TrainDrivingClient {
             return;
         }
         TrainIrControlPanel.tick();
+        IrControlInteraction.tick();
         if (usingCursor()) TrainDrivingOverlay.drag(mouseY());
         if (pendingLightMask >= 0 && ++pendingLightTicks > 40) {
             pendingLightVehicle = null;
@@ -342,10 +345,10 @@ public final class TrainDrivingClient {
         PacketDistributor.sendToServer(new TrainControlInputPayload(snapshot.session(), sequence, action, notch));
     }
 
-    public static long sendIr(String group, float value, boolean pulse) {
+    public static long sendIr(String group, float value, boolean pulse, TrainIrControlInputPayload.Operation operation) {
         if (!riding()) return -1;
         heartbeat = 0;
-        PacketDistributor.sendToServer(new TrainIrControlInputPayload(snapshot.session(), ++sequence, group, value, pulse));
+        PacketDistributor.sendToServer(new TrainIrControlInputPayload(snapshot.session(), ++sequence, group, value, pulse, operation));
         return sequence;
     }
 
@@ -371,6 +374,7 @@ public final class TrainDrivingClient {
         TrainDrivingOverlay.render(event.getGuiGraphics(), snapshot,
                 event.getPartialTick().getGameTimeDeltaPartialTick(false),
                 usingCursor() ? mouseX() : -1, usingCursor() ? mouseY() : -1);
+        IrControlInteraction.render(event.getGuiGraphics());
     }
 
     public static void guiLayer(RenderGuiLayerEvent.Pre event) {
@@ -403,6 +407,7 @@ public final class TrainDrivingClient {
     }
 
     public static void clear() {
+        IrControlInteraction.reset();
         snapshot = null;
         sequence = 0;
         silence = heartbeat = 0;

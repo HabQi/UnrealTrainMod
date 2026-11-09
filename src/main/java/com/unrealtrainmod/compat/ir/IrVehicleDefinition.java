@@ -10,8 +10,8 @@ import java.util.Map;
 
 /** Logical control, animation and sound definitions contain no client runtime objects. */
 public record IrVehicleDefinition(Map<String, IrControlDefinition> controls,
-                                   List<IrAnimationDefinition> animations, float maxSpeedKmh, IrVehicleSounds sounds) {
-    public static final IrVehicleDefinition NONE = new IrVehicleDefinition(Map.of(), List.of(), 200, IrVehicleSounds.NONE);
+                                   List<IrAnimationDefinition> animations, float maxSpeedKmh, IrVehicleSounds sounds, IrLightingDefinition lighting) {
+    public static final IrVehicleDefinition NONE = new IrVehicleDefinition(Map.of(), List.of(), 200, IrVehicleSounds.NONE, IrLightingDefinition.NONE);
 
     public IrVehicleDefinition {
         controls = Map.copyOf(controls);

@@ -19,6 +19,7 @@ public abstract class IrisPipelineMixin {
     @Inject(method = "beginTranslucents", at = @At("RETURN"))
     private void unrealtrainmod$drawVehicleTransparency(CallbackInfo callback) {
         IrisTranslucentQueue.draw();
+        com.unrealtrainmod.client.renderer.IrFlareRenderer.draw();
     }
 
     @Inject(method = "destroy", at = @At("HEAD"))

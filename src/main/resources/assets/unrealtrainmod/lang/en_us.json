@@ -174,7 +174,8 @@
   "item.unrealtrainmod.track_wrench.edit": "Main hand: right-click a draft endpoint to edit its curve.",
   "item.unrealtrainmod.track_wrench.preview": "Angle and handle length preview live; Apply keeps them in this draft.",
   "item.unrealtrainmod.track_wrench.cancel": "Sneak + right-click cancels the draft. Built tracks cannot be edited directly.",
-  "item.unrealtrainmod.track_wrench.permission": "Requires permission level 2. Reusable, no material or durability cost.",
+  "item.unrealtrainmod.track_wrench.permission": "Track operations require permission level 2. Reusable, no material or durability cost.",
+  "item.unrealtrainmod.track_wrench.connector": "Right-click an insulator to adjust its position and angles; requires build permission.",
   "item.unrealtrainmod.track_builder.feedback.no_draft": "Select a start with the Track Builder, then right-click a draft node with the wrench.",
   "item.unrealtrainmod.track_builder.feedback.aim_node": "Aim at a draft endpoint within reach and right-click. Blocks must not obscure it.",
   "item.unrealtrainmod.track_builder.feedback.stale_edit": "The draft or editor has changed. Right-click the endpoint again.",
@@ -208,7 +209,7 @@
   "gui.unrealtrainmod.driving.ir.on": "On",
   "gui.unrealtrainmod.driving.ir.off": "Off",
   "gui.unrealtrainmod.driving.ir.pulse": "Trigger",
-  "gui.unrealtrainmod.driving.ir.visual_only": "Visual controls only; no equipment simulation",
+  "gui.unrealtrainmod.driving.ir.visual_only": "Controls visual actions and sounds; no equipment physics or electrical interlocks",
   "gui.unrealtrainmod.driving.ir.details": "%s | value %s | default %s",
   "gui.unrealtrainmod.driving.ir.type.continuous": "Continuous",
   "gui.unrealtrainmod.driving.ir.type.toggle": "Toggle",
@@ -409,7 +410,7 @@
   "key.unrealtrainmod.driving.emergency": "Emergency brake / release at rest",
   "key.unrealtrainmod.driving.door_left": "Open/close left door of this car",
   "key.unrealtrainmod.driving.door_right": "Open/close right door of this car",
-  "key.unrealtrainmod.driving.cursor": "Hold to use driving controls",
+  "key.unrealtrainmod.driving.cursor": "Hold to use driving and 3D controls",
   "gui.unrealtrainmod.driving.console.toward_front": "To front",
   "gui.unrealtrainmod.driving.console.toward_back": "To rear",
   "gui.unrealtrainmod.driving.console.at_rest": "At rest",
@@ -505,4 +506,38 @@
   ,"gui.unrealtrainmod.monitor.grade_short": "GRD"
   ,"gui.unrealtrainmod.driving.console.monitor_expand": "Click to expand the train monitor"
   ,"gui.unrealtrainmod.driving.console.monitor_collapse": "Click to minimize the train monitor"
+  ,"gui.unrealtrainmod.driving.ir.3d.press": "Hold left mouse button; release to reset"
+  ,"gui.unrealtrainmod.driving.ir.3d.toggle": "Left click to switch on/off"
+  ,"gui.unrealtrainmod.driving.ir.3d.drag": "Drag up/down or scroll to adjust"
+  ,"item.unrealtrainmod.insulator": "Insulator"
+  ,"item.unrealtrainmod.wire": "Wire"
+  ,"entity.unrealtrainmod.connector": "Insulator"
+  ,"wiring.unrealtrainmod.selected": "Selected model: %s"
+  ,"wiring.unrealtrainmod.select_hint": "Right-click air to select a model; this item is reusable"
+  ,"wiring.unrealtrainmod.wire_hint": "Right-click two insulators to connect; sneak-use in air to cancel"
+  ,"wiring.unrealtrainmod.connector_hint": "Use on a block face to place; sneak-use on an insulator to remove it and its wires"
+  ,"wiring.unrealtrainmod.unselected": "Right-click air to select an available model first"
+  ,"wiring.unrealtrainmod.start": "Start selected; use another insulator to connect, or the same one to cancel"
+  ,"wiring.unrealtrainmod.remove_start": "Removal start selected; sneak-use an empty main hand on the other endpoint"
+  ,"wiring.unrealtrainmod.cancelled": "Wire selection cancelled"
+  ,"wiring.unrealtrainmod.missing": "The insulator has been removed"
+  ,"wiring.unrealtrainmod.no_connections": "No wires connect these insulators"
+  ,"wiring.unrealtrainmod.length": "Attachment points must be distinct and no more than 256 blocks apart"
+  ,"wiring.unrealtrainmod.duplicate": "This wire model already connects these insulators"
+  ,"wiring.unrealtrainmod.connected": "Wire connected"
+  ,"wiring.unrealtrainmod.invalid": "Invalid operation: check the item, build permission, reach and input values"
+  ,"wiring.unrealtrainmod.changed": "Another player changed this insulator; reopen the editor"
+  ,"wiring.unrealtrainmod.success": "Operation completed"
+  ,"wiring.unrealtrainmod.preview": "Model preview: drag to rotate, Shift-drag to pan, scroll to zoom"
+  ,"wiring.unrealtrainmod.wire_models": "Select wire model"
+  ,"wiring.unrealtrainmod.connector_models": "Select insulator model"
+  ,"wiring.unrealtrainmod.empty": "No models available; place an RTM ZIP in mods/Packages_RTM and restart"
+  ,"wiring.unrealtrainmod.apply": "Apply"
+  ,"wiring.unrealtrainmod.cancel": "Cancel"
+  ,"wiring.unrealtrainmod.reset": "Reset"
+  ,"wiring.unrealtrainmod.edit": "Adjust insulator"
+  ,"wiring.unrealtrainmod.offset_axis": "%s offset / blocks"
+  ,"wiring.unrealtrainmod.angle_axis": "%s rotation / degrees"
+  ,"wiring.unrealtrainmod.remove_title": "Select a wire to disconnect"
+  ,"wiring.unrealtrainmod.remove": "Disconnect"
 }

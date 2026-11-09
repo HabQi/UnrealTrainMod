@@ -80,7 +80,7 @@ public final class IrModelLoader {
                         normals[n + 2] = -direction * x;
                     }
                 }
-                parts.add(new ModelData.Part(part.name(), visible.test(part.name()), false, 0, positions, part.faces()));
+                parts.add(new ModelData.Part(part.name(), (visible.test(part.name()) && (!vehicle || isDrawable(part.name()))), false, 0, positions, part.faces()));
             }
             return new Imported(new ModelData(raw.materials(), parts), textures);
         }
@@ -90,6 +90,11 @@ public final class IrModelLoader {
     public static boolean isVisible(String name) {
         return !name.contains("CARGO_ITEMS_") && !name.contains("CARGO_FILL_")
                 && (!HIDDEN.matcher(name).find() || IrModelComponents.isControl(name) || IrModelComponents.isReadout(name));
+    }
+
+    /** Seat markers still participate in the startup height scan. */
+    public static boolean isDrawable(String name) {
+        return isVisible(name) && !IrModelComponents.token(name, "INVISIBLE");
     }
 
     private static String findTexture(PackageArchive archive, PackageAsset model, String path) {

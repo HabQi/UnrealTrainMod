@@ -21,5 +21,12 @@ public final class ModDataComponents {
             TYPES.register("selected_rail_model", () -> DataComponentType.<ResourceLocation>builder()
                     .persistent(ResourceLocation.CODEC).networkSynchronized(ResourceLocation.STREAM_CODEC).build());
 
+    public static final DeferredHolder<DataComponentType<?>, DataComponentType<ResourceLocation>> SELECTED_CONNECTOR_MODEL =
+            TYPES.register("selected_connector_model", () -> DataComponentType.<ResourceLocation>builder()
+                    .persistent(ResourceLocation.CODEC).networkSynchronized(ResourceLocation.STREAM_CODEC).build());
+    public static final DeferredHolder<DataComponentType<?>, DataComponentType<ResourceLocation>> SELECTED_WIRE_MODEL =
+            TYPES.register("selected_wire_model", () -> DataComponentType.<ResourceLocation>builder()
+                    .persistent(ResourceLocation.CODEC).networkSynchronized(ResourceLocation.STREAM_CODEC).build());
+
     private ModDataComponents() {}
 }

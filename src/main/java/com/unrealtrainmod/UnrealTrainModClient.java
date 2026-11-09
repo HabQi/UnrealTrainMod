@@ -89,6 +89,7 @@ public class UnrealTrainModClient {
 
     @SubscribeEvent
     static void registerRenderers(EntityRenderersEvent.RegisterRenderers event) {
+        event.registerEntityRenderer(UnrealTrainMod.CONNECTOR.get(), com.unrealtrainmod.client.wiring.ConnectorRenderer::new);
         event.registerEntityRenderer(UnrealTrainMod.PLACED_MODEL.get(), PlacedModelRenderer::new);
         event.registerEntityRenderer(UnrealTrainMod.TRAIN.get(), TrainEntityRenderer::new);
     }
@@ -99,6 +100,7 @@ public class UnrealTrainModClient {
         event.registerReloadListener(ClientModelManager.INSTANCE);
         event.registerReloadListener(ClientRailModelManager.INSTANCE);
         event.registerReloadListener(ClientButtonTextureManager.INSTANCE);
+        event.registerReloadListener(com.unrealtrainmod.client.wiring.WiringModelManager.INSTANCE);
         event.registerReloadListener(ClientThumbnailManager.INSTANCE);
         event.registerReloadListener(ClientTrackCache.INSTANCE);
         event.registerReloadListener(ClientTurnoutConstruction.INSTANCE);
@@ -106,6 +108,7 @@ public class UnrealTrainModClient {
     }
 
     public UnrealTrainModClient(ModContainer container) {
+        com.unrealtrainmod.client.wiring.WiringClient.register(NeoForge.EVENT_BUS);
         container.registerConfig(ModConfig.Type.CLIENT, ClientConfig.SPEC);
         // Expose the client configuration in the Mods screen.
         container.registerExtensionPoint(IConfigScreenFactory.class, ConfigurationScreen::new);
@@ -165,6 +168,7 @@ public class UnrealTrainModClient {
         NeoForge.EVENT_BUS.addListener(ClientThumbnailManager.INSTANCE::onFramePost);
         NeoForge.EVENT_BUS.addListener(CachedItemRenderer::onFramePost);
         NeoForge.EVENT_BUS.addListener(TrainModelRenderer::onRenderStage);
+        NeoForge.EVENT_BUS.addListener(com.unrealtrainmod.client.IrControlInteraction::pick);
         NeoForge.EVENT_BUS.addListener(ClientTrackCache.INSTANCE::onSync);
         NeoForge.EVENT_BUS.addListener(ClientTrackCache.INSTANCE::onLevelLoad);
         NeoForge.EVENT_BUS.addListener(ClientTrackCache.INSTANCE::onLevelUnload);
@@ -186,6 +190,8 @@ public class UnrealTrainModClient {
     }
 
     private static void onGameShuttingDown(GameShuttingDownEvent event) {
+        com.unrealtrainmod.client.wiring.WiringClient.clear();
+        com.unrealtrainmod.client.wiring.WiringModelManager.INSTANCE.close();
         VehicleSoundManager.INSTANCE.clear();
         TrainDrivingClient.clear();
         TrainWalkingClient.clear();

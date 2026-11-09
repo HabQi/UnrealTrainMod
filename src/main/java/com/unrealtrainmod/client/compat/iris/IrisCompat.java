@@ -94,7 +94,7 @@ public final class IrisCompat {
 
     static int entityVertexSize() { return entityFormat.getVertexSize(); }
 
-    static int[] currentIdentity() {
+    public static int[] currentIdentity() {
         int[] previous = new int[3];
         currentIdentity(previous);
         return previous;
@@ -115,7 +115,7 @@ public final class IrisCompat {
 
     static void clearTypes() { ENTITY_TYPES.clear(); }
 
-    static void restoreTrackIdentity(int[] previous) {
+    public static void restoreTrackIdentity(int[] previous) {
         try {
             for (int i = 0; i < 3; i++) setIdentity[i].invoke(previous[i]);
         } catch (Throwable exception) { throw new IllegalStateException("Cannot restore Iris entity context", exception); }

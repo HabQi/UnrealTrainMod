@@ -6,6 +6,7 @@ package com.unrealtrainmod.client.renderer;
 
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.unrealtrainmod.client.model.LoadedModel;
+import com.unrealtrainmod.client.model.IrModelPart;
 import com.unrealtrainmod.compat.ir.IrAnimationDefinition;
 import com.unrealtrainmod.compat.ir.IrModelComponent;
 import com.unrealtrainmod.compat.ir.IrVehicleDefinition;
@@ -24,7 +25,7 @@ public final class IrModelRenderer {
     private static final Map<TrainEntity, RenderState> STATES = new WeakHashMap<>();
     private static long generation;
     public record Frame(double distance, IrVehicleDefinition definition, IrVehicleSnapshot controls,
-                        VehicleRuntimeState runtime, float[] percentages) {}
+                        VehicleRuntimeState runtime, float[] percentages, double time) {}
     private static final class RenderState {
         final Travel travel = new Travel();
         long generation = -1;
@@ -76,7 +77,7 @@ public final class IrModelRenderer {
                         ? (active ? progress : 0) : (active ? progress : 1 - progress);
             }
         }
-        var frame = new Frame(distance, definition, controls, runtime, percentages);
+        var frame = new Frame(distance, definition, controls, runtime, percentages, time);
         if (cached != null) {
             cached.model = model; cached.generation = generation; cached.frame = frame;
         }
@@ -87,41 +88,61 @@ public final class IrModelRenderer {
     public static void submit(ModelDrawSink sink, LoadedModel.Instance instance, Frame frame, PoseStack pose, int light) {
         var stats = sink.statistics();
         for (var part : instance.irBinding().parts().get(instance.definition().role())) {
-            var component = part.definition();
-            float value = 0;
-            if (component != null) {
-                float raw = component.kind() == IrModelComponent.Kind.GAUGE
-                        ? component.readout().sample(frame.runtime(), frame.definition().maxSpeedKmh(), frame.controls().frontCoupled(), frame.controls().rearCoupled())
-                        : frame.definition().value(component.controlGroup(), frame.controls().values(), frame.runtime(), frame.controls().frontCoupled(), frame.controls().rearCoupled());
-                value = component.value(raw);
-                if (component.hide() && value == 1) continue;
-            }
             pose.pushPose();
             try {
-                // Wheel motion belongs inside the bogie pose, before its animation/control chain.
-                if (component != null && component.kind() == IrModelComponent.Kind.WHEEL) {
-                    double circumference = Math.PI * component.diameter();
-                    rotate(pose, component, (float)(360 * (frame.distance() % circumference) / circumference));
-                }
-                for (var animation : part.animations()) {
-                    boolean looping = frame.definition().animations().get(animation.animation()).mode() == IrAnimationDefinition.Mode.LOOP;
-                    var transform = animation.frames().sample(animation.track(), frame.percentages()[animation.animation()], looping);
-                    pose.translate(transform.x(), transform.y(), transform.z());
-                    pose.mulPose(transform.rotation());
-                    // PoseStack.scale also updates inverse-transpose normals for non-uniform scales.
-                    pose.scale(transform.sx(), transform.sy(), transform.sz());
-                }
-                if (component != null && component.kind() != IrModelComponent.Kind.WHEEL) {
-                    var translation = component.translation();
-                    pose.translate(translation.x() * value, translation.y() * value, translation.z() * value);
-                    rotate(pose, component, component.degrees() * value);
-                }
+                if (!transform(part, frame, pose)) continue;
                 if (stats != null) stats.irSelection(part.selection(), true, sink.lights());
-                sink.submitGeometry(instance.model(), part.selection(), pose, light);
+                var rule = part.lighting();
+                var lighting = SurfaceLighting.NONE;
+                if (rule != null) {
+                    float amount = rule.strength(frame.definition(), frame.controls().values(), frame.runtime(),
+                            frame.controls().frontCoupled(), frame.controls().rearCoupled());
+                    var flare = rule.flare();
+                    boolean on = flare == null || flare.on(frame.time());
+                    float surface = !on && flare.blinkFullBright() ? 0 : amount;
+                    lighting = new SurfaceLighting(rule.emissive() ? surface : 0,
+                            surface * (rule.interior() ? frame.definition().lighting().interiorLevel() : 1));
+                    if (sink.worldView() && flare != null && part.flareTexture() != null && on && amount > 0) {
+                        int color = flare.reverseColor() != null && frame.runtime() != null && frame.runtime().reverser() < 0
+                                ? flare.reverseColor() : flare.color();
+                        sink.submitFlare(flare, part.flareTexture(), pose.last(), color, amount);
+                    }
+                }
+                sink.submitGeometry(instance.model(), part.selection(), pose.last(), light, true, lighting);
             } finally {
                 pose.popPose();
             }
         }
+    }
+
+    /** Rendering and picking share the complete ordered transform and visibility rule. */
+    public static boolean transform(IrModelPart part, Frame frame, PoseStack pose) {
+        var component = part.definition();
+        float value = 0;
+        if (component != null) {
+            float raw = component.kind() == IrModelComponent.Kind.GAUGE
+                    ? component.readout().sample(frame.runtime(), frame.definition().maxSpeedKmh(), frame.controls().frontCoupled(), frame.controls().rearCoupled())
+                    : frame.definition().value(component.controlGroup(), frame.controls().values(), frame.runtime(), frame.controls().frontCoupled(), frame.controls().rearCoupled());
+            value = component.value(raw);
+            if (component.hide() && value == 1) return false;
+            if (component.kind() == IrModelComponent.Kind.WHEEL) {
+                double circumference = Math.PI * component.diameter();
+                rotate(pose, component, (float)(360 * (frame.distance() % circumference) / circumference));
+            }
+        }
+        for (var animation : part.animations()) {
+            boolean looping = frame.definition().animations().get(animation.animation()).mode() == IrAnimationDefinition.Mode.LOOP;
+            var transform = animation.frames().sample(animation.track(), frame.percentages()[animation.animation()], looping);
+            pose.translate(transform.x(), transform.y(), transform.z());
+            pose.mulPose(transform.rotation());
+            pose.scale(transform.sx(), transform.sy(), transform.sz());
+        }
+        if (component != null && component.kind() != IrModelComponent.Kind.WHEEL) {
+            var translation = component.translation();
+            pose.translate(translation.x() * value, translation.y() * value, translation.z() * value);
+            rotate(pose, component, component.degrees() * value);
+        }
+        return true;
     }
 
     private static void rotate(PoseStack pose, IrModelComponent component, float degrees) {

@@ -44,12 +44,13 @@ public final class StaticModelShader {
                         Uniform light = loaded.getUniform("LightUV"), overlay = loaded.getUniform("OverlayUV");
                         Uniform alphaPass = loaded.getUniform("AlphaPass"), directional = loaded.getUniform("DirectionalLighting");
                         Uniform renderOrigin = loaded.getUniform("RenderOrigin");
+                        Uniform emission = loaded.getUniform("SurfaceEmission");
                         if (model == null || normal == null || light == null || overlay == null || alphaPass == null
-                                || directional == null || renderOrigin == null) {
+                                || directional == null || renderOrigin == null || emission == null) {
                             LOGGER.error("Static model shader is missing required uniforms; using buffered rendering");
                         } else {
                             // Minecraft owns and closes the shader; retain only the registered callback's instance.
-                            state = new State(loaded, model, normal, light, overlay, alphaPass, directional, renderOrigin);
+                            state = new State(loaded, model, normal, light, overlay, alphaPass, directional, renderOrigin, emission);
                         }
                     });
         } catch (IOException e) {
@@ -68,9 +69,14 @@ public final class StaticModelShader {
     }
 
     public record State(ShaderInstance shader, Uniform modelMatrix, Uniform normalMatrix,
-                        Uniform light, Uniform overlay, Uniform alphaPass, Uniform directionalLighting, Uniform renderOrigin) {
+                        Uniform light, Uniform overlay, Uniform alphaPass, Uniform directionalLighting, Uniform renderOrigin, Uniform emission) {
         /** Uses the AlphaPass constants above for both GPU and buffered rendering. */
         public void prepare(PoseStack.Pose pose, int packedLight, int pass, boolean directional) {
+            prepare(pose, packedLight, pass, directional, 0);
+        }
+
+        public void prepare(PoseStack.Pose pose, int packedLight, int pass, boolean directional, float strength) {
+            emission.set(strength);
             modelMatrix.set(pose.pose());
             normalMatrix.set(pose.normal());
             light.set(packedLight & 0xffff, packedLight >>> 16 & 0xffff);

@@ -13,13 +13,13 @@ import net.minecraft.client.renderer.RenderType;
 import net.minecraft.resources.ResourceLocation;
 
 /** Scene-local ordering is authoritative; these types never sort or redirect the current framebuffer. */
-final class ModelRenderTypes extends RenderStateShard {
+public final class ModelRenderTypes extends RenderStateShard {
     private record Key(ResourceLocation texture, boolean doubleSided, boolean blended, boolean opaque) {}
     private static final Map<Key, RenderType> TYPES = new HashMap<>();
 
     private ModelRenderTypes() { super("train_model", () -> {}, () -> {}); }
 
-    static RenderType get(ResourceLocation texture, boolean doubleSided, boolean blended, boolean opaque) {
+    public static RenderType get(ResourceLocation texture, boolean doubleSided, boolean blended, boolean opaque) {
         return TYPES.computeIfAbsent(new Key(texture, doubleSided, blended, opaque), key -> RenderType.create(
                 "train_model", DefaultVertexFormat.NEW_ENTITY, VertexFormat.Mode.TRIANGLES, 1536, false, false,
                 RenderType.CompositeState.builder()

@@ -44,6 +44,7 @@ final class ModelRenderState implements AutoCloseable {
     private int gpuLight, gpuPass;
     private int instancedPass = -1;
     private boolean gpuDirectionalLighting, instancedDirectionalLighting;
+    private float gpuEmission, instancedEmission;
     private ShaderInstance lastGpuShader;
     private int shaderBinds, shaderSwitches;
     private int stateSetups, textureRebinds, matrixUpdates;
@@ -82,12 +83,12 @@ final class ModelRenderState implements AutoCloseable {
     }
 
     /** RenderTypes select engine shaders but do not bind a GL program; keep our shader across texture changes. */
-    void prepareGpu(PoseStack.Pose pose, int light, int pass, boolean directionalLighting,
+    void prepareGpu(PoseStack.Pose pose, int light, int pass, boolean directionalLighting, float emission,
                     Matrix4f modelView, Matrix4f projection) {
         if (boundShader != custom.shader()) {
             // A previous instanced segment owns a different program; rebind this shader's common state.
             endGpu();
-            custom.prepare(pose, light, pass, directionalLighting);
+            custom.prepare(pose, light, pass, directionalLighting, emission);
             if (collectStats) matrixUpdates++;
             custom.shader().setDefaultUniforms(VertexFormat.Mode.TRIANGLES, modelView, projection,
                     Minecraft.getInstance().getWindow());
@@ -112,6 +113,10 @@ final class ModelRenderState implements AutoCloseable {
                 custom.alphaPass().set(pass);
                 custom.alphaPass().upload();
             }
+            if (gpuEmission != emission) {
+                custom.emission().set(emission);
+                custom.emission().upload();
+            }
             if (gpuDirectionalLighting != directionalLighting) {
                 custom.directionalLighting().set(directionalLighting ? 1 : 0);
                 custom.directionalLighting().upload();
@@ -119,16 +124,17 @@ final class ModelRenderState implements AutoCloseable {
         }
         gpuPose = pose;
         gpuLight = light;
+        gpuEmission = emission;
         gpuPass = pass;
         gpuDirectionalLighting = directionalLighting;
         texturesDirty = false;
     }
 
     /** Instance matrices and light come from the buffer; alpha and directional lighting belong to the batch. */
-    void prepareInstanced(int pass, boolean directionalLighting, Matrix4f modelView, Matrix4f projection) {
+    void prepareInstanced(int pass, boolean directionalLighting, float emission, Matrix4f modelView, Matrix4f projection) {
         if (boundShader != instanced.shader()) {
             endGpu();
-            instanced.prepare(pass, directionalLighting);
+            instanced.prepare(pass, directionalLighting, emission);
             instanced.shader().setDefaultUniforms(VertexFormat.Mode.TRIANGLES, modelView, projection,
                     Minecraft.getInstance().getWindow());
             setupLights(instanced.shader());
@@ -142,12 +148,17 @@ final class ModelRenderState implements AutoCloseable {
                 instanced.alphaPass().upload();
                 instancedPass = pass;
             }
+            if (instancedEmission != emission) {
+                instanced.emission().set(emission);
+                instanced.emission().upload();
+            }
             if (instancedDirectionalLighting != directionalLighting) {
                 instanced.directionalLighting().set(directionalLighting ? 1 : 0);
                 instanced.directionalLighting().upload();
             }
         }
         instancedDirectionalLighting = directionalLighting;
+        instancedEmission = emission;
         texturesDirty = false;
     }
 

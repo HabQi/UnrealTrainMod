@@ -6,6 +6,8 @@ package com.unrealtrainmod.compat.ir;
 
 import com.google.gson.JsonObject;
 import com.unrealtrainmod.resource.PackageArchive;
+import com.unrealtrainmod.model.ModelBounds;
+import com.unrealtrainmod.track.geometry.TrackVector;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -13,7 +15,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
-import java.util.Set;
+import java.util.Map;
 import java.util.TreeSet;
 import net.minecraft.util.GsonHelper;
 import org.slf4j.Logger;
@@ -24,7 +26,8 @@ final class IrVehicleDefinitions {
     private static final Logger LOGGER = LoggerFactory.getLogger(IrVehicleDefinitions.class);
     private IrVehicleDefinitions() {}
 
-    static IrVehicleDefinition read(JsonObject json, Set<String> names, PackageArchive archive, String prefix) throws IOException {
+    static IrVehicleDefinition read(JsonObject json, Map<String, ModelBounds> parts, float scale,
+                                     PackageArchive archive, String prefix) throws IOException {
         var defaults = new HashMap<String, Float>();
         var configured = GsonHelper.getAsJsonObject(json, "controls", new JsonObject());
         for (var entry : configured.entrySet()) {
@@ -33,13 +36,15 @@ final class IrVehicleDefinitions {
             defaults.put(entry.getKey(), value);
         }
         var objects = new LinkedHashMap<String, List<String>>();
-        for (String name : new TreeSet<>(names)) {
+        for (String name : new TreeSet<>(parts.keySet())) {
             String key = IrModelComponents.controlKey(name);
             if (key != null) objects.computeIfAbsent(key, ignored -> new ArrayList<>()).add(name);
         }
         var controls = new LinkedHashMap<String, IrControlDefinition>();
         var engines = new HashSet<String>();
         var horns = new HashSet<String>();
+        var bells = new HashSet<String>();
+        var soundBindings = new LinkedHashMap<String, IrSoundDefinitions.Binding>();
         for (var entry : objects.entrySet()) {
             String key = entry.getKey(), group = null, label = null;
             boolean toggle = false, press = false;
@@ -54,8 +59,10 @@ final class IrVehicleDefinitions {
             if (group == null) group = key;
             if (key.startsWith("ENGINE_START_")) engines.add(group);
             if (key.startsWith("HORN_CONTROL_")) horns.add(group);
+            if (key.startsWith("BELL_CONTROL_")) bells.add(group);
             if (label == null) label = key;
-            IrReadout driver = key.startsWith("THROTTLE_") && !key.startsWith("THROTTLE_BRAKE_") ? IrReadout.THROTTLE
+            IrReadout driver = key.startsWith("THROTTLE_BRAKE_") ? IrReadout.THROTTLE_BRAKE
+                    : key.startsWith("THROTTLE_") ? IrReadout.THROTTLE
                     : key.startsWith("TRAIN_BRAKE_") ? IrReadout.TRAIN_BRAKE
                     : key.startsWith("REVERSER_") ? IrReadout.REVERSER : null;
             float base = key.startsWith("REVERSER_") || key.startsWith("THROTTLE_BRAKE_") ? 0.5f : 0;
@@ -63,6 +70,11 @@ final class IrVehicleDefinitions {
                     : IrControlDefinition.Type.CONTINUOUS;
             var control = new IrControlDefinition(group, label, type, defaults.getOrDefault(group, base), driver);
             controls.merge(group, control, IrVehicleDefinitions::merge);
+            var bounds = new ModelBounds.Builder();
+            for (String name : entry.getValue()) bounds.include(parts.get(name));
+            var center = bounds.build();
+            soundBindings.put(key, new IrSoundDefinitions.Binding(group, driver,
+                    new TrackVector(center.centerZ() * scale, center.centerY() * scale, -center.centerX() * scale)));
         }
         var animations = new ArrayList<IrAnimationDefinition>();
         if (json.has("animations")) for (var element : GsonHelper.getAsJsonArray(json, "animations")) {
@@ -94,7 +106,8 @@ final class IrVehicleDefinitions {
         float speed = number(GsonHelper.getAsJsonObject(json, "properties", new JsonObject()), "max_speed_kmh", 200);
         if (speed <= 0) throw new IOException("IR max_speed_kmh must be positive");
         return new IrVehicleDefinition(controls, animations, speed,
-                IrSoundDefinitions.read(json, archive, prefix, engines, horns));
+                IrSoundDefinitions.read(json, archive, prefix, engines, horns, bells, soundBindings),
+                IrLightingDefinition.read(json, parts, scale, controls, archive, prefix));
     }
 
     private static IrControlDefinition merge(IrControlDefinition a, IrControlDefinition b) {

@@ -12,4 +12,5 @@ import java.util.Map;
 /** One vehicle configuration's selections, all referencing shared source geometry. */
 public record IrModelBinding(Map<VehiclePartRole, PartSelection> staticParts,
                               Map<VehiclePartRole, List<IrModelPart>> parts,
-                              Map<Integer, IrAnimatrix> animations) {}
+                              Map<Integer, IrAnimatrix> animations,
+                              Map<VehiclePartRole, List<IrPickPart>> picking) {}

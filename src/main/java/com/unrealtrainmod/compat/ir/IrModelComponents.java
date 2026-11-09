@@ -51,6 +51,8 @@ public final class IrModelComponents {
 
     /** Names with positioned controls belong to their bogie even when BOGEY is not the first token. */
     public static VehiclePartRole role(String name) {
+        if (name.startsWith("HEADLIGHT_BOGEY_FRONT_")) return VehiclePartRole.FRONT_BOGIE;
+        if (name.startsWith("HEADLIGHT_BOGEY_REAR_")) return VehiclePartRole.REAR_BOGIE;
         var control = CONTROL.matcher(name);
         if (control.find()) {
             if ("BOGEY_FRONT".equals(control.group(2))) return VehiclePartRole.FRONT_BOGIE;

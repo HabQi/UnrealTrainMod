@@ -167,7 +167,8 @@
   "item.unrealtrainmod.track_wrench.edit": "主手右键当前施工预览的起点或终点，调节曲线参数。",
   "item.unrealtrainmod.track_wrench.preview": "方向角和控制柄长度实时预览，点击应用后保留到本次施工。",
   "item.unrealtrainmod.track_wrench.cancel": "潜行右键取消选线；已铺轨道不能直接修改。",
-  "item.unrealtrainmod.track_wrench.permission": "需要权限等级 2；可重复使用，不消耗材料或耐久。",
+  "item.unrealtrainmod.track_wrench.permission": "轨道操作需要权限等级 2；可重复使用，不消耗材料或耐久。",
+  "item.unrealtrainmod.track_wrench.connector": "右击绝缘子调整模型位置和角度，仅需建造权限。",
   "item.unrealtrainmod.track_builder.feedback.no_draft": "请先用施工工具选择起点，再用扳手右键预览节点。",
   "item.unrealtrainmod.track_builder.feedback.aim_node": "请对准当前施工预览的起点或终点，在交互距离内右键；节点不能被方块遮挡。",
   "item.unrealtrainmod.track_builder.feedback.stale_edit": "施工选点已变化或编辑已失效，请重新右键节点。",
@@ -201,7 +202,7 @@
   "gui.unrealtrainmod.driving.ir.on": "开",
   "gui.unrealtrainmod.driving.ir.off": "关",
   "gui.unrealtrainmod.driving.ir.pulse": "触发",
-  "gui.unrealtrainmod.driving.ir.visual_only": "仅视觉控制，不模拟设备物理或电气联锁",
+  "gui.unrealtrainmod.driving.ir.visual_only": "控制显示动作与音效，不模拟设备物理或电气联锁",
   "gui.unrealtrainmod.driving.ir.details": "%s｜当前 %s｜默认 %s",
   "gui.unrealtrainmod.driving.ir.type.continuous": "连续型",
   "gui.unrealtrainmod.driving.ir.type.toggle": "开关型",
@@ -402,7 +403,7 @@
   "key.unrealtrainmod.driving.emergency": "紧急制动／停车后解除",
   "key.unrealtrainmod.driving.door_left": "开／关本车左门",
   "key.unrealtrainmod.driving.door_right": "开／关本车右门",
-  "key.unrealtrainmod.driving.cursor": "按住操作驾驶控制台",
+  "key.unrealtrainmod.driving.cursor": "按住操作驾驶台和三维控件",
   "gui.unrealtrainmod.driving.console.toward_front": "朝车头",
   "gui.unrealtrainmod.driving.console.toward_back": "朝车尾",
   "gui.unrealtrainmod.driving.console.at_rest": "静止",
@@ -498,4 +499,38 @@
   ,"gui.unrealtrainmod.monitor.grade_short": "坡\n度"
   ,"gui.unrealtrainmod.driving.console.monitor_expand": "点击展开运行监控"
   ,"gui.unrealtrainmod.driving.console.monitor_collapse": "点击收起运行监控"
+  ,"gui.unrealtrainmod.driving.ir.3d.press": "按住鼠标左键触发，松开复位"
+  ,"gui.unrealtrainmod.driving.ir.3d.toggle": "点击鼠标左键切换开／关"
+  ,"gui.unrealtrainmod.driving.ir.3d.drag": "按住左键上下拖动，或滚轮调节"
+  ,"item.unrealtrainmod.insulator": "绝缘子"
+  ,"item.unrealtrainmod.wire": "电线"
+  ,"entity.unrealtrainmod.connector": "绝缘子"
+  ,"wiring.unrealtrainmod.selected": "当前模型：%s"
+  ,"wiring.unrealtrainmod.select_hint": "右击空气选择模型；物品可重复使用"
+  ,"wiring.unrealtrainmod.wire_hint": "依次右击两个绝缘子连接；潜行右击空气取消选点"
+  ,"wiring.unrealtrainmod.connector_hint": "右击方块表面放置；潜行右击已有绝缘子拆除它和关联电线"
+  ,"wiring.unrealtrainmod.unselected": "请先右击空气选择可用模型"
+  ,"wiring.unrealtrainmod.start": "已选择起点；右击另一个绝缘子连接，再点起点取消"
+  ,"wiring.unrealtrainmod.remove_start": "已选择拆线起点；空手潜行右击另一端选择电线型号"
+  ,"wiring.unrealtrainmod.cancelled": "已取消接线／拆线选点"
+  ,"wiring.unrealtrainmod.missing": "绝缘子已被拆除"
+  ,"wiring.unrealtrainmod.no_connections": "这两个绝缘子之间没有电线"
+  ,"wiring.unrealtrainmod.length": "接线点必须分开，且单段电线不能超过 256 格"
+  ,"wiring.unrealtrainmod.duplicate": "这两个绝缘子之间已连接此型号电线"
+  ,"wiring.unrealtrainmod.connected": "已连接电线"
+  ,"wiring.unrealtrainmod.invalid": "操作无效：请检查工具、权限、交互距离及输入数值"
+  ,"wiring.unrealtrainmod.changed": "绝缘子已被其他玩家修改，请重新打开面板"
+  ,"wiring.unrealtrainmod.success": "操作完成"
+  ,"wiring.unrealtrainmod.preview": "模型预览：拖动旋转，Shift 拖动平移，滚轮缩放"
+  ,"wiring.unrealtrainmod.wire_models": "选择电线模型"
+  ,"wiring.unrealtrainmod.connector_models": "选择绝缘子模型"
+  ,"wiring.unrealtrainmod.empty": "没有可用模型，请将 RTM ZIP 放入 mods/Packages_RTM 并重启"
+  ,"wiring.unrealtrainmod.apply": "应用"
+  ,"wiring.unrealtrainmod.cancel": "取消"
+  ,"wiring.unrealtrainmod.reset": "恢复原值"
+  ,"wiring.unrealtrainmod.edit": "调整绝缘子"
+  ,"wiring.unrealtrainmod.offset_axis": "%s 偏移／格"
+  ,"wiring.unrealtrainmod.angle_axis": "%s 旋转／度"
+  ,"wiring.unrealtrainmod.remove_title": "选择要拆除的电线型号"
+  ,"wiring.unrealtrainmod.remove": "拆除此段"
 }

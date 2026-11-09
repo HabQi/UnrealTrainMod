@@ -21,14 +21,25 @@ public final class RtmPackageReader {
             "^([^/]+/)?(?:mods/RTM/rail/|assets/minecraft/models/json/)ModelRail[^/]*\\.json$");
     private final RtmVehicleAdapter vehicles;
     private final RtmRailAdapter rails;
+    private static final Pattern WIRING = Pattern.compile(
+            "^([^/]+/)?(?:mods/RTM/(?:stuff|wire)/|assets/minecraft/models/json/)(ModelConnector|ModelWire)[^/]*\\.json$");
+    private final RtmWiringAdapter wiring;
 
     public RtmPackageReader(Map<ResourceLocation, VehicleDefinition> vehicles,
-                            Map<ResourceLocation, RailDefinition> rails, LoadReport report, ModelCache cache) {
+                            Map<ResourceLocation, RailDefinition> rails,
+                            Map<ResourceLocation, com.unrealtrainmod.wiring.WiringDefinition> wiring,
+                            LoadReport report, ModelCache cache) {
         this.vehicles = new RtmVehicleAdapter(vehicles, report, cache);
         this.rails = new RtmRailAdapter(rails, report, cache);
+        this.wiring = new RtmWiringAdapter(wiring, report, cache);
     }
 
     public void read(PackageArchive archive) {
+        for (String entry : archive.entries()) {
+            var matcher = WIRING.matcher(entry);
+            if (matcher.matches()) wiring.read(archive, entry, matcher.group(1) == null ? "" : matcher.group(1),
+                    matcher.group(2).equals("ModelWire"));
+        }
         for (String entry : archive.entries()) {
             var matcher = TRAIN.matcher(entry);
             if (matcher.matches()) {

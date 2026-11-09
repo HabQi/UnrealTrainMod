@@ -40,7 +40,8 @@ public final class ModPayloads {
     private ModPayloads() {}
 
     public static void register(RegisterPayloadHandlersEvent event) {
-        var registrar = event.registrar("34");
+        var registrar = event.registrar("37");
+        com.unrealtrainmod.wiring.WiringPayloads.register(registrar);
         registrar.playToServer(TrainControlInputPayload.TYPE, TrainControlInputPayload.STREAM_CODEC,
                 TrainDriverManager::handleInput);
         registrar.playToServer(TrainIrControlInputPayload.TYPE, TrainIrControlInputPayload.STREAM_CODEC,

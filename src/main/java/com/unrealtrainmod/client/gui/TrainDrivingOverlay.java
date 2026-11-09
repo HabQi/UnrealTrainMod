@@ -9,6 +9,7 @@ import static com.unrealtrainmod.client.gui.DrivingGuiGeometry.renderOutline;
 
 import com.mojang.math.Axis;
 import com.unrealtrainmod.client.TrainDrivingClient;
+import com.unrealtrainmod.client.IrControlInteraction;
 import com.unrealtrainmod.network.payload.TrainControlInputPayload.Action;
 import com.unrealtrainmod.network.payload.TrainControlSyncPayload;
 import com.unrealtrainmod.train.TrainControlProfile;
@@ -95,6 +96,11 @@ public final class TrainDrivingOverlay {
     }
 
     public static int bottomClearance() { return HEIGHT + 18; }
+
+    public static boolean contains(double x, double y) {
+        var layout = layout();
+        return layout.desk().contains(x, y) || layout.monitor().contains(x, y) || TrainIrControlPanel.contains(x, y);
+    }
 
     static Box controlPanelBounds() {
         var layout = layout();
@@ -377,6 +383,11 @@ public final class TrainDrivingOverlay {
     public static void click(double mouseX, double mouseY) {
         var state = TrainDrivingClient.state();
         if (state == null || TrainIrControlPanel.click(mouseX, mouseY)) return;
+        if (!contains(mouseX, mouseY)) {
+            IrControlInteraction.click(mouseX, mouseY);
+            return;
+        }
+        IrControlInteraction.release();
         var layout = layout();
         if (layout.controlPanel().contains(mouseX, mouseY)) {
             release();
@@ -391,7 +402,9 @@ public final class TrainDrivingOverlay {
         }
         if (!state.emergency() && mouseY >= layout.handle.y + HANDLE_TOP - 3
                 && (layout.power().contains(mouseX, mouseY) || layout.brake().contains(mouseX, mouseY))) {
+            release();
             draggingPower = layout.power().contains(mouseX, mouseY);
+            TrainDrivingClient.send(draggingPower ? Action.POWER_HANDLE_BEGIN : Action.BRAKE_HANDLE_BEGIN);
             var box = draggingPower ? layout.power() : layout.brake();
             int count = draggingPower ? TrainControlProfile.POWER_NOTCHES : TrainControlProfile.BRAKE_NOTCHES;
             requestedNotch = draggingPower ? state.powerNotch() : state.brakeNotch();
@@ -423,6 +436,10 @@ public final class TrainDrivingOverlay {
     }
 
     public static void scroll(double mouseX, double mouseY, double delta) {
+        if (!contains(mouseX, mouseY)) {
+            IrControlInteraction.scroll(mouseX, mouseY, delta);
+            return;
+        }
         if (TrainIrControlPanel.scroll(mouseX, mouseY, delta)) return;
         var state = TrainDrivingClient.state();
         var layout = layout();
@@ -434,6 +451,7 @@ public final class TrainDrivingOverlay {
     }
 
     public static void drag(double mouseY) {
+        IrControlInteraction.drag(mouseY);
         if (draggingPower == null) return;
         if (TrainDrivingClient.state().emergency()) { release(); return; }
         boolean power = draggingPower;
@@ -448,6 +466,9 @@ public final class TrainDrivingOverlay {
     }
 
     public static void release() {
+        IrControlInteraction.release();
+        TrainIrControlPanel.finishDrag();
+        if (draggingPower != null) TrainDrivingClient.send(Action.HANDLE_RELEASE);
         draggingPower = null;
         handleGrabOffset = 0;
         requestedNotch = -1;

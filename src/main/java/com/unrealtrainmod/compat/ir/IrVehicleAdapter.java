@@ -96,6 +96,7 @@ final class IrVehicleAdapter {
         var groups = new EnumMap<VehiclePartRole, ModelBounds.Builder>(VehiclePartRole.class);
         var combined = new ModelBounds.Builder();
         rawParts.forEach((part, raw) -> {
+            if (!IrModelLoader.isDrawable(part)) return;
             // Match the importer's proper Y rotation and scale, retaining the authored origin.
             var rotated = new ModelBounds(raw.minZ() * scale, raw.minY() * scale, -raw.maxX() * scale,
                     raw.maxZ() * scale, raw.maxY() * scale, -raw.minX() * scale);
@@ -103,7 +104,7 @@ final class IrVehicleAdapter {
             groups.computeIfAbsent(IrModelComponents.role(part), ignored -> new ModelBounds.Builder()).include(rotated);
         });
         var bounds = combined.build();
-        double floorY = readFloorY(json, rawParts, scale, bounds, name);
+        double floorY = readFloorY(rawParts, scale, bounds, name);
         var spec = readMotionSpec(json, bounds, scale);
         var source = new ModelSource(model, Map.of(), Map.of("default", MaterialRenderMode.AUTO),
                 false, false, ModelSource.Format.IR_OBJ, scale);
@@ -119,25 +120,20 @@ final class IrVehicleAdapter {
         });
         return new VehicleDefinition(id, name, config, null, type, parts, bounds, spec,
                 VehiclePerformanceSpec.DEFAULT, VehicleInteriorSpec.fromBounds(bounds, floorY),
-                IrVehicleDefinitions.read(json, rawParts.keySet(), archive, prefix));
+                IrVehicleDefinitions.read(json, rawParts, scale, archive, prefix));
     }
 
-    private static double readFloorY(JsonObject json, Map<String, ModelBounds> rawParts, double scale,
+    private static double readFloorY(Map<String, ModelBounds> rawParts, double scale,
                                      ModelBounds bounds, String name) {
         double lowest = Double.POSITIVE_INFINITY;
         for (var entry : rawParts.entrySet()) {
             if (entry.getKey().toUpperCase(Locale.ROOT).contains("SEAT_")) {
                 var raw = entry.getValue();
-                lowest = Math.min(lowest, raw.minY() * scale - 0.6);
+                lowest = Math.min(lowest, (raw.minY() - 0.6) * scale);
             }
         }
         if (lowest != Double.POSITIVE_INFINITY) return lowest;
-        var passenger = json.has("passenger") && json.get("passenger").isJsonObject()
-                ? json.getAsJsonObject("passenger") : null;
-        if (passenger != null && passenger.has("center_y")) {
-            return (GsonHelper.getAsDouble(passenger, "center_y") - 0.35) * scale;
-        }
-        LOGGER.warn("IR vehicle {} has no SEAT or passenger height; using model minimum Y {}", name, bounds.minY());
+        LOGGER.warn("IR vehicle {} has no SEAT height; using model minimum Y {}", name, bounds.minY());
         return bounds.minY();
     }
 

@@ -9,14 +9,23 @@ import com.mojang.math.Axis;
 import com.unrealtrainmod.client.model.LoadedModel;
 import com.unrealtrainmod.client.model.PartSelection;
 import com.unrealtrainmod.client.renderer.instancing.InstancingStats;
+import com.unrealtrainmod.compat.ir.IrLightingDefinition;
+import net.minecraft.resources.ResourceLocation;
 
 /** Model commands are independent of the view and the eventual drawing backend. */
 public interface ModelDrawSink {
+    boolean worldView();
     int lights();
     void lights(int value);
 
     void submitGeometry(LoadedModel.Source source, PartSelection selection, PoseStack.Pose pose,
                         int light, boolean directionalLighting);
+
+    void submitGeometry(LoadedModel.Source source, PartSelection selection, PoseStack.Pose pose,
+                        int light, boolean directionalLighting, SurfaceLighting lighting);
+
+    void submitFlare(IrLightingDefinition.Flare flare,
+                     ResourceLocation texture, PoseStack.Pose pose, int color, float strength);
 
     default InstancingStats statistics() { return null; }
 
