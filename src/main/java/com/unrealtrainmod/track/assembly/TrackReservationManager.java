@@ -161,12 +161,12 @@ public final class TrackReservationManager {
         }
     }
 
-    /** Checks every target before establishing protection. Call before accepting a movement sample. */
-    public boolean acquire(List<UUID> owners, List<AABB> areas, List<Interval> intervals) {
-        return query(areas, intervals).acquire(owners);
+    /** Establish shared protection before accepting a movement sample. */
+    public void acquire(List<UUID> owners, List<AABB> areas, List<Interval> intervals) {
+        query(areas, intervals).acquire(owners);
     }
 
-    /** Geometry is evaluated once; pending trailing passages are checked again at acquisition. */
+    /** Geometry is evaluated once; acquiring protection does not reserve an exclusive passage. */
     public Query query(List<AABB> areas, List<Interval> intervals) {
         var touched = new ArrayList<UUID>();
         for (UUID id : candidates(areas, intervals)) {
@@ -184,24 +184,11 @@ public final class TrackReservationManager {
 
         public boolean isEmpty() { return assemblies.isEmpty(); }
 
-        public boolean available(List<UUID> owners) {
-            for (UUID id : assemblies) {
-                var assembly = graph.assembly(id);
-                // Before the throw, admitting another consist could put it on the path about to close.
-                // Existing footprints also cover fragments split from the original passing consist.
-                if (pendingTrailingPass(assembly) && !owners.contains(assembly.occupant())
-                        && !groupTouches(assembly, owners)) return false;
-            }
-            return true;
-        }
-
-        public boolean acquire(List<UUID> owners) {
-            if (!available(owners)) return false;
+        public void acquire(List<UUID> owners) {
             for (UUID id : assemblies) {
                 var assembly = graph.assembly(id);
                 if (assembly.occupant() == null) setOccupant(assembly, owners.getFirst());
             }
-            return true;
         }
     }
 
@@ -224,16 +211,11 @@ public final class TrackReservationManager {
         setOccupant(assembly, otherOccupant(assembly, previous));
     }
 
-    /** A new trailing passage is exclusive even when its protection representative belongs to this consist. */
-    public boolean canBeginTrailingPass(UUID assemblyId, List<UUID> owners) {
+    /** Check exclusivity at the actual throw, not when a vehicle first approaches the closed branch. */
+    public boolean canThrowTrailingPass(UUID assemblyId, List<UUID> owners) {
         var assembly = graph.assembly(assemblyId);
         return (assembly.occupant() == null || owners.contains(assembly.occupant()))
                 && otherOccupant(assembly, owners) == null;
-    }
-
-    private static boolean pendingTrailingPass(TrackAssemblyInstance assembly) {
-        var passage = assembly.trailingPass();
-        return passage != null && !TrackTransitionResolver.isPathEnabled(assembly, passage.pathId());
     }
 
     private boolean groupTouches(TrackAssemblyInstance assembly, List<UUID> group) {

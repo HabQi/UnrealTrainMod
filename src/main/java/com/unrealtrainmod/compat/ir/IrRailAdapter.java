@@ -43,10 +43,6 @@ final class IrRailAdapter {
             config = archive.resolve(prefix, reference);
             var json = IrVehicleAdapter.readJson(archive, config.entry());
             String name = string(json.get("name"), "name");
-            if (!name.contains("rail") && !name.contains("Rail")) {
-                report.filtered(LoadReport.Kind.IR_RAIL);
-                return;
-            }
             var id = ResourceLocation.fromNamespaceAndPath(UnrealTrainMod.MODID, "ir/rail/" + ResourceIds.hash(reference));
             var retained = definitions.get(id);
             if (retained != null) {

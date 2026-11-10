@@ -20,12 +20,15 @@ import java.util.ArrayList;
 import java.util.List;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.core.BlockPos;
+import org.joml.Matrix4f;
 
 /** Shows one authored rail module using the same textured buffers as world rails. */
 public final class RailPreviewRenderer implements AutoCloseable {
     private final PreviewRenderer renderer = new PreviewRenderer();
     private ClientRailModelManager.Model model;
     private RailTrackGpuMesh mesh;
+    private final TrackStaticBuffers buffers = new TrackStaticBuffers(true);
+    private final TrackDrawQueue queue = new TrackDrawQueue();
     private boolean staticMesh;
     private ModelBounds bounds;
 
@@ -71,16 +74,23 @@ public final class RailPreviewRenderer implements AutoCloseable {
             var meshBounds = data.bounds();
             bounds = data.batches().isEmpty() ? b : new ModelBounds((float)meshBounds.minX(), (float)meshBounds.minY(),
                     (float)meshBounds.minZ(), (float)meshBounds.maxX(), (float)meshBounds.maxY(), (float)meshBounds.maxZ());
-            mesh = new RailTrackGpuMesh(data, true);
+            mesh = new RailTrackGpuMesh(data);
             model = selected;
         }
     }
 
     private void draw(PoseStack pose) {
         try (var state = new TrackRenderState(null)) {
-            if (!mesh.isUploaded()) mesh.upload(null, Integer.MAX_VALUE, null);
-            mesh.draw(state, pose.last().pose(), RenderSystem.getProjectionMatrix());
-        }
+            buffers.beginView();
+            if (mesh.isEmpty()) return;
+            buffers.request(mesh, TrackRenderStats.STRUCTURE_TRACK);
+            buffers.prepare(null, null, Integer.MAX_VALUE, null);
+            queue.begin(true, true);
+            queue.addStatic(mesh, new Matrix4f(pose.last().pose()), TrackRenderStats.STRUCTURE_TRACK);
+            queue.resolve(buffers, null);
+            // The preview owns a native shader scope even when Iris is enabled in the world.
+            queue.drawPreview(state, RenderSystem.getProjectionMatrix());
+        } finally { queue.clear(); }
     }
 
     private static void addStatic(ClientRailModelManager.Model model, List<RailTrackMeshData.Batch> batches) {
@@ -90,6 +100,8 @@ public final class RailPreviewRenderer implements AutoCloseable {
     }
 
     public void clearMesh() {
+        buffers.close();
+        queue.close();
         if (mesh != null) mesh.close();
         mesh = null;
         model = null;

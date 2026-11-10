@@ -22,15 +22,17 @@ public final class PbrLoadQueue {
         private final PbrSource.Channel channel;
         private final int defaultPixel;
         private final boolean blur;
+        private final int maximum;
         private boolean done, discarded;
         private NativeImage image;
 
-        Job(PbrMaterial material, PbrSource source, PbrSource.Channel channel, int defaultPixel, boolean blur) {
+        Job(PbrMaterial material, PbrSource source, PbrSource.Channel channel, int defaultPixel, boolean blur, int maximum) {
             this.material = material;
             this.source = source;
             this.channel = channel;
             this.defaultPixel = defaultPixel;
             this.blur = blur;
+            this.maximum = maximum;
         }
 
         private void decode() {
@@ -38,6 +40,11 @@ public final class PbrLoadQueue {
             NativeImage decoded = null;
             try {
                 decoded = source.read(channel, defaultPixel);
+                if (decoded != null) {
+                    var image = decoded;
+                    decoded = null;
+                    decoded = TextureSizing.limit(image, maximum);
+                }
             } catch (RuntimeException exception) {
                 PbrStats.failure();
                 LoggerFactory.getLogger(PbrLoadQueue.class).warn("Cannot decode PBR {}; using Iris default", channel, exception);
@@ -55,6 +62,7 @@ public final class PbrLoadQueue {
 
         synchronized void discard() {
             discarded = true;
+            PENDING.remove(this);
             if (image != null) { image.close(); image = null; }
         }
 
@@ -67,8 +75,8 @@ public final class PbrLoadQueue {
         }
     }
 
-    static Job enqueue(PbrMaterial material, PbrSource source, PbrSource.Channel channel, int defaultPixel, boolean blur) {
-        var job = new Job(material, source, channel, defaultPixel, blur);
+    static Job enqueue(PbrMaterial material, PbrSource source, PbrSource.Channel channel, int defaultPixel, boolean blur, int maximum) {
+        var job = new Job(material, source, channel, defaultPixel, blur, maximum);
         PENDING.addLast(job);
         return job;
     }

@@ -183,6 +183,8 @@ public final class TrainDriverManager {
                 && (payload.notch() < 0 || payload.notch() > notches)) return;
         if (action == TrainControlInputPayload.Action.BRAKE_SET
                 && (payload.notch() < 0 || payload.notch() > TrainControlProfile.BRAKE_NOTCHES)) return;
+        if (action == TrainControlInputPayload.Action.REVERSER_SET
+                && (payload.notch() < -1 || payload.notch() > 1)) return;
         var train = session.train;
         var old = train.control();
         int powerNotch = TrainControlProfile.powerNotch(old, notches), brakeNotch = TrainControlProfile.brakeNotch(old);
@@ -218,11 +220,15 @@ public final class TrainDriverManager {
                             || action == TrainControlInputPayload.Action.BRAKE_UP) power = 0;
                 }
             }
-            case REVERSER_NEXT -> {
+            case REVERSER_NEXT, REVERSER_SET -> {
                 if (power != 0 || brake != 0) feedback = Feedback.REVERSER_LOCKED;
                 else {
                     int direction = session.direction();
-                    reverser = reverser.inFrame(direction).next().inFrame(direction);
+                    var target = action == TrainControlInputPayload.Action.REVERSER_NEXT
+                            ? reverser.inFrame(direction).next()
+                            : payload.notch() > 0 ? TrainControlState.Reverser.FORWARD
+                            : payload.notch() < 0 ? TrainControlState.Reverser.REVERSE : TrainControlState.Reverser.NEUTRAL;
+                    reverser = target.inFrame(direction);
                 }
             }
             case EMERGENCY_APPLY -> { emergency = true; power = brake = 0; }

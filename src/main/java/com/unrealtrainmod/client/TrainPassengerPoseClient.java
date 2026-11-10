@@ -117,10 +117,11 @@ public final class TrainPassengerPoseClient {
             Component.translatable("gui.unrealtrainmod.passenger.help.lie_up", LIE_UP.getTranslatedKeyMessage()),
             Component.translatable("gui.unrealtrainmod.passenger.help.lie_down", LIE_DOWN.getTranslatedKeyMessage())
         };
+        var font = mc.font;
         int[] lineWidths = new int[lines.length];
         int width = 0;
         for (int i = 0; i < lines.length; i++) {
-            lineWidths[i] = mc.font.width(lines[i]);
+            lineWidths[i] = font.width(lines[i]);
             width = Math.max(width, lineWidths[i]);
         }
         float guiScale = (float) mc.getWindow().getGuiScale();
@@ -128,8 +129,8 @@ public final class TrainPassengerPoseClient {
         int fittingScale = (int) Math.floor((graphics.guiWidth() - 8F) * guiScale / (width + 8));
         int pixelScale = Math.max(1, Math.min(preferredScale, fittingScale));
         float scale = pixelScale / guiScale;
-        int lineHeight = mc.font.lineHeight + 3;
-        int height = (lines.length - 1) * lineHeight + mc.font.lineHeight;
+        int lineHeight = font.lineHeight + 3;
+        int height = (lines.length - 1) * lineHeight + font.lineHeight;
         float x = (Math.round((graphics.guiWidth() - 4) * guiScale) - (width + 4) * pixelScale) / guiScale;
         float y = Math.round((graphics.guiHeight() * guiScale - height * pixelScale) / 2) / guiScale;
         graphics.pose().pushPose();
@@ -138,7 +139,7 @@ public final class TrainPassengerPoseClient {
             graphics.pose().scale(scale, scale, 1);
             graphics.fill(-4, -4, width + 4, height + 4, 0x80000000);
             for (int i = 0; i < lines.length; i++) {
-                graphics.drawString(mc.font, lines[i], width - lineWidths[i], i * lineHeight, 0xFFFFFF, false);
+                graphics.drawString(font, lines[i], width - lineWidths[i], i * lineHeight, 0xFFFFFF, false);
             }
         } finally {
             graphics.pose().popPose();

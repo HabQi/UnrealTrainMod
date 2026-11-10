@@ -147,7 +147,7 @@ public final class TrainCursorClient {
         if (!usingCursor()) return;
         TrainIrControlPanel.drag(x, y);
         TrainDrivingOverlay.drag(y);
-        IrControlInteraction.drag(y);
+        IrControlInteraction.drag(x, y);
     }
 
     public static void scroll(double x, double y, double delta) {

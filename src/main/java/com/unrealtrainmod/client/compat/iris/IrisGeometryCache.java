@@ -242,17 +242,6 @@ public final class IrisGeometryCache {
         return entry.layout;
     }
 
-    static boolean prewarmVehicleOpaque(IndexedMesh mesh, int first, int count, boolean opaque) {
-        var entry = registerOpaque(mesh, first, count, opaque);
-        var view = entry.ranges.get(((long) first << 32) | (count & 0xffffffffL)).mesh;
-        if (view.ready()) return true;
-        long size = (long) layout(entry).vertices * IrisCompat.entityVertexSize();
-        if (bytes - lightBytes - entry.storage.bytes + size > limitBytes() / 2) return false;
-        requestVehicleOpaque(mesh, first, count, opaque);
-        uploadVehicleOpaque();
-        return view.ready();
-    }
-
     /** Static items share local geometry across hand, entity and shadow views. */
     public static Mesh requestItem(IndexedMesh mesh, int first, int count) {
         return request(mesh, first, count, false, true, false);
@@ -302,18 +291,6 @@ public final class IrisGeometryCache {
         entry.requestedNanos = frameNanos;
         IrisRenderStats.cache(hit, light);
         return entry.gpu;
-    }
-
-    /** Only invoked in menus. Admission is bounded; on-demand world entries retain the full soft limit. */
-    static boolean prewarm(IndexedMesh mesh, int first, int count, boolean opaque) {
-        var key = new Key(mesh, first, count, opaque, false);
-        var entry = ENTRIES.get(key);
-        if (entry != null) return entry.gpu != null;
-        if (bytes - lightBytes + (long)count * IrisCompat.entityVertexSize() > limitBytes() / 2) return false;
-        entry = new Entry(key);
-        ENTRIES.put(key, entry);
-        build(entry);
-        return entry.gpu != null;
     }
 
     private static void build(Entry entry) {

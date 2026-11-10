@@ -35,7 +35,7 @@ final class SharedRailPart implements AutoCloseable {
         if (stats != null) {
             stats.gpuUpload(System.nanoTime() - start);
             stats.uploaded(source.colors().length * StaticModelShader.FORMAT.getVertexSize(),
-                    source.indices().length * Integer.BYTES, 0, true);
+                    source.indices().length * Integer.BYTES, 0);
         }
     }
 

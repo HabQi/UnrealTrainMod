@@ -91,7 +91,7 @@ public final class ClientRailModelManager extends SimplePreparableReloadListener
     private static PreparedTexture image(PackageAsset asset, Map<PackageAsset, PreparedTexture> images, PbrDiscovery discovery) throws IOException {
         var image = images.get(asset);
         if (image == null) {
-            var pixels = TextureLoader.read(asset);
+            var pixels = TextureLoader.readBase(asset);
             try { image = new PreparedTexture(pixels, discovery.find(asset, pixels.getWidth(), pixels.getHeight())); }
             catch (IOException | RuntimeException | Error exception) { pixels.close(); throw exception; }
             images.put(asset, image);

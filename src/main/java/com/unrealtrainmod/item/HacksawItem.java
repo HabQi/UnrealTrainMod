@@ -5,6 +5,7 @@
 package com.unrealtrainmod.item;
 
 import com.unrealtrainmod.UnrealTrainMod;
+import com.unrealtrainmod.entity.ConnectorEntity;
 import com.unrealtrainmod.track.block.TrackBlockManager;
 import com.unrealtrainmod.track.TrackGraphException;
 import com.unrealtrainmod.track.geometry.TrackProjection;
@@ -12,41 +13,61 @@ import com.unrealtrainmod.track.geometry.TrackVector;
 import com.unrealtrainmod.train.TrainManager;
 import java.util.Comparator;
 import java.util.List;
+import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.TooltipFlag;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.bus.api.EventPriority;
+import net.neoforged.neoforge.event.entity.player.AttackEntityEvent;
 import net.neoforged.neoforge.event.entity.player.PlayerInteractEvent;
 import net.neoforged.neoforge.event.level.BlockEvent;
 
-/** Track demolition is an explicit server action, never ordinary block mining. */
+/** Demolition tool for UTM track structures and connectors, never ordinary mining or combat. */
 public final class HacksawItem extends Item {
     public HacksawItem(Properties properties) { super(properties); }
 
     public static void register(IEventBus bus) {
         bus.addListener(EventPriority.LOWEST, HacksawItem::leftClick);
         bus.addListener(HacksawItem::breakBlock);
+        bus.addListener(EventPriority.LOWEST, HacksawItem::attackEntity);
+    }
+
+    @Override
+    public boolean canAttackBlock(BlockState state, Level level, BlockPos pos, Player player) {
+        // The left-click handler removes UTM track through its graph, never through vanilla mining.
+        return false;
     }
 
     private static void breakBlock(BlockEvent.BreakEvent event) {
-        if (event.getState().is(UnrealTrainMod.TRACK_BLOCK.get())) event.setCanceled(true);
+        if (event.getState().is(UnrealTrainMod.TRACK_BLOCK.get())
+                || event.getPlayer().getMainHandItem().is(UnrealTrainMod.HACKSAW.get())) event.setCanceled(true);
+    }
+
+    private static void attackEntity(AttackEntityEvent event) {
+        if (event.getEntity().getMainHandItem().is(UnrealTrainMod.HACKSAW.get())
+                && !(event.getTarget() instanceof ConnectorEntity)) event.setCanceled(true);
     }
 
     private static void leftClick(PlayerInteractEvent.LeftClickBlock event) {
         var level = event.getLevel();
         var pos = event.getPos();
-        if (!level.hasChunkAt(pos) || !level.getBlockState(pos).is(UnrealTrainMod.TRACK_BLOCK.get())) return;
-        // NeoForge still sends START_DESTROY_BLOCK when the client cancels mining.
-        event.setCanceled(true);
-        if (!(level instanceof ServerLevel server) || event.getAction() != PlayerInteractEvent.LeftClickBlock.Action.START) return;
         var player = event.getEntity();
         var stack = player.getMainHandItem();
-        if (!stack.is(UnrealTrainMod.HACKSAW.get())) {
+        boolean saw = stack.is(UnrealTrainMod.HACKSAW.get());
+        boolean track = level.hasChunkAt(pos) && level.getBlockState(pos).is(UnrealTrainMod.TRACK_BLOCK.get());
+        // NeoForge still sends START_DESTROY_BLOCK when the client cancels mining.
+        if (saw || track) event.setCanceled(true);
+        if (!track) return;
+        if (!(level instanceof ServerLevel server) || event.getAction() != PlayerInteractEvent.LeftClickBlock.Action.START) return;
+        if (!saw) {
             player.displayClientMessage(Component.translatable("item.unrealtrainmod.hacksaw.required"), true);
             return;
         }

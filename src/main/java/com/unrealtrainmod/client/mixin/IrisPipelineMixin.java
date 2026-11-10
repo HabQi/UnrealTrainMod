@@ -24,6 +24,7 @@ public abstract class IrisPipelineMixin {
 
     @Inject(method = "destroy", at = @At("HEAD"))
     private void unrealtrainmod$releaseResources(CallbackInfo callback) {
+        com.unrealtrainmod.client.track.ClientTrackCache.INSTANCE.invalidateGpuBuffers();
         IrisModelRenderer.clear();
         MaterialTexture.invalidatePbr();
     }

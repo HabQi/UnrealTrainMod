@@ -124,6 +124,12 @@ public final class IrisDrawScope implements AutoCloseable {
         return drawInternal(mesh.storage.buffer, mesh, mesh.firstVertex, mesh.vertices, type, modelView, projection, light, null, 0);
     }
 
+    /** Track-owned expanded geometry retains per-vertex UV2 and Iris attributes in its private VAO. */
+    public boolean drawTrackRanges(VertexBuffer buffer, IntBuffer first, IntBuffer counts, RenderType type,
+                                   Matrix4f modelView, Matrix4f projection) {
+        return drawInternal(buffer, null, 0, 0, type, modelView, projection, 0, first, first.remaining(), counts);
+    }
+
     boolean drawCachedRange(IrisGeometryCache.Mesh mesh, int firstVertex, int vertices, RenderType type,
                             Matrix4f modelView, Matrix4f projection, int light) {
         return drawInternal(mesh.storage.buffer, mesh, firstVertex, vertices, type, modelView, projection, light, null, 0);
@@ -137,6 +143,11 @@ public final class IrisDrawScope implements AutoCloseable {
 
     private boolean drawInternal(VertexBuffer buffer, IrisGeometryCache.Mesh mesh, int firstVertex, int vertices, RenderType type,
                               Matrix4f modelView, Matrix4f projection, int light, IntBuffer ranges, int rangeCount) {
+        return drawInternal(buffer, mesh, firstVertex, vertices, type, modelView, projection, light, ranges, rangeCount, null);
+    }
+
+    private boolean drawInternal(VertexBuffer buffer, IrisGeometryCache.Mesh mesh, int firstVertex, int vertices, RenderType type,
+                              Matrix4f modelView, Matrix4f projection, int light, IntBuffer ranges, int rangeCount, IntBuffer trackCounts) {
         lastDrawAppliedShader = false;
         boolean changed = use(type);
         var shader = RenderSystem.getShader();
@@ -167,7 +178,10 @@ public final class IrisDrawScope implements AutoCloseable {
                 if (matricesChanged) metrics.matrixChanges++;
             }
         }
-        if (ranges != null) {
+        if (trackCounts != null) {
+            if (rangeCount == 1) GL11.glDrawArrays(GL11.GL_TRIANGLES, ranges.get(0), trackCounts.get(0));
+            else GL14.glMultiDrawArrays(GL11.GL_TRIANGLES, ranges, trackCounts);
+        } else if (ranges != null) {
             long address = MemoryUtil.memAddress(ranges);
             GL14.nglMultiDrawArrays(GL11.GL_TRIANGLES, address, address + (long) rangeCount * Integer.BYTES, rangeCount);
         } else if (mesh != null && mesh.shared) GL11.glDrawArrays(GL11.GL_TRIANGLES, firstVertex, vertices);

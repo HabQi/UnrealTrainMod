@@ -236,6 +236,7 @@ final class RailPartRenderer implements AutoCloseable {
                 if (gpu == null || queue == null) stats.drawn(TrackRenderStats.RAIL_MODEL, TrackRenderStats.STRUCTURE_ASSEMBLY, 1,
                         source.mesh().indices().length, source.mesh().indices().length / 3,
                         gpu == null ? 0 : gpu.vertices, System.nanoTime() - start);
+                if (gpu == null || queue == null) stats.ranges(1, 1, 0);
             }
         }
         if (stats != null) stats.dynamicParts(drawn);
@@ -332,9 +333,12 @@ final class RailPartRenderer implements AutoCloseable {
             }
             calls = group.size();
         }
-        if (stats != null) stats.drawn(TrackRenderStats.RAIL_MODEL, TrackRenderStats.STRUCTURE_ASSEMBLY,
+        if (stats != null) {
+            stats.ranges(calls, calls, 0);
+            stats.drawn(TrackRenderStats.RAIL_MODEL, TrackRenderStats.STRUCTURE_ASSEMBLY,
                 calls, count * group.size(), count / 3 * group.size(),
                 StaticModelShader.state() == null ? 0 : stats.sharedPartVertices(key.mesh), 0);
+        }
     }
 
     private void buffered(TrackRenderState state, Draw draw, Matrix4f modelView,

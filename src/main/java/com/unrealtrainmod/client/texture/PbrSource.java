@@ -43,7 +43,7 @@ public sealed interface PbrSource permits PbrSource.Files, PbrSource.Atlas, PbrS
                 image = TextureLoader.read(asset);
                 if (image.getWidth() != key.width() || image.getHeight() != key.height()) {
                     int width = image.getWidth(), height = image.getHeight();
-                    var resized = resize(image, key.width(), key.height());
+                    var resized = TextureSizing.resize(image, key.width(), key.height());
                     image.close();
                     image = resized;
                     LoggerFactory.getLogger(PbrSource.class).info("Resized PBR texture {}: {}x{} -> {}x{} (nearest sampling)",
@@ -61,24 +61,6 @@ public sealed interface PbrSource permits PbrSource.Files, PbrSource.Atlas, PbrS
                 if (image != null) image.close();
                 throw error;
             }
-        }
-    }
-
-    /** Keep packed LabPBR channels intact: interpolating alpha or RGB can change their meaning. */
-    private static NativeImage resize(NativeImage source, int width, int height) {
-        var result = new NativeImage(width, height, false);
-        try {
-            int sourceWidth = source.getWidth(), sourceHeight = source.getHeight();
-            int[] columns = new int[width];
-            for (int x = 0; x < width; x++) columns[x] = (int)((x + 0.5) * sourceWidth / width);
-            for (int y = 0; y < height; y++) {
-                int row = (int)((y + 0.5) * sourceHeight / height);
-                for (int x = 0; x < width; x++) result.setPixelRGBA(x, y, source.getPixelRGBA(columns[x], row));
-            }
-            return result;
-        } catch (RuntimeException | Error exception) {
-            result.close();
-            throw exception;
         }
     }
 
@@ -112,7 +94,7 @@ public sealed interface PbrSource permits PbrSource.Files, PbrSource.Atlas, PbrS
             var image = source == null ? null : source.read(channel, defaultPixel);
             if (image == null || (image.getWidth() == width && image.getHeight() == height)) return image;
             try {
-                return resize(image, width, height);
+                return TextureSizing.resize(image, width, height);
             } finally {
                 image.close();
             }

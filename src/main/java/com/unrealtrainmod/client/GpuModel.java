@@ -24,6 +24,7 @@ import java.util.List;
 import java.util.Map;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL15;
+import org.lwjgl.opengl.GL30;
 import org.lwjgl.opengl.GL31;
 import org.lwjgl.opengl.GL33;
 import org.lwjgl.system.MemoryUtil;
@@ -102,6 +103,8 @@ public final class GpuModel implements AutoCloseable {
     private static RangeVertexBuffer uploadMesh(IndexedMesh mesh) {
         int vertexBytes = Math.multiplyExact(mesh.colors().length, StaticModelShader.FORMAT.getVertexSize());
         int indexBytes = Math.multiplyExact(mesh.indices().length, Integer.BYTES);
+        int oldVao = GL11.glGetInteger(GL30.GL_VERTEX_ARRAY_BINDING);
+        int oldArray = GL11.glGetInteger(GL15.GL_ARRAY_BUFFER_BINDING);
         var gpu = new RangeVertexBuffer();
         try (var vertices = new ByteBufferBuilder(vertexBytes); var indices = new ByteBufferBuilder(indexBytes)) {
             ByteBuffer data = MemoryUtil.memByteBuffer(vertices.reserve(vertexBytes), vertexBytes).order(ByteOrder.nativeOrder());
@@ -129,7 +132,9 @@ public final class GpuModel implements AutoCloseable {
             gpu.close();
             throw e;
         } finally {
-            VertexBuffer.unbind();
+            BufferUploader.invalidate();
+            GlStateManager._glBindVertexArray(oldVao);
+            GlStateManager._glBindBuffer(GL15.GL_ARRAY_BUFFER, oldArray);
         }
     }
 

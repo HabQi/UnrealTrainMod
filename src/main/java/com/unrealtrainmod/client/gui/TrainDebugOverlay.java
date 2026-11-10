@@ -36,21 +36,23 @@ public final class TrainDebugOverlay {
         if (mc.level == null || mc.options.hideGui || lines.isEmpty()
                 || !mc.level.dimension().location().equals(dimension) || mc.gui.getGuiTicks() - receivedAt > 60) return;
         var graphics = event.getGuiGraphics();
+        var font = mc.font;
         float scale = 0.8f;
+        int lineHeight = font.lineHeight + 1;
         int width = Math.min(690, (int)(graphics.guiWidth() / scale) - 16);
-        int maxRows = Math.max(1, ((int)(graphics.guiHeight() / scale) - 52) / 10);
+        int maxRows = Math.max(1, ((int)(graphics.guiHeight() / scale) - 52) / lineHeight);
         var wrapped = new ArrayList<FormattedCharSequence>();
-        for (var line : lines) wrapped.addAll(mc.font.split(line, width));
+        for (var line : lines) wrapped.addAll(font.split(line, width));
         boolean clipped = wrapped.size() > maxRows;
         int rows = Math.min(maxRows, wrapped.size());
         graphics.pose().pushPose();
         try {
             graphics.pose().scale(scale, scale, 1);
-            graphics.fill(4, 36, width + 12, 42 + rows * 10, 0xB0000000);
+            graphics.fill(4, 36, width + 12, 42 + rows * lineHeight, 0xB0000000);
             for (int i = 0; i < rows; i++) {
                 if (clipped && i == rows - 1) {
-                    graphics.drawString(mc.font, Component.translatable("gui.unrealtrainmod.train_debug.clipped"), 8, 40 + i * 10, 0xFFFFFF);
-                } else graphics.drawString(mc.font, wrapped.get(i), 8, 40 + i * 10, 0xFFFFFF, false);
+                    graphics.drawString(font, Component.translatable("gui.unrealtrainmod.train_debug.clipped"), 8, 40 + i * lineHeight, 0xFFFFFF);
+                } else graphics.drawString(font, wrapped.get(i), 8, 40 + i * lineHeight, 0xFFFFFF, false);
             }
         } finally { graphics.pose().popPose(); }
     }

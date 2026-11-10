@@ -23,7 +23,7 @@ public final class LoadReport {
     }
 
     private static final class Counts {
-        int registered, failed, modelFailures, duplicates, filtered, catalogErrors;
+        int registered, failed, modelFailures, duplicates, catalogErrors;
     }
 
     private final EnumMap<Kind, Counts> counts = new EnumMap<>(Kind.class);
@@ -34,8 +34,6 @@ public final class LoadReport {
     }
 
     public void registered(Kind kind) { counts.get(kind).registered++; }
-
-    public void filtered(Kind kind) { counts.get(kind).filtered++; }
 
     public void modelFailed(Kind kind, PackageAsset config, PackageAsset model, Exception exception) {
         counts.get(kind).modelFailures++;
@@ -78,7 +76,7 @@ public final class LoadReport {
     public void logSummary(Kind kind, Path directory, String details) {
         var value = counts.get(kind);
         String extra = "; " + value.catalogErrors + " catalog errors, " + value.modelFailures
-                + " model failures, " + value.filtered + " filtered";
+                + " model failures";
         if (!details.isEmpty()) extra += "; " + details;
         LOGGER.info("Registered {} {} from {}: {} failed configs, {} duplicates, {} unreadable archives{}",
                 value.registered, kind.label, directory, value.failed, value.duplicates,

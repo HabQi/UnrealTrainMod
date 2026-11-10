@@ -8,9 +8,13 @@ import java.io.IOException;
 import java.io.Reader;
 import java.util.LinkedHashMap;
 import java.util.List;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /** Independent reader for diffuse colors, opacity and untransformed diffuse texture references. */
 public final class MtlParser {
+    private static final Logger LOGGER = LoggerFactory.getLogger(MtlParser.class);
+
     private MtlParser() {}
 
     /** Paths are relative to the logical resource root. The caller owns the reader and its encoding. */
@@ -44,7 +48,13 @@ public final class MtlParser {
                         case "map_Kd" -> {
                             String reference = text.argument();
                             if (reference.startsWith("-")) throw text.error("map_Kd options are not supported");
-                            current.texture = text.resolve(reference);
+                            try {
+                                current.texture = text.resolve(reference);
+                            } catch (IOException exception) {
+                                current.texture = null;
+                                LOGGER.warn("MTL {}:{} material '{}': ignoring texture '{}'; using material color: {}",
+                                        sourcePath, text.lineNumber(), current.name, reference, exception.getMessage());
+                            }
                         }
                     }
                 }

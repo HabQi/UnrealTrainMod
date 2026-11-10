@@ -69,14 +69,6 @@ public final class IrisPbrBridge {
         }
     }
 
-    static void prewarm(MaterialTexture texture) {
-        if (invalidate == null) return;
-        var normal = texture.auxiliary(PbrSource.Channel.NORMAL, normalDefault);
-        var specular = texture.auxiliary(PbrSource.Channel.SPECULAR, specularDefault);
-        if (normal != null) normal.close();
-        if (specular != null) specular.close();
-    }
-
     public static void invalidate(int id) {
         if (id < 0 || invalidate == null) return;
         try { invalidate.invoke(id); }

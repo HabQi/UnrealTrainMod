@@ -70,6 +70,11 @@ final class TrackRenderStats {
     private long windowBudgetSkipped, windowSlowBuilds, windowMaxSlowBuild;
     private String windowSlowResource = "n/a";
 
+    private long windowRangeBefore, windowRangeAfter, windowMultiDrawCalls, windowMultiDrawRanges;
+    private long windowLightBytes, windowPageBuilds, windowPageRebuilds, windowResidentPages, windowResidentBytes;
+    private int rangeBefore, rangeAfter, multiDrawCalls, multiDrawRanges, pageBuilds, pageRebuilds, residentPages;
+    private long lightBytes, residentBytes;
+
     private int chunks, candidates, visible, empty, pending;
     private final int[] draws = new int[SLOTS];
     private final int[] vertices = new int[SLOTS];
@@ -159,10 +164,14 @@ final class TrackRenderStats {
         windowRenderTypeSetups = windowShaderBinds = windowProgramSwitches = 0L;
         windowBudgetSkipped = windowSlowBuilds = windowMaxSlowBuild = 0L;
         windowSlowResource = "n/a";
+        windowRangeBefore = windowRangeAfter = windowMultiDrawCalls = windowMultiDrawRanges = 0;
+        windowLightBytes = windowPageBuilds = windowPageRebuilds = windowResidentPages = windowResidentBytes = 0;
     }
 
     private void resetFrame() {
         irisProgram = -1;
+        rangeBefore = rangeAfter = multiDrawCalls = multiDrawRanges = pageBuilds = pageRebuilds = residentPages = 0;
+        lightBytes = residentBytes = 0;
         animatedTurnouts = dynamicParts = 0;
         jsCalls = jsNanos = instanceBytes = activeBytes = 0;
         chunks = candidates = visible = empty = pending = 0;
@@ -210,14 +219,32 @@ final class TrackRenderStats {
         }
     }
 
-    /** One successful VBO upload; non-first uploads are light refreshes because geometry is static. */
-    void uploaded(int vertexBytes, int indexBytes, int stagingCapacity, boolean first) {
+    /** Static geometry uploads, including replacement pages; UV2 bytes are recorded separately. */
+    void uploaded(int vertexBytes, int indexBytes, int stagingCapacity) {
         uploads++;
         vboBytes += vertexBytes;
         iboBytes += indexBytes;
         stagingBytes += stagingCapacity;
-        if (first) firstUploads++;
-        else refreshUploads++;
+        firstUploads++;
+    }
+
+    void lightUploaded(int bytes, boolean initial, boolean animated) {
+        lightBytes += bytes;
+        stagingBytes += bytes;
+        if (animated) activeBytes += bytes;
+        else if (!initial) { uploads++; refreshUploads++; }
+    }
+
+    void sharedPageBuilt(boolean replacement) {
+        builds++; pageBuilds++;
+        if (replacement) pageRebuilds++;
+    }
+
+    void sharedPages(int count, long bytes) { residentPages = count; residentBytes = bytes; }
+
+    void ranges(int before, int after, int multiRanges) {
+        rangeBefore += before; rangeAfter += after;
+        if (multiRanges > 0) { multiDrawCalls++; multiDrawRanges += multiRanges; }
     }
 
     void packed(long nanos) { packNanos += nanos; }
@@ -249,15 +276,6 @@ final class TrackRenderStats {
     void shaderBind(boolean programSwitch) {
         shaderBinds++;
         if (programSwitch) programSwitches++;
-    }
-
-    /**
-     * Original path: every draw applies the shader and clears it again, so the following apply rebinds
-     * the program. The first bind of the frame is not counted as a switch, matching the scope path.
-     */
-    void legacyShaderBind() {
-        shaderBinds++;
-        if (shaderBinds > 1) programSwitches++;
     }
 
     void drawn(int source, int structure, int drawCalls, int vertexCount, int triangleCount, int storedVertexCount, long nanos) {
@@ -321,6 +339,11 @@ final class TrackRenderStats {
             windowVertices[i] += vertices[i];
             windowTriangles[i] += triangles[i];
         }
+        windowRangeBefore += rangeBefore; windowRangeAfter += rangeAfter;
+        windowMultiDrawCalls += multiDrawCalls; windowMultiDrawRanges += multiDrawRanges;
+        windowLightBytes += lightBytes;
+        windowPageBuilds += pageBuilds; windowPageRebuilds += pageRebuilds;
+        windowResidentPages += residentPages; windowResidentBytes += residentBytes;
         windowBuilds += builds;
         windowUploads += uploads;
         windowFirstUploads += firstUploads;
@@ -397,6 +420,13 @@ final class TrackRenderStats {
                 windowAnimatedGpuSamples == 0 ? "n/a" : ms(windowAnimatedGpu / windowAnimatedGpuSamples),
                 windowAnimatedGpuSamples == 0 ? "n/a" : ms(windowMaxAnimatedGpu),
                 windowBudgetSkipped, windowSlowBuilds, ms(windowMaxSlowBuild), windowSlowResource);
+        LOGGER.info("Track buffers [{}] path={} perFrame rangesBefore={} rangesAfter={} multiDrawCalls={} "
+                        + "multiDrawRanges={} savedCalls={} lightBytes={} pageBuilds={} pageRebuilds={} residentPages={} residentBytes={}",
+                scene, path, avg(windowRangeBefore, frames), avg(windowRangeAfter, frames),
+                avg(windowMultiDrawCalls, frames), avg(windowMultiDrawRanges, frames),
+                avg(windowRangeBefore - windowRangeAfter + windowMultiDrawRanges - windowMultiDrawCalls, frames),
+                windowLightBytes / frames, avg(windowPageBuilds, frames), avg(windowPageRebuilds, frames),
+                avg(windowResidentPages, frames), windowResidentBytes / frames);
         resetWindow(now);
     }
 

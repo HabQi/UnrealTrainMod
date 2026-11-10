@@ -48,8 +48,11 @@ public final class WiringManager {
         if (!level.getBlockState(pos).canBeReplaced()) return;
         if (!player.mayUseItemAt(pos, context.getClickedFace(), context.getItemInHand())
                 || level.isOutsideBuildHeight(pos) || !level.getWorldBorder().isWithinBounds(pos)) return;
+        float yaw = 180 - player.getYRot();
+        // Model Y rotation has the opposite sign of Minecraft yaw; clockwise subtracts 90 degrees.
+        if (context.getClickedFace().getAxis().isHorizontal()) yaw -= 90;
         var node = new ConnectorData(UUID.randomUUID(), model, Vec3.atCenterOf(pos), context.getClickedFace(),
-                Vec3.ZERO, new Vec3(0, Mth.wrapDegrees(180 - player.getYRot()), 0), 0);
+                Vec3.ZERO, new Vec3(0, Mth.wrapDegrees(yaw), 0), 0);
         var entity = UnrealTrainMod.CONNECTOR.get().create(level);
         if (entity == null) return;
         entity.setUUID(node.id()); entity.apply(node);

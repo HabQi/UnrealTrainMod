@@ -8,6 +8,8 @@ import com.unrealtrainmod.resource.PackageAsset;
 import com.unrealtrainmod.resource.ResourceIds;
 import com.mojang.blaze3d.platform.NativeImage;
 import com.unrealtrainmod.UnrealTrainMod;
+import com.unrealtrainmod.client.ClientConfig;
+import com.unrealtrainmod.client.texture.TextureSizing;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -21,6 +23,10 @@ public final class TextureLoader {
             UnrealTrainMod.MODID, "textures/model/white.png");
 
     private TextureLoader() {}
+
+    public static NativeImage readBase(PackageAsset asset) throws IOException {
+        return TextureSizing.limit(read(asset), ClientConfig.MAX_PACKAGE_TEXTURE_SIZE.get());
+    }
 
     public static NativeImage read(PackageAsset asset) throws IOException {
         try {

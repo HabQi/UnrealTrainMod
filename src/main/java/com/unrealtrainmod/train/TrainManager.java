@@ -676,6 +676,10 @@ public final class TrainManager {
     }
 
     private void prepare(TrainConsist train, List<TrainEntity> entities) {
+        prepare(train, entities, true);
+    }
+
+    private void prepare(TrainConsist train, List<TrainEntity> entities, boolean existingFootprint) {
         var anchor = train.anchor();
         if (anchor == null) {
             throw new StateException(entities.getFirst().hasInvalidAnchor() ? StopReason.INVALID_ANCHOR : StopReason.UNBOUND);
@@ -694,10 +698,11 @@ public final class TrainManager {
             if (anchor.distance() > tracks.segment(anchor.segmentId()).geometry().getLength()) {
                 throw new StateException(StopReason.INVALID_ANCHOR);
             }
-            if (!TrackTransitionResolver.isSegmentEnabled(tracks, anchor.segmentId(), TrainRouteWindow.context(train, false))) {
+            var context = existingFootprint ? TrainRouteWindow.context(train, false) : TrackTraversalContext.STRICT;
+            if (!TrackTransitionResolver.isSegmentEnabled(tracks, anchor.segmentId(), context)) {
                 throw new StateException(StopReason.TURNOUT_ROUTE_UNAVAILABLE);
             }
-            train.setWindow(TrainRouteWindow.initial(tracks, anchor, train));
+            train.setWindow(TrainRouteWindow.initial(tracks, anchor, train, existingFootprint));
         } catch (IllegalArgumentException exception) {
             throw new StateException(StopReason.INVALID_ANCHOR, exception);
         }
@@ -803,9 +808,7 @@ public final class TrainManager {
         if (!train.window().pathsEnabledAt(graph, train, at, context)) {
             throw new StateException(StopReason.TURNOUT_ROUTE_UNAVAILABLE);
         }
-        var query = reservations.query(areas, intervals);
-        if (!query.available(context.members())) throw new StateException(StopReason.TURNOUT_OCCUPIED);
-        return query;
+        return reservations.query(areas, intervals);
     }
 
     private void saveCandidate(TrainConsist train, Candidate candidate, List<TrackOccupancyManager.Interval> intervals) {
@@ -916,7 +919,7 @@ public final class TrainManager {
         var train = single(entity, previous == null ? UUID.randomUUID() : previous.id(), anchor,
                 previous == null ? TrainConsist.DEFAULT_SPEED : previous.configuredSpeed());
         try {
-            prepare(train, List.of(entity));
+            prepare(train, List.of(entity), false);
             var candidate = calculate(train, List.of(entity), train.progress());
             var car = candidate.cars().getFirst();
             var areas = candidate.areas();
@@ -1043,6 +1046,9 @@ public final class TrainManager {
             MovementStep step;
             do {
                 double next = TrainMotion.nextStep(train.route(), train.sampler(), motion.sampleOffsets(), progress, target);
+                if (train.window().turnoutMovement(graph).requiresThrow(motion, progress, next)) {
+                    return StopReason.TURNOUT_ROUTE_UNAVAILABLE;
+                }
                 step = calculateStep(train, entities, previous, next, motion, context);
                 for (int i = 0; i < areas.size(); i++) areas.set(i, areas.get(i).minmax(step.actual().get(i)));
                 previous = step.actual();
@@ -1051,7 +1057,7 @@ public final class TrainManager {
             var candidate = step.candidate();
             var intervals = motion.footprint(target);
             var query = check(train, areas, intervals, target, false);
-            if (!query.acquire(memberIds(train))) return StopReason.TURNOUT_OCCUPIED;
+            query.acquire(memberIds(train));
             commit(train, candidate, intervals, true);
             reservations.releaseOutside(memberIds(train), candidate.areas(), intervals);
             tryAutoCouple(train, autoCouplingVehicles());
@@ -1166,8 +1172,10 @@ public final class TrainManager {
         var startIntervals = couplingFootprint(combined, first.cars().size(), accepted - destination);
         check(combined, startSweep, startIntervals);
         previous = start.areas();
+        var turnoutMovement = combined.window().turnoutMovement(graph);
         while (accepted != destination) {
             double next = TrainMotion.nextStep(combined.route(), combined.sampler(), motion.sampleOffsets(), accepted, destination);
+            if (turnoutMovement.requiresThrow(motion, accepted, next)) return StopReason.TURNOUT_ROUTE_UNAVAILABLE;
             var step = calculate(moving, secondEntities, next, motion);
             var sweep = swept(previous, step.areas());
             var footprint = couplingFootprint(combined, first.cars().size(), next - destination);
@@ -1175,7 +1183,7 @@ public final class TrainManager {
             previous = step.areas();
             accepted = next;
         }
-        if (!protection.acquire(memberIds(combined))) return StopReason.TURNOUT_OCCUPIED;
+        protection.acquire(memberIds(combined));
         remove(first);
         remove(second);
         put(combined);
@@ -1471,7 +1479,7 @@ public final class TrainManager {
                     try {
                         actions = turnoutMovement.propose(motion, context, progress, next);
                         for (var action : actions) {
-                            if (action.begin() && !reservations.canBeginTrailingPass(action.assemblyId(), owners)) {
+                            if (!reservations.canThrowTrailingPass(action.assemblyId(), owners)) {
                                 throw new StateException(StopReason.TURNOUT_OCCUPIED);
                             }
                             graph.validateTrailingPass(action.assemblyId(), owners, action.pathId());
@@ -1481,9 +1489,8 @@ public final class TrainManager {
                     }
                 }
                 double next = step.candidate().progress();
-                if (!step.reservations().acquire(owners)) throw new StateException(StopReason.TURNOUT_OCCUPIED);
-                for (var action : actions) if (action.begin()) graph.beginTrailingPass(action.assemblyId(), owners, action.pathId());
-                for (var action : actions) if (action.throwSwitch()) graph.throwTrailingPass(action.assemblyId());
+                step.reservations().acquire(owners);
+                for (var action : actions) graph.throwTrailingPass(action.assemblyId(), action.pathId());
                 // Commit each accepted substep before release can restore a turnout and notify route observers.
                 commit(train, step.candidate(), step.intervals(), false);
                 moved = true;

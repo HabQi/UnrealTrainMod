@@ -22,6 +22,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import net.minecraft.resources.ResourceLocation;
 
 /** Reload-local pixel sharing. Only canonical images are owned and transferred for upload. */
@@ -35,24 +36,28 @@ final class TexturePool implements AutoCloseable {
     private final Map<PixelKey, List<Entry>> pixels = new HashMap<>();
     private final Map<LightPair, Entry> lightPairs = new HashMap<>();
     private final Map<ResourceLocation, PreparedTexture> images = new HashMap<>();
+    private final Set<ResourceLocation> uniformTextures = new HashSet<>();
     private final PbrDiscovery pbr = new PbrDiscovery();
     private int atlasPages;
-    private final java.util.Set<ResourceLocation> flareTextures = new HashSet<>();
+    private final Set<ResourceLocation> flareTextures = new HashSet<>();
     private ResourceLocation defaultFlare;
 
     Entry load(PackageAsset asset) throws IOException {
         var cached = assets.get(asset);
         if (cached != null) return cached;
-        var image = TextureLoader.read(asset);
+        var image = TextureLoader.readBase(asset);
         boolean retained = false;
         try {
             var auxiliary = pbr.find(asset, image.getWidth(), image.getHeight());
             long hash = 0xcbf29ce484222325L;
-            int constantMask = TextureAlpha.pixelMask(image.getPixelRGBA(0, 0) >>> 24);
+            int firstPixel = image.getPixelRGBA(0, 0);
+            int constantMask = TextureAlpha.pixelMask(firstPixel >>> 24);
+            boolean uniform = true;
             for (int y = 0; y < image.getHeight(); y++) {
                 for (int x = 0; x < image.getWidth(); x++) {
                     int pixel = image.getPixelRGBA(x, y);
                     hash = (hash ^ Integer.toUnsignedLong(pixel)) * 0x100000001b3L;
+                    uniform &= pixel == firstPixel;
                     if (constantMask >= 0 && TextureAlpha.pixelMask(pixel >>> 24) != constantMask) constantMask = -1;
                 }
             }
@@ -68,6 +73,7 @@ final class TexturePool implements AutoCloseable {
             var entry = new Entry(TextureLoader.textureId(asset), image, new TextureAlpha(image, constantMask), auxiliary);
             images.put(entry.id(), new PreparedTexture(image, auxiliary));
             retained = true;
+            if (uniform && auxiliary == null) uniformTextures.add(entry.id());
             candidates.add(entry);
             assets.put(asset, entry);
             return entry;
@@ -161,6 +167,7 @@ final class TexturePool implements AutoCloseable {
 
     NativeImage image(ResourceLocation id) { return images.get(id).image(); }
     PbrSource pbr(ResourceLocation id) { return images.get(id).pbr(); }
+    boolean canNormalizeUvs(ResourceLocation id) { return uniformTextures.contains(id); }
 
     /** Takes ownership of a completed atlas page. */
     ResourceLocation addAtlas(NativeImage image, PbrSource auxiliary) {
@@ -185,7 +192,7 @@ final class TexturePool implements AutoCloseable {
         long pixelCount = images.values().stream().mapToLong(texture -> (long)texture.image().getWidth() * texture.image().getHeight()).sum();
         pbr.log("vehicles");
         LOGGER.info("Prepared vehicle textures: {} assets -> {} unique source images; {} merged light textures; {} atlas pages; "
-                        + "{} retained for upload, {} pixels ({} RGBA bytes)",
+                        + "{} retained for on-demand upload, {} pixels ({} RGBA bytes)",
                 assets.size(), unique, lightPairs.size(), atlasPages, images.size(), pixelCount, pixelCount * Integer.BYTES);
         var transferred = new HashMap<>(images);
         images.clear();
@@ -196,5 +203,6 @@ final class TexturePool implements AutoCloseable {
     public void close() {
         images.values().forEach(PreparedTexture::close);
         images.clear();
+        uniformTextures.clear();
     }
 }

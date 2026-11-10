@@ -10,7 +10,6 @@ import com.mojang.blaze3d.vertex.DefaultVertexFormat;
 import com.mojang.blaze3d.vertex.VertexBuffer;
 import com.mojang.blaze3d.vertex.VertexFormat;
 import com.unrealtrainmod.track.mesh.TrackMeshData;
-import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.renderer.texture.OverlayTexture;
 import org.joml.Vector3f;
 
@@ -19,9 +18,14 @@ final class TrackIrisMesh {
     private static final int[] CORNERS = {0, 1, 2, 0, 2, 3};
     private TrackIrisMesh() {}
 
-    static int upload(VertexBuffer buffer, TrackMeshData normal, TrackMeshData reverse, float movement,
-                      TrackLighting lighting, ClientLevel level) {
+    record Upload(int bytes, long[] samples) {}
+
+    static Upload upload(VertexBuffer buffer, TrackMeshData normal, TrackMeshData reverse, float movement,
+                         TrackRenderStats stats) {
         int count = normal.vertexCount() / 4 * 6;
+        var samples = new long[count];
+        int sample = 0;
+        long start = stats == null ? 0 : System.nanoTime();
         try (var bytes = new ByteBufferBuilder(Math.max(256, count * DefaultVertexFormat.NEW_ENTITY.getVertexSize()))) {
             var builder = new BufferBuilder(bytes, VertexFormat.Mode.TRIANGLES, DefaultVertexFormat.NEW_ENTITY);
             var points = new Vector3f[] {new Vector3f(), new Vector3f(), new Vector3f(), new Vector3f()};
@@ -40,17 +44,21 @@ final class TrackIrisMesh {
                 a.cross(b).normalize();
                 for (int corner : CORNERS) {
                     var p = points[corner];
-                    int light = lighting.sample(level, p.x, p.y, p.z, a.x, a.y, a.z);
+                    var origin = normal.origin();
+                    samples[sample++] = TrackLighting.key(origin.x() + p.x, origin.y() + p.y, origin.z() + p.z, a.x, a.y, a.z);
                     builder.addVertex(p.x, p.y, p.z).setColor(normal.baseColor(face + corner))
                             .setUv(corner == 1 || corner == 2 ? 1 : 0, corner >= 2 ? 1 : 0)
-                            .setOverlay(OverlayTexture.NO_OVERLAY).setLight(light).setNormal(a.x, a.y, a.z);
+                            .setOverlay(OverlayTexture.NO_OVERLAY).setLight(0).setNormal(a.x, a.y, a.z);
                 }
             }
             buffer.bind();
             var mesh = builder.buildOrThrow();
             int size = mesh.vertexBuffer().remaining();
+            if (stats != null) stats.packed(System.nanoTime() - start);
+            start = stats == null ? 0 : System.nanoTime();
             buffer.upload(mesh);
-            return size;
+            if (stats != null) stats.gpuUpload(System.nanoTime() - start);
+            return new Upload(size, samples);
         } finally { VertexBuffer.unbind(); }
     }
 }

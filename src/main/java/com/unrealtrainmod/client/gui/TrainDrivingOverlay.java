@@ -21,14 +21,14 @@ import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.locale.Language;
 import net.minecraft.network.chat.Component;
 
-/** Always-visible driver desk; instruments and both handles show authoritative state. */
+/** Always-visible driver desk; instruments and all three handles show authoritative state. */
 public final class TrainDrivingOverlay {
     static final int BACKGROUND = 0xF2141D27, PANEL = 0xFF0C131C, EDGE = 0xFF344656;
     static final int TEXT = 0xFFE6F1F6, MUTED = 0xFF8B9DAC, CYAN = 0xFF62DFE0;
     static final int GREEN = 0xFF75DC9D, AMBER = 0xFFFFC66B, RED = 0xFFFF706B;
     private static final int GAP = 4, HEIGHT = 70, DOOR_WIDTH = 22;
     private static final int MONITOR_HEIGHT = 170;
-    private static final int HANDLE_TOP = 16, HANDLE_BOTTOM = 55;
+    private static final int HANDLE_TOP = 16, EMERGENCY_HEIGHT = 16;
     /** Preserve the compact layout while snapping glyphs to whole framebuffer pixels. */
     private static final float TEXT_SCALE = 0.8F;
     private static TrainControlSyncPayload displayed;
@@ -37,6 +37,7 @@ public final class TrainDrivingOverlay {
     private static Component motion, controls;
     private static Component[] values;
     private static Boolean draggingPower;
+    private static boolean draggingReverser;
     private static double handleGrabOffset;
     private static int requestedNotch = -1;
     private static boolean monitorExpanded;
@@ -51,14 +52,22 @@ public final class TrainDrivingOverlay {
 
     private record Layout(Box desk, Box speed, Box monitor, Box data, Box handle, Box switches,
                           int monitorCanvasWidth, float monitorScale) {
-        Box power() { return new Box(handle.x + handle.width / 2 + 2, handle.y, handle.width - handle.width / 2 - 2, handle.height); }
-        Box brake() { return new Box(handle.x, handle.y, handle.width / 2 - 2, handle.height); }
-        int switchButtonWidth() { return (switches.width - 12) / 2; }
-        Box reverser() { return new Box(switches.x + 4, switches.y + 4, switchButtonWidth(), 16); }
-        Box emergency() { return new Box(switches.x + 4, switches.y + 23, switchButtonWidth(), 16); }
-        Box headLight() { return new Box(reverser().x + switchButtonWidth() + 4, reverser().y,
-                switches.width - 12 - switchButtonWidth(), 16); }
-        Box tailLight() { return new Box(headLight().x, emergency().y, headLight().width, 16); }
+        Box handleColumn(int index) {
+            int width = (handle.width - 2 * GAP) / 3;
+            return new Box(handle.x + index * (width + GAP), handle.y, width, handle.height);
+        }
+        Box brake() { return handleColumn(0); }
+        Box power() { return handleColumn(1); }
+        Box reverser() {
+            var column = handleColumn(2);
+            return new Box(column.x, column.y, column.width, column.height - GAP - EMERGENCY_HEIGHT);
+        }
+        Box emergency() {
+            var column = handleColumn(2);
+            return new Box(column.x, column.y + column.height - EMERGENCY_HEIGHT, column.width, EMERGENCY_HEIGHT);
+        }
+        Box headLight() { return new Box(switches.x + 4, switches.y + 4, switches.width - 8, 16); }
+        Box tailLight() { return new Box(switches.x + 4, switches.y + 23, switches.width - 8, 16); }
         Box controlPanel() { return new Box(switches.x + 4, switches.y + 42, switches.width - 8, 16); }
         Box leftDoor() { return new Box(desk.x + GAP, speed.y, DOOR_WIDTH, speed.height); }
         Box rightDoor() { return new Box(desk.x + desk.width - GAP - DOOR_WIDTH, speed.y, DOOR_WIDTH, speed.height); }
@@ -69,7 +78,7 @@ public final class TrainDrivingOverlay {
         int availableWidth = Math.min(1000, window.getGuiScaledWidth() - 12);
         boolean wide = availableWidth >= 700;
         int speedWidth = availableWidth < 360 ? 56 : 64;
-        int handleWidth = availableWidth < 360 ? 68 : 84;
+        int handleWidth = availableWidth < 360 ? 80 : 92;
         int switchWidth = Math.min(104, Math.max(56, availableWidth / 6));
         int dataWidth = wide ? Math.min(160, availableWidth / 6) : 0;
         int fixedWidth = 2 * DOOR_WIDTH + (wide ? 8 : 7) * GAP
@@ -82,7 +91,7 @@ public final class TrainDrivingOverlay {
         int monitorWidth = Math.round(monitorCanvasWidth * monitorScale);
         int monitorHeight = Math.round(MONITOR_HEIGHT * monitorScale);
         int width = fixedWidth + monitorWidth;
-        int left = (window.getGuiScaledWidth() - width) / 2, top = window.getGuiScaledHeight() - HEIGHT - 6;
+        int left = (window.getGuiScaledWidth() - width) / 2, top = window.getGuiScaledHeight() - HEIGHT;
         int contentY = top + GAP;
         var speedBox = new Box(left + 2 * GAP + DOOR_WIDTH, contentY, speedWidth, contentHeight);
         int monitorY = contentY + contentHeight - monitorHeight;
@@ -95,7 +104,7 @@ public final class TrainDrivingOverlay {
                 monitorCanvasWidth, monitorScale);
     }
 
-    public static int bottomClearance() { return HEIGHT + 18; }
+    public static int bottomClearance() { return HEIGHT + 12; }
 
     public static boolean contains(double x, double y) {
         if (!TrainDrivingClient.consoleVisible()) return false;
@@ -159,6 +168,7 @@ public final class TrainDrivingOverlay {
             if (layout.data.width > 0) telemetry(graphics, font, layout.data);
             handle(graphics, font, layout.brake(), false, state, mouseX, mouseY);
             handle(graphics, font, layout.power(), true, state, mouseX, mouseY);
+            reverser(graphics, font, layout.reverser(), state, mouseX, mouseY);
             switches(graphics, font, layout, state, mouseX, mouseY);
             door(graphics, font, layout.leftDoor(), VehicleDoor.LEFT, partialTick, mouseX, mouseY);
             door(graphics, font, layout.rightDoor(), VehicleDoor.RIGHT, partialTick, mouseX, mouseY);
@@ -230,7 +240,7 @@ public final class TrainDrivingOverlay {
         int value = power ? state.powerNotch() : state.brakeNotch();
         int count = power ? state.powerNotches() : TrainControlProfile.BRAKE_NOTCHES;
         int color = state.emergency() ? RED : power ? CYAN : AMBER;
-        int cx = box.x + box.width / 2, top = box.y + HANDLE_TOP, bottom = box.y + HANDLE_BOTTOM;
+        int cx = box.x + box.width / 2, top = box.y + HANDLE_TOP, bottom = box.y + handleBottom(box);
         fill(graphics, cx - 2, top, cx + 3, bottom + 1, EDGE);
         int previousY = Integer.MIN_VALUE;
         for (int i = 0; i <= count; i++) {
@@ -240,27 +250,66 @@ public final class TrainDrivingOverlay {
             fill(graphics, cx - 7, y, cx + 8, y + 1, i <= value ? color : EDGE);
         }
         int position = handlePosition(box, value, count);
-        fill(graphics, cx - 11, position - 3, cx + 12, position + 4, 0xFF05090E);
-        fill(graphics, cx - 10, position - 2, cx + 11, position + 3, state.emergency() ? RED : TEXT);
-        fill(graphics, cx - 5, position - 1, cx + 6, position + 1, color);
+        drawHandleGrip(graphics, box, position, state.emergency() ? RED : TEXT, color);
         String notch = state.emergency() && !power ? "EB" : value == 0 ? "0" : (power ? "P" : "B") + value;
-        int notchWidth = (int) Math.ceil(font.width(notch) * textScale());
-        label(graphics, font, text(power ? "power_handle" : "brake_handle"), box.x + 4, box.y + 5,
-                box.width - notchWidth - 11, MUTED);
-        label(graphics, font, Component.literal(notch), box.x + box.width - notchWidth - 4, box.y + 5, notchWidth, color);
+        handleHeading(graphics, font, box, text(power ? "power_handle" : "brake_handle"), notch, color);
+    }
+
+    private static void handleHeading(GuiGraphics graphics, Font font, Box box, Component title, String value, int color) {
+        int titleWidth = font.width(title), valueWidth = font.width(value);
+        float scale = Math.min(textScale(), (box.width - 6F) / (titleWidth + valueWidth + 3));
+        drawText(graphics, font, title.getString(), box.x + 3, box.y + 5, scale, MUTED);
+        drawText(graphics, font, value, box.x + box.width - 3 - valueWidth * scale, box.y + 5, scale, color);
+    }
+
+    private static boolean reverserEnabled(TrainControlSyncPayload state) {
+        return state.powerNotch() == 0 && state.brakeNotch() == 0;
+    }
+
+    private static void reverser(GuiGraphics graphics, Font font, Box box, TrainControlSyncPayload state,
+                                 double mouseX, double mouseY) {
+        boolean enabled = reverserEnabled(state);
+        panel(graphics, box, enabled && box.contains(mouseX, mouseY) ? 0xFF172733 : PANEL);
+        int value = state.reverser().direction() + 1;
+        int color = enabled ? GREEN : MUTED;
+        int cx = box.x + box.width / 2;
+        fill(graphics, cx - 2, box.y + HANDLE_TOP, cx + 3, box.y + handleBottom(box) + 1, EDGE);
+        for (int i = 0; i <= 2; i++) {
+            int y = handlePosition(box, i, 2);
+            fill(graphics, cx - 7, y, cx + 8, y + 1, i == value ? color : EDGE);
+        }
+        int position = handlePosition(box, value, 2);
+        drawHandleGrip(graphics, box, position, TEXT, color);
+        handleHeading(graphics, font, box, text("reverser_handle"), value == 2 ? "F" : value == 1 ? "N" : "R", color);
     }
 
     private static int handlePosition(Box box, int notch, int count) {
-        return box.y + HANDLE_BOTTOM - Math.round(notch * (HANDLE_BOTTOM - HANDLE_TOP) / (float) count);
+        int bottom = handleBottom(box);
+        return box.y + bottom - Math.round(notch * (bottom - HANDLE_TOP) / (float) count);
+    }
+
+    private static int handleBottom(Box box) {
+        return box.height - 7;
+    }
+
+    private static Box handleGrip(Box box, int position) {
+        int halfWidth = Math.min(11, (box.width - 3) / 2);
+        return new Box(box.x + box.width / 2 - halfWidth, position - 3, halfWidth * 2 + 1, 7);
+    }
+
+    private static void drawHandleGrip(GuiGraphics graphics, Box box, int position, int bodyColor, int color) {
+        var grip = handleGrip(box, position);
+        fill(graphics, grip.x, grip.y, grip.x + grip.width, grip.y + grip.height, 0xFF05090E);
+        fill(graphics, grip.x + 1, grip.y + 1, grip.x + grip.width - 1, grip.y + grip.height - 1, bodyColor);
+        int cx = box.x + box.width / 2;
+        fill(graphics, cx - 5, position - 1, cx + 6, position + 1, color);
     }
 
     private static void switches(GuiGraphics graphics, Font font, Layout layout, TrainControlSyncPayload state,
                                  double mouseX, double mouseY) {
         var box = layout.switches;
         panel(graphics, box, PANEL);
-        button(graphics, font, layout.reverser(), text("reverser", TrainDrivingClient.direction(state)),
-                state.powerNotch() == 0 && state.brakeNotch() == 0, CYAN, mouseX, mouseY);
-        button(graphics, font, layout.emergency(), text(state.emergency() ? "emergency_release" : "emergency"),
+        button(graphics, font, layout.emergency(), text("emergency"),
                 !state.emergency() || state.speed() == 0, RED, mouseX, mouseY);
         lightButton(graphics, font, layout.headLight(), true, TrainDrivingClient.headLightOn(), mouseX, mouseY);
         lightButton(graphics, font, layout.tailLight(), false, TrainDrivingClient.tailLightOn(), mouseX, mouseY);
@@ -352,11 +401,12 @@ public final class TrainDrivingOverlay {
                     .append(text("grade_hint")).append("\n")
                     .append(drivingText("traction", number(state.tractionForce() / 1000))).append("\n")
                     .append(drivingText("brake", number(state.brakeForce() / 1000)));
-        } else if (layout.handle.contains(mouseX, mouseY)) {
-            tip = Component.empty().append(text("handle_hint")).append("\n").append(controls);
         } else if (layout.reverser().contains(mouseX, mouseY)) {
             tip = Component.empty().append(text("reverser", TrainDrivingClient.direction(state)))
+                    .append("\n").append(text("reverser_hint"))
                     .append("\n").append(drivingText("reverser_locked"));
+        } else if (layout.power().contains(mouseX, mouseY) || layout.brake().contains(mouseX, mouseY)) {
+            tip = Component.empty().append(text("handle_hint")).append("\n").append(controls);
         } else if (layout.emergency().contains(mouseX, mouseY)) {
             tip = text("emergency_hint");
         } else if (layout.headLight().contains(mouseX, mouseY)) {
@@ -399,6 +449,18 @@ public final class TrainDrivingOverlay {
             monitorExpanded = !monitorExpanded;
             return;
         }
+        if (reverserEnabled(state) && layout.reverser().contains(mouseX, mouseY)
+                && mouseY >= layout.handle.y + HANDLE_TOP - 3) {
+            release();
+            draggingReverser = true;
+            requestedNotch = state.reverser().direction() + 1;
+            var box = layout.reverser();
+            int position = handlePosition(box, requestedNotch, 2);
+            var grip = handleGrip(box, position);
+            handleGrabOffset = grip.contains(mouseX, mouseY) ? mouseY - position : 0;
+            drag(mouseY);
+            return;
+        }
         if (!state.emergency() && mouseY >= layout.handle.y + HANDLE_TOP - 3
                 && (layout.power().contains(mouseX, mouseY) || layout.brake().contains(mouseX, mouseY))) {
             release();
@@ -408,15 +470,13 @@ public final class TrainDrivingOverlay {
             int count = draggingPower ? state.powerNotches() : TrainControlProfile.BRAKE_NOTCHES;
             requestedNotch = draggingPower ? state.powerNotch() : state.brakeNotch();
             int position = handlePosition(box, requestedNotch, count);
-            var grip = new Box(box.x + box.width / 2 - 11, position - 3, 23, 7);
+            var grip = handleGrip(box, position);
             handleGrabOffset = grip.contains(mouseX, mouseY) ? mouseY - position : 0;
             drag(mouseY);
             return;
         }
         Action action = null;
-        if (layout.reverser().contains(mouseX, mouseY)
-                && state.powerNotch() == 0 && state.brakeNotch() == 0) action = Action.REVERSER_NEXT;
-        else if (layout.emergency().contains(mouseX, mouseY) && (!state.emergency() || state.speed() == 0)) {
+        if (layout.emergency().contains(mouseX, mouseY) && (!state.emergency() || state.speed() == 0)) {
             action = state.emergency() ? Action.EMERGENCY_RELEASE : Action.EMERGENCY_APPLY;
         } else if (layout.headLight().contains(mouseX, mouseY)) {
             TrainDrivingClient.toggleLight(true);
@@ -438,7 +498,15 @@ public final class TrainDrivingOverlay {
         if (TrainIrControlPanel.scroll(mouseX, mouseY, delta)) return;
         var state = TrainDrivingClient.state();
         var layout = layout();
-        if (state.emergency() || draggingPower != null || delta == 0) return;
+        if (draggingPower != null || draggingReverser || delta == 0) return;
+        if (layout.reverser().contains(mouseX, mouseY)) {
+            if (reverserEnabled(state)) {
+                int target = Math.clamp(state.reverser().direction() + (delta > 0 ? 1 : -1), -1, 1);
+                if (target != state.reverser().direction()) TrainDrivingClient.send(Action.REVERSER_SET, target);
+            }
+            return;
+        }
+        if (state.emergency()) return;
         boolean power = layout.power().contains(mouseX, mouseY);
         if (!power && !layout.brake().contains(mouseX, mouseY)) return;
         TrainDrivingClient.send(power ? (delta > 0 ? Action.POWER_UP : Action.POWER_DOWN)
@@ -446,24 +514,39 @@ public final class TrainDrivingOverlay {
     }
 
     public static void drag(double mouseY) {
-        if (draggingPower == null) return;
+        if (draggingPower == null && !draggingReverser) return;
         var state = TrainDrivingClient.state();
+        if (draggingReverser) {
+            if (!reverserEnabled(state)) { release(); return; }
+            int target = handleTarget(layout().reverser(), mouseY, 2);
+            if (target != requestedNotch) {
+                requestedNotch = target;
+                TrainDrivingClient.send(Action.REVERSER_SET, target - 1);
+            }
+            return;
+        }
         if (state.emergency()) { release(); return; }
         boolean power = draggingPower;
         var box = power ? layout().power() : layout().brake();
         int count = power ? state.powerNotches() : TrainControlProfile.BRAKE_NOTCHES;
-        int target = (int) Math.round(Math.clamp((box.y + HANDLE_BOTTOM - mouseY + handleGrabOffset)
-                / (HANDLE_BOTTOM - HANDLE_TOP), 0, 1) * count);
+        int target = handleTarget(box, mouseY, count);
         if (target != requestedNotch) {
             requestedNotch = target;
             TrainDrivingClient.send(power ? Action.POWER_SET : Action.BRAKE_SET, target);
         }
     }
 
+    private static int handleTarget(Box box, double mouseY, int count) {
+        int bottom = handleBottom(box);
+        return (int) Math.round(Math.clamp((box.y + bottom - mouseY + handleGrabOffset)
+                / (bottom - HANDLE_TOP), 0, 1) * count);
+    }
+
     public static void release() {
         TrainIrControlPanel.finishDrag();
         if (draggingPower != null) TrainDrivingClient.send(Action.HANDLE_RELEASE);
         draggingPower = null;
+        draggingReverser = false;
         handleGrabOffset = 0;
         requestedNotch = -1;
     }

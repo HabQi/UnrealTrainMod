@@ -1,7 +1,7 @@
 {
   "itemGroup.unrealtrainmod": "UnrealTrainMod",
   "item.unrealtrainmod.hacksaw": "钢锯",
-  "item.unrealtrainmod.hacksaw.tooltip": "主手持钢锯左键拆除 UTM 铁轨或绝缘子；道岔整体拆除，占用轨道禁止操作，绝缘子关联电线一并清理。",
+  "item.unrealtrainmod.hacksaw.tooltip": "仅能拆除 UTM 轨道、道岔和绝缘子，不能破坏普通方块或攻击其他实体；占用轨道禁止拆除，绝缘子关联电线一并清理。",
   "item.unrealtrainmod.hacksaw.required": "只能使用钢锯左键拆除 UTM 铁轨。",
   "item.unrealtrainmod.hacksaw.removed": "已拆除所选轨道。",
   "item.unrealtrainmod.hacksaw.blocked": "轨道或道岔被车辆占用，暂不能拆除。",
@@ -30,12 +30,27 @@
   "unrealtrainmod.configuration.category.debugLogs": "Debug日志",
   "unrealtrainmod.configuration.category.performance": "性能",
   "unrealtrainmod.configuration.category.general": "常规",
+  "unrealtrainmod.configuration.maxPackageTextureSize": "资源包贴图尺寸上限",
+  "unrealtrainmod.configuration.maxPackageTextureSize.tooltip": "车辆、轨道和电线基色贴图的最长边上限，范围 0～16384，默认 2048；0 保留原尺寸。保持宽高比，不放大小图；按像素中心最近邻采样保留 Alpha 阈值及通道原值，图集页也遵守上限。修改后需 F3+T 或重启，过低的上限会损失细节。",
+  "unrealtrainmod.configuration.pbrQuality": "资源包 PBR 质量",
+  "unrealtrainmod.configuration.pbrQuality.tooltip": "默认低清。关闭：使用 Iris 默认法线／材质通道，不解码包内 PBR；低清：最终辅助贴图最长边不超过 1024；完整：按基色尺寸对齐后不额外缩小。最近邻采样保留打包通道原值。用于启用光影后的车辆和轨道，修改后需 F3+T 或重启。",
+  "unrealtrainmod.configuration.pbrQuality.OFF": "关闭",
+  "unrealtrainmod.configuration.pbrQuality.LOW": "低清（1024）",
+  "unrealtrainmod.configuration.pbrQuality.FULL": "完整",
+  "unrealtrainmod.configuration.baseTextureCacheMiB": "基色 GPU 缓存容量（MiB）",
+  "unrealtrainmod.configuration.baseTextureCacheMiB.tooltip": "软预算范围 64～4096 MiB，默认 512。资源包基色及 Iris Alpha 派生贴图首次使用时上传；CPU 像素继续保留，供透明遮罩和重新上传使用。不包含原版纹理、GUI 图标及 PBR。使用中和保留期内的贴图可超预算，修改后无需重载。",
+  "unrealtrainmod.configuration.nativeGeometryCacheMiB": "原生车辆 GPU 缓存容量（MiB）",
+  "unrealtrainmod.configuration.nativeGeometryCacheMiB.tooltip": "软预算范围 64～4096 MiB，默认 512。车辆在原生世界或预览首次提交时上传几何，闲置时可回收 GPU 缓冲，保留 CPU 模型。不包含 Iris 几何、世界轨道、实例缓冲及动态透明排序索引。使用中和保留期内的模型可超预算，修改后无需重载。",
+  "unrealtrainmod.configuration.pbrTextureCacheMiB": "PBR GPU 缓存容量（MiB）",
+  "unrealtrainmod.configuration.pbrTextureCacheMiB.tooltip": "独立软预算范围 16～4096 MiB，默认 256，用于共享的资源包法线／材质通道。按需解码和上传，回收时失效 Iris 持有者并取消待加载任务，下次使用时异步恢复。使用中和保留期内的材质可超预算，修改后无需重载。",
+  "unrealtrainmod.configuration.gpuCacheRetentionSeconds": "GPU 资源保留时间（秒）",
+  "unrealtrainmod.configuration.gpuCacheRetentionSeconds.tooltip": "基色、原生车辆几何及 PBR 超预算回收前的最短闲置秒数，范围 0～60，默认 10。当前帧和上一帧使用的资源始终受保护，在绘制结束后回收，未超预算时不按时间清理。修改后无需重载；Iris 几何使用单独的保留时间设置。",
   "unrealtrainmod.configuration.sortTranslucentTriangles": "透明三角形排序",
   "unrealtrainmod.configuration.sortTranslucentTriangles.tooltip": "默认关闭。未启用静态透明批次时控制车辆透明三角形排序。原生路径关闭此项后仍保留深度计算、索引上传和相邻绘制合并；Iris 动态透明模式仍使用 CPU 顶点提交。启用静态透明批次时忽略此项。适用于世界、预览与 Iris；关闭时重叠透明表面的混合可能不正确。",
   "unrealtrainmod.configuration.useStaticTranslucentBatches": "静态透明批次（性能对照）",
   "unrealtrainmod.configuration.useStaticTranslucentBatches.tooltip": "默认开启。按材质分组绘制静态透明批次，GPU 路径跳过三角形收集、深度计算、排序及动态索引上传。Iris 复用共享 GPU 几何，在不透明光照完成后绘制，避免每帧重写透明顶点。优先于透明排序开关。适用于世界、预览与 Iris；重叠透明表面的混合可能不正确。",
   "unrealtrainmod.configuration.irisGeometryCacheMiB": "Iris 几何缓存容量（MiB）",
-  "unrealtrainmod.configuration.irisGeometryCacheMiB.tooltip": "软预算范围 64～4096 MiB，默认 1024，按需分配。用于 Iris 车辆、静态透明、物品和轨道部件；提高容量可减少转头时重复上传模型。使用中和最近看过的几何允许超预算，不包含 PBR 纹理及独立车灯缓存。菜单预热最多使用一半预算，修改后无需重载模型。",
+  "unrealtrainmod.configuration.irisGeometryCacheMiB.tooltip": "软预算范围 64～4096 MiB，默认 1024，按需分配。用于 Iris 车辆、静态透明、物品和轨道部件；提高容量可减少转头时重复上传模型。使用中和最近看过的几何允许超预算，不包含 PBR 纹理及独立车灯缓存。菜单只登记范围，GPU 缓冲首次使用时上传，修改后无需重载模型。",
   "unrealtrainmod.configuration.irisGeometryCacheRetentionSeconds": "Iris 几何缓存保留时间（秒）",
   "unrealtrainmod.configuration.irisGeometryCacheRetentionSeconds.tooltip": "超预算时，几何至少闲置多久才允许回收，范围 0～60 秒，默认 10。转动视角后短暂保留刚看过的模型；当前帧和上一帧使用的几何始终受保护。未超预算时不按时间清理。修改后无需重载模型，不改变独立车灯缓存。",
   "unrealtrainmod.configuration.useVehicleInstancing": "车辆不透明实例化（实验性）",
@@ -43,15 +58,15 @@
   "unrealtrainmod.configuration.logVehicleInstancingStats": "输出车辆渲染统计",
   "unrealtrainmod.configuration.logVehicleInstancingStats.tooltip": "默认关闭。按约五秒窗口分别统计世界与预览的绘制、实例、实际提交三角形、车型数量，以及姿态、脚本、入队、不透明和透明阶段的 CPU 均值与阶段最大值。CPU 分项包含嵌套关系，不能相加；分别异步采样不透明与透明阶段 GPU 时间线跨度，不含两个阶段之间的其它游戏绘制，也不是整帧 GPU 时间。另列原生连续范围合批的姿态编号、签名、归组、排序、合并、清理耗时及工作区扩容计数，模型加载时补充 IR 批次构成。关闭后停止统计并在下次车辆队列帧释放查询。",
   "unrealtrainmod.configuration.useTrackRenderStateCache": "轨道渲染状态复用（实验性）",
-  "unrealtrainmod.configuration.useTrackRenderStateCache.tooltip": "默认开启，可关闭后对照。世界轨道绘制共用渲染类型、Shader 程序、贴图采样器和固定方向光；同时开启材质分组时，同材质批次跨网格连续绘制，否则保留原提交顺序。不重建几何，不改变每帧 4 次构建与 4 个批次上传的预算。下一帧起生效；预览与缩略图保持各自的状态作用域。",
-  "unrealtrainmod.configuration.groupTrackDrawsByMaterial": "轨道按材质分组绘制",
-  "unrealtrainmod.configuration.groupTrackDrawsByMaterial.tooltip": "默认开启，在轨道渲染状态复用开启时生效。固定轨道按材质分组；道岔刚性部件还按共享网格与归属区块组织实例绘制。材质间提交顺序会改变。下一帧生效，不重建固定几何或重启动画；预览和缩略图不变。",
+  "unrealtrainmod.configuration.useTrackRenderStateCache.tooltip": "默认开启，可关闭后对照逐范围提交。原生世界轨道共用渲染类型、Shader 程序、贴图采样器和固定方向光；同时开启材质合批时，同区块兼容可见范围合并或使用 MultiDraw。保留逐网格剔除；开关切换不重建共享几何。构建与共享页准备共用每帧最多 4 次、约 2 ms 的预算，静态／光照上传共用 4 次预算。下一帧生效；Iris 独立管理状态，预览与缩略图使用独立满亮缓存。",
+  "unrealtrainmod.configuration.groupTrackDrawsByMaterial": "轨道按材质合批",
+  "unrealtrainmod.configuration.groupTrackDrawsByMaterial.tooltip": "默认开启。固定轨道使用区块材质共享缓冲，精确相邻的可见范围合并，有间隔的兼容范围使用 MultiDraw，保留逐网格视锥剔除；道岔刚性部件继续实例化。原生需要开启轨道渲染状态复用，Iris 独立生效。材质间提交顺序会改变。关闭后对同一共享几何逐范围绘制，下一帧生效，不重建几何或重启动画。",
   "unrealtrainmod.configuration.turnoutAnimationDurationSeconds": "道岔动画时长（秒）",
   "unrealtrainmod.configuration.turnoutAnimationDurationSeconds.tooltip": "仅影响客户端显示。完整行程为 0～10 秒，默认 1 秒；0 立即切换。非零时长的修改从下一次扳道生效。中途反向从当前显示位置按完整行程速度返回，暂停时停止动画。通路、占用和联锁仍立即切换。",
   "unrealtrainmod.configuration.logItemRenderStats": "输出物品渲染统计",
   "unrealtrainmod.configuration.logItemRenderStats.tooltip": "默认关闭。每约五秒输出物品 GUI、手持和世界场景的截图命中、原生／Iris GPU 绘制、三角形、标准路径回退及 CPU 提交耗时；另按具体显示上下文和主画面／阴影列出各路径次数及回退原因，记录截图生成次数和包含像素回读／上传的生成耗时。不是 GPU 或整帧耗时；被资源包替换为普通模型或含动态模型覆盖的物品不进入此统计。",
   "unrealtrainmod.configuration.logTrackRenderStats": "输出轨道渲染统计",
-  "unrealtrainmod.configuration.logTrackRenderStats.tooltip": "默认关闭。每约五秒输出轨道绘制、几何、光照检查、CPU 耗时、动画道岔数、JS 调用与耗时、可见动态部件数，以及静态、实例和活动缓冲的独立上传字节。每 16 帧尝试非阻塞 GPU 采样，区分静止与动画；排除构建、静态上传和无绘制帧，动画样本包含流式上传。它不是整帧 GPU 时间，无有效样本显示 n/a。关闭后在下一次轨道阶段释放查询。",
+  "unrealtrainmod.configuration.logTrackRenderStats.tooltip": "默认关闭。每约五秒输出轨道绘制、几何、光照检查、CPU 耗时和动画统计；另列原始／合并后范围、MultiDraw 调用与覆盖范围、实际节省调用、独立光照上传字节、共享页重建及驻留。纯光照刷新不上传静态顶点或索引。每 16 帧尝试非阻塞 GPU 采样，区分静止与动画，排除构建、预算内上传和无绘制帧；动画样本包含运动流式上传。它不是整帧 GPU 时间，无有效样本显示 n/a。",
   "item.unrealtrainmod.vehicle_placer": "车辆放置器",
   "item.unrealtrainmod.vehicle": "车辆",
   "item.unrealtrainmod.vehicle.place": "右键 UTM 轨道顶面放置所选车辆，沿轨道方向和坡度对齐；生存模式消耗一件。",
@@ -275,7 +290,7 @@
   "commands.unrealtrainmod.train.state.unbound": "尚未绑定轨道，请使用 /utm train bind",
   "commands.unrealtrainmod.train.state.insufficient_route": "路线不足：整列所有转向架必须同时位于同一条有效路线内；请调整线路、车辆参数，或单车的放置及绑定位置",
   "commands.unrealtrainmod.train.state.degenerate_geometry": "车辆姿态无法求解：转向架采样点重合或连线近乎竖直，请调整线路或转向架参数",
-  "commands.unrealtrainmod.train.state.turnout_occupied": "挤岔通行受占用保护限制；整列已停稳，请等待其他编组离开或挤岔通路开通后手动启动",
+  "commands.unrealtrainmod.train.state.turnout_occupied": "已接近挤岔触发点，但保护区内仍有其他编组；整列已停稳，请等待对方退出后手动启动，或换向退出",
   "commands.unrealtrainmod.train.state.turnout_route_unavailable": "道岔进路不允许本列沿此方向通过或当前通路已失效；请检查开通状态与占用",
   "commands.unrealtrainmod.turnout.info": "道岔 %s：%s，%s，状态版本 %s；%s",
   "commands.unrealtrainmod.turnout.port": "端口 %s：%s，位置 (%s, %s, %s)，向外 yaw=%s°",
@@ -399,7 +414,7 @@
   "gui.unrealtrainmod.train_map.occupant": "保护代表车辆：%s",
   "gui.unrealtrainmod.train_map.none": "无",
   "commands.unrealtrainmod.turnout.trailing_info": "从 %s 端反向通行：%s；退出后恢复为%s",
-  "commands.unrealtrainmod.turnout.trailing_approach": "尚未挤开，首个转向架到达 A 前最后 10% 弧长时触发",
+  "commands.unrealtrainmod.turnout.trailing_approach": "尚未挤开，可共享接近；首个转向架到达 A 前最后 10% 弧长时才检查占用并触发",
   "commands.unrealtrainmod.turnout.trailing_return": "已挤开，允许共享开通通路，等待全部编组退出保护区后回弹",
   "gui.unrealtrainmod.track_curve.outward_hint": "已有端点使用有向控制柄，选定终点后不会自动翻向；可手动调节方向，恢复自动可清除本端设置。",
   "gui.unrealtrainmod.track_curve.automatic_horizontal_hint": "自动控制柄随线路计算；另一端使用有向控制柄时，本端随其控制点逐渐收直。修改数值可手动调整。",
@@ -423,17 +438,18 @@
   "gui.unrealtrainmod.driving.console.brake_handle": "制动",
   "gui.unrealtrainmod.driving.console.power_handle": "牵引",
   "gui.unrealtrainmod.driving.console.reverser": "换向：%s",
-  "gui.unrealtrainmod.driving.console.emergency": "紧急制动",
+  "gui.unrealtrainmod.driving.console.reverser_handle": "换向",
+  "gui.unrealtrainmod.driving.console.reverser_hint": "点击刻度、拖动或滚轮选挡：上 F 前进，中 N 空挡，下 R 倒车。",
+  "gui.unrealtrainmod.driving.console.emergency": "EB",
   "gui.unrealtrainmod.driving.console.head_light": "前灯",
   "gui.unrealtrainmod.driving.console.tail_light": "尾灯",
   "gui.unrealtrainmod.driving.console.light_on": "开启",
   "gui.unrealtrainmod.driving.console.light_off": "关闭",
   "gui.unrealtrainmod.driving.console.light_hint": "%s：%s\n点击开关当前车辆对应的 RTM 灯光贴图层；亮起区域由资源包决定。",
-  "gui.unrealtrainmod.driving.console.emergency_release": "解除紧急",
   "gui.unrealtrainmod.driving.console.left_door": "左门",
   "gui.unrealtrainmod.driving.console.right_door": "右门",
   "gui.unrealtrainmod.driving.console.handle_hint": "左制动 0～B8，右牵引 0～P5。点击刻度或拖动选挡，上增下减；滚轮每次一挡。选择非零制动会收回牵引，选择非零牵引会缓解制动；实际制动力归零后才恢复牵引。回 0 不恢复另一手柄的旧挡位。键盘向另一侧操作时先一次回 0，再按逐挡增加。",
-  "gui.unrealtrainmod.driving.console.emergency_hint": "立即施加紧急制动，两个手柄回 0 并锁定；停稳后才能解除。",
+  "gui.unrealtrainmod.driving.console.emergency_hint": "点击 EB 立即施加紧急制动，牵引和制动手柄回 0 并锁定；停稳后再次点击 EB 解除。",
   "gui.unrealtrainmod.driving.console.door_hint": "点击%s本车车门；开门进度：%s%%。左右以本车车头为准。",
   "gui.unrealtrainmod.driving.console.close": "关闭",
   "gui.unrealtrainmod.driving.console.open": "开启",
@@ -509,7 +525,7 @@
   ,"gui.unrealtrainmod.driving.console.monitor_collapse": "点击收起运行监控"
   ,"gui.unrealtrainmod.driving.ir.3d.press": "按住鼠标左键触发，松开复位"
   ,"gui.unrealtrainmod.driving.ir.3d.toggle": "点击鼠标左键切换开／关"
-  ,"gui.unrealtrainmod.driving.ir.3d.drag": "按住左键上下拖动，或滚轮调节"
+  ,"gui.unrealtrainmod.driving.ir.3d.drag": "左键右拖／下拖增加，左拖／上拖减少；横向灵敏度 1.5 倍。滚轮向下增加、向上减少"
   ,"gui.unrealtrainmod.driving.ir.3d.driving_required": "需要驾驶这辆车才能操作此控件"
   ,"gui.unrealtrainmod.driving.ir.3d.key_required": "主手或副手持钥匙可操作此控件"
   ,"item.unrealtrainmod.insulator": "绝缘子"
@@ -518,7 +534,7 @@
   ,"wiring.unrealtrainmod.selected": "当前模型：%s"
   ,"wiring.unrealtrainmod.select_hint": "右击空气选择模型；物品可重复使用"
   ,"wiring.unrealtrainmod.wire_hint": "依次右击两个绝缘子连接；潜行右击空气取消选点"
-  ,"wiring.unrealtrainmod.connector_hint": "右击方块表面放置，初始水平朝向面向玩家；主手持钢锯左击拆除并清理关联电线"
+  ,"wiring.unrealtrainmod.connector_hint": "右击方块表面放置，初始水平朝向面向玩家，侧面放置再顺时针转 90°；主手持钢锯左击拆除并清理关联电线"
   ,"wiring.unrealtrainmod.unselected": "请先右击空气选择可用模型"
   ,"wiring.unrealtrainmod.start": "已选择起点；右击另一个绝缘子连接，再点起点取消"
   ,"wiring.unrealtrainmod.remove_start": "已选择拆线起点；空手潜行右击另一端选择电线型号"
@@ -544,4 +560,5 @@
   ,"wiring.unrealtrainmod.angle_axis": "%s 旋转／度"
   ,"wiring.unrealtrainmod.remove_title": "选择要拆除的电线型号"
   ,"wiring.unrealtrainmod.remove": "拆除此段"
+  ,"gui.unrealtrainmod.font.chinese_unicode": "选择中文时，游戏全局自动启用 Unicode 字体。"
 }

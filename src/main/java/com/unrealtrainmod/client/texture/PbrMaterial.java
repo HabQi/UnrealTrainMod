@@ -7,6 +7,8 @@ package com.unrealtrainmod.client.texture;
 import com.mojang.blaze3d.platform.NativeImage;
 import com.mojang.blaze3d.platform.TextureUtil;
 import com.mojang.blaze3d.systems.RenderSystem;
+import com.unrealtrainmod.client.ClientConfig;
+import com.unrealtrainmod.client.GpuResidency;
 import net.minecraft.client.renderer.texture.AbstractTexture;
 import net.minecraft.server.packs.resources.ResourceManager;
 import org.slf4j.LoggerFactory;
@@ -15,6 +17,7 @@ import org.lwjgl.opengl.GL11;
 /** Base and alpha-derived textures share these channels; Iris owns independently closeable views. */
 final class PbrMaterial {
     private final PbrSource source;
+    private final ClientConfig.PbrQuality quality = ClientConfig.PBR_QUALITY.get();
     private final Slot[] slots = new Slot[2];
     private final PbrLoadQueue.Job[] loads = new PbrLoadQueue.Job[2];
     private final boolean[] failed = new boolean[2];
@@ -24,8 +27,10 @@ final class PbrMaterial {
 
     void retain() { owners++; }
     void release() { if (--owners == 0) clear(); }
+    void used() { GpuResidency.used(this); }
 
     void clear() {
+        GpuResidency.released(this);
         for (int i = 0; i < slots.length; i++) {
             if (loads[i] != null) { loads[i].discard(); loads[i] = null; }
             if (slots[i] != null) { slots[i].release(); slots[i] = null; }
@@ -35,14 +40,15 @@ final class PbrMaterial {
 
     AbstractTexture acquire(PbrSource.Channel channel, int defaultPixel, boolean blur) {
         int index = channel.ordinal();
-        if (!source.has(channel) || failed[index]) return null;
+        if (quality == ClientConfig.PbrQuality.OFF || !source.has(channel) || failed[index]) return null;
         var slot = slots[index];
         if (slot == null) {
-            if (loads[index] == null) loads[index] = PbrLoadQueue.enqueue(this, source, channel, defaultPixel, blur);
+            if (loads[index] == null) loads[index] = PbrLoadQueue.enqueue(this, source, channel, defaultPixel, blur,
+                    quality == ClientConfig.PbrQuality.LOW ? 1024 : 0);
             return null;
         }
         slot.references++;
-        return new View(slot);
+        return new View(slot, this);
     }
 
     void upload(PbrSource.Channel channel, NativeImage image, boolean blur) {
@@ -55,6 +61,9 @@ final class PbrMaterial {
             var slot = new Slot(new ImageTexture(image, blur), (long)image.getWidth() * image.getHeight() * 4);
             slots[index] = slot;
             PbrStats.uploaded(slot.bytes);
+            long bytes = 0;
+            for (var resident : slots) if (resident != null) bytes += resident.bytes;
+            GpuResidency.uploaded(this, GpuResidency.Kind.PBR, bytes, this::evict);
         } catch (RuntimeException exception) {
             failed[index] = true;
             PbrStats.failure();
@@ -66,6 +75,11 @@ final class PbrMaterial {
         }
         // Discard cached default holders only after the shared channel is ready.
         MaterialTexture.invalidatePbr(this);
+    }
+
+    private void evict() {
+        MaterialTexture.invalidatePbr(this);
+        clear();
     }
 
     private static final class Slot {
@@ -97,9 +111,10 @@ final class PbrMaterial {
 
     private static final class View extends AbstractTexture {
         private final Slot slot;
+        private final PbrMaterial material;
         private boolean released;
-        View(Slot slot) { this.slot = slot; }
-        @Override public int getId() { return slot.texture.getId(); }
+        View(Slot slot, PbrMaterial material) { this.slot = slot; this.material = material; }
+        @Override public int getId() { material.used(); return slot.texture.getId(); }
         @Override public void load(ResourceManager resources) {}
         @Override public void close() { releaseId(); }
         // Iris calls both close() and releaseId(). Neither may delete another holder's shared channel.

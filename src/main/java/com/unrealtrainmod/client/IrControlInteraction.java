@@ -51,7 +51,7 @@ public final class IrControlInteraction {
     private static long sequence;
     private static Hit hovered, held;
     private static UUID interaction;
-    private static double grabY;
+    private static double grabX, grabY;
     private static float initial, target, sent;
 
     private IrControlInteraction() {}
@@ -208,6 +208,7 @@ public final class IrControlInteraction {
         } else {
             held = hit;
             interaction = id;
+            grabX = x;
             grabY = y;
             initial = value(hit);
             target = sent = hit.part().control().type() == IrControlDefinition.Type.PRESS ? 1 : quantize(hit, initial);
@@ -215,9 +216,9 @@ public final class IrControlInteraction {
         }
     }
 
-    public static void drag(double y) {
+    public static void drag(double x, double y) {
         if (held != null && held.part().control().type() == IrControlDefinition.Type.CONTINUOUS) {
-            target = quantize(held, initial + (float)((grabY - y) / 120));
+            target = quantize(held, initial + (float)(((x - grabX) * 1.5 + y - grabY) / 120));
         }
     }
 
@@ -240,12 +241,13 @@ public final class IrControlInteraction {
         var driver = hovered.control().driver();
         int notches = hovered.model().ir().throttleNotches();
         float current = value(hovered);
+        float direction = -(float)Math.signum(delta);
         float step = driver == IrReadout.THROTTLE ? 1f / notches
                 : driver == IrReadout.TRAIN_BRAKE ? 1f / TrainControlProfile.BRAKE_NOTCHES
                 : driver == IrReadout.REVERSER ? 0.5f
-                : driver == IrReadout.THROTTLE_BRAKE ? 1f / (2 * (current > 0.5f || current == 0.5f && delta > 0
+                : driver == IrReadout.THROTTLE_BRAKE ? 1f / (2 * (current > 0.5f || current == 0.5f && direction > 0
                         ? notches : TrainControlProfile.BRAKE_NOTCHES)) : 0.05f;
-        request(hovered, UUID.randomUUID(), quantize(hovered, current + (float)Math.signum(delta) * step), Operation.CLICK);
+        request(hovered, UUID.randomUUID(), quantize(hovered, current + direction * step), Operation.CLICK);
     }
 
     public static void release() {
@@ -290,7 +292,8 @@ public final class IrControlInteraction {
         var tip = Component.literal(hit.control().label()).append("  ")
                 .append(String.format(Locale.ROOT, "%.2f", held != null ? target : value(hit)))
                 .append("\n").append(Component.translatable("gui.unrealtrainmod.driving.ir.3d." + key));
-        graphics.renderTooltip(Minecraft.getInstance().font, Minecraft.getInstance().font.split(tip, 240),
+        var font = Minecraft.getInstance().font;
+        graphics.renderTooltip(font, font.split(tip, 240),
                 (int)TrainCursorClient.mouseX(), (int)TrainCursorClient.mouseY());
     }
 }

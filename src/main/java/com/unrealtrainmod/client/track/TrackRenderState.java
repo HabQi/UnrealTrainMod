@@ -80,13 +80,6 @@ final class TrackRenderState implements AutoCloseable {
         buffer.draw();
     }
 
-    /** Authored rail batch: its own texture and cull mode, fixed world-space direction lights. */
-    void drawTextured(RenderType type, VertexBuffer buffer, Matrix4f modelView, Matrix4f projection) {
-        begin(type, VertexFormat.Mode.TRIANGLES, modelView, projection);
-        buffer.bind();
-        buffer.draw();
-    }
-
     void prepareParts(RenderType type, Matrix4f modelView, Matrix4f projection) {
         begin(type, VertexFormat.Mode.TRIANGLES, modelView, projection);
     }

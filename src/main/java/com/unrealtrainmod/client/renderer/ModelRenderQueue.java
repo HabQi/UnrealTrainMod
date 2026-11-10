@@ -192,6 +192,7 @@ public final class ModelRenderQueue implements ModelDrawSink, AutoCloseable {
 
     @Override public void submitGeometry(LoadedModel.Source source, PartSelection selection, PoseStack.Pose pose,
                                           int light, boolean directionalLighting, SurfaceLighting lighting) {
+        if (selection.batches().isEmpty()) return;
         submitBatches(source.gpu(), selection.batches(), pose, lighting.light(light), directionalLighting, lighting.emission());
     }
 

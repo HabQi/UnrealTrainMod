@@ -45,18 +45,31 @@ public final class TrackWorldRenderer {
     private record SlowBuild(String resource, String type) {}
     private static final Set<SlowBuild> REPORTED_SLOW_BUILDS = new HashSet<>();
 
-    /** Measures build work only: drawing/uploading cached geometry does not consume this budget. */
-    private static final class BuildBudget {
+    /** Geometry creation and page packing share the task/time budget; cached draws do not consume it. */
+    static final class BuildBudget {
         private int remaining = BUILDS_PER_FRAME;
         private long elapsed;
         private TrackRenderStats stats;
 
         private BuildBudget(TrackRenderStats stats) { this.stats = stats; }
 
-        private boolean available() {
+        boolean available() {
+            // Leave one task for pages already requested by this view, rather than spending every slot on new sources.
+            int reserved = TrackStaticBuffers.WORLD.needsPageBuild() ? 1 : 0;
+            if (remaining > reserved && elapsed < BUILD_BUDGET_NANOS) return true;
+            if (stats != null) stats.budgetSkipped();
+            return false;
+        }
+
+        boolean pageAvailable() {
             if (remaining > 0 && elapsed < BUILD_BUDGET_NANOS) return true;
             if (stats != null) stats.budgetSkipped();
             return false;
+        }
+
+        void pageFinished(long start) {
+            remaining--;
+            elapsed += System.nanoTime() - start;
         }
 
         private void finished(long start, String modelId, UUID id, int x, int z, String type) {
@@ -82,6 +95,9 @@ public final class TrackWorldRenderer {
     private static int frameUploads = UPLOADS_PER_FRAME;
     private static double frameTime = Double.NaN;
     private static long frame;
+    private static final TrackDrawQueue DRAW_QUEUE = new TrackDrawQueue();
+
+    static void releaseDrawQueue() { DRAW_QUEUE.close(); }
 
     public static void beginFrame() {
         frame++;
@@ -111,7 +127,9 @@ public final class TrackWorldRenderer {
         TrackRenderStats stats = TrackRenderStats.begin(level, shadow ? "shadow" : "world",
                 iris ? (groupMaterials ? "IrisCachedGroups" : "IrisCached") : groupMaterials ? "materialGroups" : stateCache ? "stateCache" : "legacy");
         long stageStart = stats == null ? 0L : System.nanoTime();
-        TrackDrawQueue queue = groupMaterials ? new TrackDrawQueue() : null;
+        TrackDrawQueue queue = DRAW_QUEUE;
+        queue.begin(groupMaterials, stateCache);
+        TrackStaticBuffers.WORLD.beginView();
         var budget = frameBudget;
         budget.stats = stats;
         int uploads = frameUploads;
@@ -122,7 +140,7 @@ public final class TrackWorldRenderer {
         Matrix4f modelView = new Matrix4f();
         try (var irisMetrics = iris ? IrisRenderStats.begin(IrisRenderStats.TRACK, shadow) : null;
              var irisScope = iris ? new IrisDrawScope() : null;
-             var protection = stateCache || iris ? null : new TrackRenderState(null);
+             var protection = stateCache || iris ? null : new TrackRenderState(stats);
              var state = stateCache ? new TrackRenderState(stats) : null) {
             long irisPrepareStart = IrisRenderStats.clock();
             // Script failures are recorded during a build; rebuild those meshes at a point outside cache iteration.
@@ -155,7 +173,7 @@ public final class TrackWorldRenderer {
                             entry.meshes.put(chunk, mesh);
                         } finally { budget.finished(buildStart, entry.data.modelId(), id, x, z, "trackMesh"); }
                     }
-                    uploads = draw(stats, state, queue, event, level, camera, modelView, uploads, mesh,
+                    uploads = draw(stats, queue, event, level, camera, modelView, uploads, mesh,
                             TrackRenderStats.STRUCTURE_TRACK);
                 }
             }
@@ -191,7 +209,7 @@ public final class TrackWorldRenderer {
                         if (group == null && budget.available()) {
                             long start = System.nanoTime();
                             try {
-                                group = List.of(new RailTrackGpuMesh(entry.staticSnapshot.build(x, z), false));
+                                group = List.of(new RailTrackGpuMesh(entry.staticSnapshot.build(x, z)));
                             } catch (RuntimeException | LinkageError exception) {
                                 entry.scriptFailed = true;
                                 entry.assemblyScript.close();
@@ -204,7 +222,7 @@ public final class TrackWorldRenderer {
                             }
                             entry.meshes.put(chunk, group);
                         }
-                        if (group != null) uploads = drawAll(stats, state, queue, event, level, camera, modelView, uploads, group);
+                        if (group != null) uploads = drawAll(stats, queue, event, level, camera, modelView, uploads, group);
                         continue;
                     }
                     if (simple) {
@@ -236,7 +254,7 @@ public final class TrackWorldRenderer {
                             if (tongue) for (var mesh : group) {
                                 if (mesh instanceof TrackMorphMesh moving) moving.movement(entry.animation.position(time));
                             }
-                            uploads = drawAll(stats, state, queue, event, level, camera, modelView, uploads, group);
+                            uploads = drawAll(stats, queue, event, level, camera, modelView, uploads, group);
                         }
                     } else {
                         var group = entry.meshes.get(chunk);
@@ -257,25 +275,31 @@ public final class TrackWorldRenderer {
                                 entry.missingReported = true;
                             } finally { budget.finished(buildStart, entry.data.modelId(), entry.data.id(), x, z, "assemblyMesh"); }
                         }
-                        uploads = drawAll(stats, state, queue, event, level, camera, modelView, uploads, group);
+                        uploads = drawAll(stats, queue, event, level, camera, modelView, uploads, group);
                     }
                 }
             }
-            // Uploads may change GL bindings. Begin grouped submission only after all uploads are done.
-            if (queue != null && !iris) queue.draw(state, event.getProjectionMatrix(), stats);
+            // Build and upload all replacement pages before resolving any GPU range references.
+            uploads = TrackStaticBuffers.WORLD.prepare(level, budget, uploads, stats);
+            long resolveStart = stats == null ? 0 : System.nanoTime();
+            queue.resolve(TrackStaticBuffers.WORLD, stats);
+            if (stats != null) stats.grouped(System.nanoTime() - resolveStart);
+            TrackStaticBuffers.WORLD.collectStats(stats);
+            if (!iris) queue.draw(state != null ? state : protection, event.getProjectionMatrix(), stats);
             // Shared track scope also owns rigid shaders; each renderer releases its instance attributes.
             for (var entry : dynamic) {
                 uploads = iris ? entry.parts.drawIris(entry, event, level, time, queue, uploads, stats)
                         : state != null ? entry.parts.draw(state, entry, event, level, time, true, groupMaterials, uploads, stats)
                         : entry.parts.draw(entry, event, level, time, false, groupMaterials, uploads, stats);
             }
-            if (iris) IrisRenderStats.prepare(irisPrepareStart);
-            if (queue != null && iris) {
-                irisScope.beginTrackBatch();
+            if (iris) {
+                IrisRenderStats.prepare(irisPrepareStart);
+                if (groupMaterials) irisScope.beginTrackBatch();
                 queue.draw(null, event.getProjectionMatrix(), stats);
             }
             cache.collectStats(stats, time);
         } finally {
+            queue.clear();
             frameUploads = uploads;
             if (stats != null) {
                 stats.stage(System.nanoTime() - stageStart);
@@ -319,17 +343,17 @@ public final class TrackWorldRenderer {
         }
     }
 
-    private static int drawAll(TrackRenderStats stats, TrackRenderState state, TrackDrawQueue queue, RenderLevelStageEvent event,
+    private static int drawAll(TrackRenderStats stats, TrackDrawQueue queue, RenderLevelStageEvent event,
                                ClientLevel level, Vec3 camera, Matrix4f modelView, int uploads,
                                List<TrackRenderMesh> group) {
         for (var mesh : group) {
-            uploads = draw(stats, state, queue, event, level, camera, modelView, uploads, mesh,
+            uploads = draw(stats, queue, event, level, camera, modelView, uploads, mesh,
                     TrackRenderStats.STRUCTURE_ASSEMBLY);
         }
         return uploads;
     }
 
-    private static int draw(TrackRenderStats stats, TrackRenderState state, TrackDrawQueue queue, RenderLevelStageEvent event,
+    private static int draw(TrackRenderStats stats, TrackDrawQueue queue, RenderLevelStageEvent event,
                             ClientLevel level, Vec3 camera, Matrix4f modelView, int uploads,
                             TrackRenderMesh mesh, int structure) {
         if (stats != null) stats.candidate();
@@ -339,31 +363,27 @@ public final class TrackWorldRenderer {
         }
         if (!event.getFrustum().isVisible(mesh.bounds())) return uploads;
         if (stats != null) stats.visible();
-        // Uploaded meshes also check for local light changes; old buffers remain drawable during updates.
-        uploads -= mesh.upload(level, uploads, stats);
-        if (!mesh.isUploaded()) {
-            if (stats != null) stats.pending();
-            return uploads;
-        }
-        var origin = mesh.origin();
-        modelView.set(event.getModelViewMatrix()).translate((float)(origin.x() - camera.x),
-                (float)(origin.y() - camera.y), (float)(origin.z() - camera.z));
-        long drawStart = stats == null ? 0L : System.nanoTime();
-        if (queue != null) {
-            mesh.enqueue(queue, new Matrix4f(modelView), structure);
-            if (stats != null) stats.grouped(System.nanoTime() - drawStart);
-            return uploads;
-        }
-        if (IrisCompat.active()) {
-            mesh.drawIris(modelView, event.getProjectionMatrix(), stats);
-            IrisRenderStats.gpu(mesh.drawCalls(), mesh.drawTriangles());
-            IrisRenderStats.submit(drawStart);
-        }
-        else if (state != null) mesh.draw(state, modelView, event.getProjectionMatrix());
-        else mesh.draw(modelView, event.getProjectionMatrix(), stats);
-        if (stats != null) {
-            stats.drawn(mesh.source(), structure, mesh.drawCalls(), mesh.drawVertices(), mesh.drawTriangles(),
-                    mesh.storedVertices(), System.nanoTime() - drawStart);
+        if (mesh instanceof TrackStaticMesh fixed) {
+            TrackStaticBuffers.WORLD.request(fixed, structure);
+            var origin = mesh.origin();
+            modelView.set(event.getModelViewMatrix()).translate((float)(origin.x() - camera.x),
+                    (float)-camera.y, (float)(origin.z() - camera.z));
+            long start = stats == null ? 0 : System.nanoTime();
+            queue.addStatic(fixed, new Matrix4f(modelView), structure);
+            if (stats != null) stats.grouped(System.nanoTime() - start);
+        } else {
+            var moving = (TrackMorphMesh)mesh;
+            uploads -= moving.upload(level, uploads, stats);
+            if (!moving.isUploaded()) {
+                if (stats != null) stats.pending();
+                return uploads;
+            }
+            var origin = moving.origin();
+            modelView.set(event.getModelViewMatrix()).translate((float)(origin.x() - camera.x),
+                    (float)(origin.y() - camera.y), (float)(origin.z() - camera.z));
+            long start = stats == null ? 0 : System.nanoTime();
+            moving.enqueue(queue, new Matrix4f(modelView), structure);
+            if (stats != null) stats.grouped(System.nanoTime() - start);
         }
         return uploads;
     }
@@ -371,7 +391,7 @@ public final class TrackWorldRenderer {
     private static TrackRenderMesh build(ClientTrackCache.Entry entry, ClientRailModelManager.Model model, UUID id, int x, int z) {
         if (entry.staticSnapshot != null && model != null && model.script() != null && !model.script().failed()) {
             try {
-                return new RailTrackGpuMesh(entry.staticSnapshot.build(x, z), false);
+                return new RailTrackGpuMesh(entry.staticSnapshot.build(x, z));
             } catch (RuntimeException | LinkageError exception) {
                 model.script().close();
                 entry.staticSnapshot = null;
@@ -404,7 +424,7 @@ public final class TrackWorldRenderer {
                     double scale = model.scaleForGauge(gauge);
                     // No script, a failed script or a dynamic assembly: flat material merge with every part.
                     return new RailTrackGpuMesh(RailTrackMeshBuilder.build(geometry, staticSources(model), x, z,
-                            scale, model.period(), RailTrackMeshBuilder.Filter.ALL), false);
+                            scale, model.period(), RailTrackMeshBuilder.Filter.ALL));
                 } catch (IllegalArgumentException exception) {
                     LOGGER.warn("Cannot build rail {} using {} in chunk {}, {}: {}; using native appearance",
                             id, modelId, x, z, exception.getMessage());

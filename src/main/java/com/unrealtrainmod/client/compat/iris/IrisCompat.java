@@ -128,6 +128,7 @@ public final class IrisCompat {
     }
 
     public static void onFramePre(RenderFrameEvent.Pre event) {
+        com.unrealtrainmod.client.GpuResidency.beginFrame();
         if (!initialized) initialize();
         boolean next = false;
         if (inUse != null) {
@@ -135,8 +136,10 @@ public final class IrisCompat {
             catch (Throwable exception) { throw new IllegalStateException("Cannot read Iris shader state", exception); }
         }
         if (next != active) {
-            if (!next) com.unrealtrainmod.client.texture.MaterialTexture.releasePbr();
-            else com.unrealtrainmod.client.texture.MaterialTexture.invalidatePbr();
+            if (!next) {
+                com.unrealtrainmod.client.texture.MaterialTexture.releasePbr();
+                IrisMaterials.clear();
+            } else com.unrealtrainmod.client.texture.MaterialTexture.invalidatePbr();
             active = next;
             ClientTrackCache.INSTANCE.invalidateGpuBuffers();
             com.unrealtrainmod.client.renderer.TrainModelRenderer.clearWorld();
@@ -146,16 +149,15 @@ public final class IrisCompat {
         }
         IrisVehicleReprojection.beginFrame();
         IrisGeometryCache.beginFrame();
+        if (active) com.unrealtrainmod.client.ClientModelManager.INSTANCE.prewarmIris();
         IrisRenderStats.beginFrame();
         TrackWorldRenderer.beginFrame();
         com.unrealtrainmod.client.texture.PbrLoadQueue.beginFrame(active);
     }
 
     public static void onFramePost(RenderFrameEvent.Post event) {
-        if (active) {
-            if (Minecraft.getInstance().level == null) com.unrealtrainmod.client.ClientModelManager.INSTANCE.prewarmIris();
-            else IrisGeometryCache.endFrame();
-        }
+        if (active && Minecraft.getInstance().level != null) IrisGeometryCache.endFrame();
+        com.unrealtrainmod.client.GpuResidency.endFrame();
         com.unrealtrainmod.client.texture.PbrStats.logIfDue();
     }
 

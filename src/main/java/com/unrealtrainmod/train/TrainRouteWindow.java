@@ -61,8 +61,13 @@ final class TrainRouteWindow {
     }
 
     static TrainRouteWindow initial(TrackGraph graph, TrainAnchor anchor, TrainConsist train) {
+        return initial(graph, anchor, train, true);
+    }
+
+    static TrainRouteWindow initial(TrackGraph graph, TrainAnchor anchor, TrainConsist train, boolean existingFootprint) {
         var seed = new TrackConnection(anchor.segmentId(), anchor.fromStart());
-        double length = graph.segment(anchor.segmentId()).geometry().getLength();
+        var segment = graph.segment(anchor.segmentId());
+        double length = segment.geometry().getLength();
         double local = anchor.fromStart() ? anchor.distance() : length - anchor.distance();
         double min = 0, max = 0;
         for (double offset : TrainMotion.sampleOffsets(train)) {
@@ -78,7 +83,16 @@ final class TrainRouteWindow {
         double ahead = Math.max(64, 2 * Math.abs(speed));
         double before = Math.max(0, (speed > 0 ? REAR_MARGIN : ahead) - (local + min));
         double after = Math.max(0, local + max + (speed > 0 ? ahead : REAR_MARGIN) - length);
-        var extension = TrackRoute.extend(graph, List.of(seed), before, after, context(train, false));
+        var context = existingFootprint ? context(train, false) : TrackTraversalContext.STRICT;
+        // A saved reference may still be on the external track while its body/bogie has entered B or C.
+        // Recover just that existing footprint independently of the saved control direction.
+        if (existingFootprint && graph.assemblyForSegment(segment.id()) == null) {
+            var occupied = new HashSet<>(context.occupiedSegments());
+            if (local + min <= 0) addTrailingExit(graph, seed.fromStart() ? segment.startNodeId() : segment.endNodeId(), occupied);
+            if (local + max >= length) addTrailingExit(graph, seed.fromStart() ? segment.endNodeId() : segment.startNodeId(), occupied);
+            context = new TrackTraversalContext(false, context.forward(), occupied);
+        }
+        var extension = TrackRoute.extend(graph, List.of(seed), before, after, context);
         var window = new TrainRouteWindow(graph, extension.route(), 0,
                 extension.startBoundary(), extension.endBoundary(), speed);
         window.setProgress(window.sampler().distance(new TrackCursor(extension.prefixCount(), local)));
@@ -94,6 +108,19 @@ final class TrainRouteWindow {
         // Initial binding/recovery is strict; the first read-only maintenance may discover trailing candidates.
         window.requestRefresh();
         return window;
+    }
+
+    private static void addTrailingExit(TrackGraph graph, UUID node, Set<UUID> occupied) {
+        for (var connection : graph.connections(node)) {
+            var assembly = graph.assemblyForSegment(connection.segmentId());
+            if (assembly == null || !assembly.definition().supportsTrailingPass()) continue;
+            for (var entry : assembly.paths().entrySet()) {
+                var exit = assembly.definition().routes().get(entry.getKey()).exit();
+                if (assembly.ports().get(exit).nodeId().equals(node)) {
+                    for (var step : entry.getValue().steps()) occupied.add(step.segmentId());
+                }
+            }
+        }
     }
 
     TrackRoute route() { return route; }
@@ -133,8 +160,7 @@ final class TrainRouteWindow {
             var core = window.core(train);
             for (int i = core.first(); i < core.end(); i++) occupied.add(window.route().connections().get(i).segmentId());
         }
-        return new TrackTraversalContext(train.cars().stream().map(TrainCarState::entityId).toList(), candidates,
-                train.planningDirection() > 0, occupied);
+        return new TrackTraversalContext(candidates, train.planningDirection() > 0, occupied);
     }
 
     boolean pathsEnabledAt(TrackGraph graph, TrainConsist train, double at, TrackTraversalContext context) {

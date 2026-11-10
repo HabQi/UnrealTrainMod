@@ -4,9 +4,6 @@
  */
 package com.unrealtrainmod.client;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import com.unrealtrainmod.model.ModelSource;
 import com.unrealtrainmod.vehicle.VehicleCatalog;
 import com.unrealtrainmod.vehicle.VehiclePartRole;
@@ -33,7 +30,6 @@ import net.minecraft.util.profiling.ProfilerFiller;
 
 /** Owns loaded vehicle textures and GPU geometry, separate from CPU preparation. */
 public final class ClientModelManager extends SimplePreparableReloadListener<PreparedReload> {
-    private static final Logger LOGGER = LoggerFactory.getLogger(ClientModelManager.class);
     public static final ClientModelManager INSTANCE = new ClientModelManager();
     public static final ResourceLocation WHITE = TextureLoader.WHITE;
     private Map<ResourceLocation, LoadedModel> models = Map.of();
@@ -47,7 +43,6 @@ public final class ClientModelManager extends SimplePreparableReloadListener<Pre
         if (!com.unrealtrainmod.client.compat.iris.IrisPrewarmer.scheduled()) {
             com.unrealtrainmod.client.compat.iris.IrisPrewarmer.schedule(sources.values());
         }
-        com.unrealtrainmod.client.compat.iris.IrisPrewarmer.step();
     }
 
     @Override
@@ -84,16 +79,7 @@ public final class ClientModelManager extends SimplePreparableReloadListener<Pre
             }
             for (var entry : prepared.sources().entrySet()) {
                 var source = entry.getValue();
-                GpuModel gpu = null;
-                if (!source.batches().isEmpty()) {
-                    try {
-                        gpu = GpuModel.upload(source.batches());
-                    } catch (RuntimeException e) {
-                        LOGGER.error("Unable to upload vehicle model {}; using buffered rendering", entry.getKey().model(), e);
-                    }
-                }
-                uploaded.put(entry.getKey(), new LoadedModel.Source(source.parts(), source.visibleParts(),
-                        source.bodyParts(), source.actionSelections(), source.partsByName(), source.irBindings(), gpu));
+                uploaded.put(entry.getKey(), new LoadedModel.Source(source));
             }
             var loaded = new HashMap<ResourceLocation, LoadedModel>();
             for (var vehicle : prepared.vehicles()) {
@@ -150,7 +136,7 @@ public final class ClientModelManager extends SimplePreparableReloadListener<Pre
     }
 
     private static void releaseSources(Map<ModelSource, LoadedModel.Source> sources) {
-        sources.values().forEach(source -> { if (source.gpu() != null) source.gpu().close(); });
+        sources.values().forEach(LoadedModel.Source::close);
     }
 
     public static ResourceLocation id(String path) { return ResourceLocation.fromNamespaceAndPath(UnrealTrainMod.MODID, path); }

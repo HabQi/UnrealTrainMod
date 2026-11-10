@@ -206,12 +206,15 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
             entry.tongues.values().forEach(group -> group.forEach(TrackRenderMesh::close));
             if (entry.parts != null) entry.parts.invalidateInstances();
         }
+        TrackStaticBuffers.WORLD.close();
+        TrackWorldRenderer.releaseDrawQueue();
     }
 
     public void invalidateMeshes() {
         for (Entry entry : entries.values()) entry.close();
         for (var entry : assemblies.values()) entry.close();
         scriptFailures.clear();
+        TrackWorldRenderer.releaseDrawQueue();
     }
 
     /** Marks every mesh built from this prepared model for a static rebuild after its script failed. */
@@ -244,6 +247,8 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
         scriptFailures.clear();
         entries.clear();
         chunks.clear();
+        TrackStaticBuffers.WORLD.close();
+        TrackWorldRenderer.releaseDrawQueue();
         world = null;
         ticks = 0; displayTime = -1;
         // The statistics window keys on the level object; release it with the cache.

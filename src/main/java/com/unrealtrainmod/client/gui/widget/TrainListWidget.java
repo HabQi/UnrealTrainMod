@@ -285,27 +285,21 @@ public final class TrainListWidget<T> extends ObjectSelectionList<TrainListWidge
                     }
                 }
                 var font = owner.minecraft.font;
-                float textScale = 1.5f;
+                float shadowOffset = (float)(1 / owner.minecraft.getWindow().getGuiScale());
                 var label = owner.label.apply(item).copy().withStyle(style -> style.withBold(true));
-                var lines = font.split(label, (int)((divider - 6) / textScale));
-                int count = Math.min(lines.size(), (int)((height - 4) / (font.lineHeight * textScale)));
+                var lines = font.split(label, divider - 6);
+                int count = Math.min(lines.size(), (height - 4) / font.lineHeight);
+                float textX = left + divider / 2.0f;
+                float textY = top + (height - count * font.lineHeight) / 2.0f;
                 graphics.enableScissor(left + 3, top + 2, left + divider - 3, top + height - 2);
                 graphics.pose().pushPose();
                 try {
-                    graphics.pose().translate(left + divider / 2.0f,
-                            top + (height - count * font.lineHeight * textScale) / 2, 0);
-                    graphics.pose().scale(textScale, textScale, 1);
+                    graphics.pose().translate(textX, textY, 0);
                     for (int i = 0; i < count; i++) {
                         var line = lines.get(i);
-                        int x = -font.width(line) / 2;
+                        float x = -font.width(line) / 2.0f;
                         int y = i * font.lineHeight;
-                        graphics.pose().pushPose();
-                        try {
-                            graphics.pose().translate(1 / textScale, 1 / textScale, 0);
-                            graphics.drawString(font, line, x, y, 0xFFFFFFFF, false);
-                        } finally {
-                            graphics.pose().popPose();
-                        }
+                        graphics.drawString(font, line, x + shadowOffset, y + shadowOffset, 0xFFFFFFFF, false);
                         graphics.drawString(font, line, x, y, 0xFF202020, false);
                     }
                 } finally {

@@ -5,9 +5,57 @@
 package com.unrealtrainmod.client;
 
 import net.neoforged.neoforge.common.ModConfigSpec;
+import net.neoforged.neoforge.common.TranslatableEnum;
+import net.minecraft.network.chat.Component;
 
 public final class ClientConfig {
     private static final ModConfigSpec.Builder BUILDER = new ModConfigSpec.Builder();
+
+    public enum PbrQuality implements TranslatableEnum {
+        OFF, LOW, FULL;
+        @Override public Component getTranslatedName() {
+            return Component.translatable("unrealtrainmod.configuration.pbrQuality." + name());
+        }
+    }
+
+    public static final ModConfigSpec.IntValue MAX_PACKAGE_TEXTURE_SIZE = BUILDER
+            .comment("Maximum longest edge of package base textures for vehicles, rails and wiring. Zero keeps original sizes.",
+                    "Default 2048. Preserves aspect ratio, never enlarges images and uses nearest sampling to preserve alpha classes.",
+                    "Requires F3+T or a restart; model alpha classification and atlases use the resized pixels.")
+            .translation("unrealtrainmod.configuration.maxPackageTextureSize")
+            .defineInRange("maxPackageTextureSize", 2048, 0, 16384);
+
+    public static final ModConfigSpec.EnumValue<PbrQuality> PBR_QUALITY = BUILDER
+            .comment("Package PBR quality: OFF uses Iris defaults; LOW limits the final auxiliary image to a 1024-pixel longest edge;",
+                    "FULL keeps the auxiliary image aligned to the prepared base texture without an additional reduction.",
+                    "Nearest sampling preserves packed LabPBR channels. Applies to both normal and specular channels.",
+                    "Default LOW. Requires F3+T or a restart. Native rendering does not load these channels.")
+            .translation("unrealtrainmod.configuration.pbrQuality")
+            .defineEnum("pbrQuality", PbrQuality.LOW);
+
+    public static final ModConfigSpec.IntValue BASE_TEXTURE_CACHE_MIB = BUILDER
+            .comment("Soft GPU budget in MiB for package base textures and Iris alpha-derived textures. Allocated on first use.",
+                    "CPU pixels remain available for alpha masks and re-upload. Does not include vanilla textures, GUI icons or PBR.")
+            .translation("unrealtrainmod.configuration.baseTextureCacheMiB")
+            .defineInRange("baseTextureCacheMiB", 512, 64, 4096);
+
+    public static final ModConfigSpec.IntValue NATIVE_GEOMETRY_CACHE_MIB = BUILDER
+            .comment("Soft GPU budget in MiB for on-demand native vehicle geometry, including previews while shaders are enabled.",
+                    "Does not include Iris geometry or world track buffers. CPU model data remains loaded.")
+            .translation("unrealtrainmod.configuration.nativeGeometryCacheMiB")
+            .defineInRange("nativeGeometryCacheMiB", 512, 64, 4096);
+
+    public static final ModConfigSpec.IntValue PBR_TEXTURE_CACHE_MIB = BUILDER
+            .comment("Separate soft GPU budget in MiB for shared package normal and specular textures. Allocated on demand.")
+            .translation("unrealtrainmod.configuration.pbrTextureCacheMiB")
+            .defineInRange("pbrTextureCacheMiB", 256, 16, 4096);
+
+    public static final ModConfigSpec.DoubleValue GPU_CACHE_RETENTION_SECONDS = BUILDER
+            .comment("Minimum idle seconds before over-budget base textures, native vehicle geometry or PBR can be evicted.",
+                    "Current and previous frame resources are always protected. Under-budget resources are not expired.",
+                    "Budgets and retention changes apply without reloading; active/recent resources may exceed soft budgets.")
+            .translation("unrealtrainmod.configuration.gpuCacheRetentionSeconds")
+            .defineInRange("gpuCacheRetentionSeconds", 10.0, 0.0, 60.0);
 
     public static final ModConfigSpec.DoubleValue TURNOUT_ANIMATION_DURATION_SECONDS = BUILDER
             .comment("Client-only full-stroke turnout animation duration in seconds. Zero switches immediately.",
@@ -36,7 +84,7 @@ public final class ClientConfig {
             .comment("Soft GPU geometry cache budget in MiB for Iris vehicles, static transparency, items and track parts.",
                     "Larger budgets reduce repeated uploads when looking between detailed models; memory is allocated on demand.",
                     "Active and recently used geometry may exceed this budget. PBR textures and the separate light cache are excluded.",
-                    "Menu prewarming uses at most half this budget. Changes apply without reloading models.")
+                    "Menus only prepare range descriptions; geometry uploads on first use. Changes apply without reloading models.")
             .translation("unrealtrainmod.configuration.irisGeometryCacheMiB")
             .defineInRange("irisGeometryCacheMiB", 1024, 64, 4096);
 
@@ -88,9 +136,9 @@ public final class ClientConfig {
 
     public static final ModConfigSpec.BooleanValue USE_TRACK_RENDER_STATE_CACHE = BUILDER
             .comment("Reuse render type, shader program, samplers and direction lights across consecutive native track draws.",
-                    "Enabled by default; disable to compare against the original per-mesh draw path on identical cached geometry.",
+                    "Enabled by default; disable to compare per-range submission on identical shared cached geometry.",
                     "All paths reuse cached geometry and keep the same build/upload budgets without re-laying tracks.",
-                    "When groupTrackDrawsByMaterial is enabled, visible batches are grouped across meshes.",
+                    "With groupTrackDrawsByMaterial, compatible visible ranges share actual GL draws within each chunk.",
                     "Only controls the native backend; Iris uses its own draw state scope.",
                     "Affects world tracks from the next frame; rail preview and thumbnails always use their own",
                     "short-lived state scope.")
@@ -98,9 +146,9 @@ public final class ClientConfig {
             .define("useTrackRenderStateCache", true);
 
     public static final ModConfigSpec.BooleanValue GROUP_TRACK_DRAWS_BY_MATERIAL = BUILDER
-            .comment("Group visible world track batches by render type across meshes before drawing.",
+            .comment("Batch visible world track ranges by material using shared chunk buffers and multi-draw.",
                     "Enabled by default; native rendering requires useTrackRenderStateCache, while Iris groups independently.",
-                    "Fixed meshes reduce state changes; rigid turnout parts also group shared-mesh instances.",
+                    "Preserves per-mesh culling; adjacent ranges merge and disjoint ranges use multi-draw. Rigid parts keep instancing.",
                     "Changes submission order between materials; coplanar overlays may be covered differently.",
                     "Takes effect on the next frame without rebuilding meshes; previews and thumbnails are unchanged.")
             .translation("unrealtrainmod.configuration.groupTrackDrawsByMaterial")
@@ -112,8 +160,8 @@ public final class ClientConfig {
                     "native or rail-model geometry and by segment or assembly, submitted vertices and triangles,",
                     "builds, VBO uploads and bytes, render type setups, shader binds, program switches, sampled",
                     "light positions, and CPU time for the whole track stage and its sub-phases, including grouping.",
-                    "Also reports stored vertex records, explicit index upload bytes, and ordinary rail chunk/material",
-                    "batch duplication in the materialGroups path. Duplication is potential merge space, not saved draws.",
+                    "Also reports stored vertex records, static vertex/index bytes, separate UV2 light bytes, and chunk/material",
+                    "range counts before/after merging, actual saved calls, multi-draw coverage, shared page builds and residency.",
                     "Also samples the track GPU timeline span every 16 frames using nonblocking timestamps,",
                     "excluding builds, static uploads and empty frames; motion samples include streaming uploads.",
                     "Separates stationary and animated GPU samples, and reports turnout/JS/part/streaming metrics.",

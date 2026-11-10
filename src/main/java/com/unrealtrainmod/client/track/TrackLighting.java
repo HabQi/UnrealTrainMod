@@ -30,9 +30,15 @@ final class TrackLighting {
 
     int sample(ClientLevel level, double x, double y, double z, double nx, double ny, double nz) {
         // Choose the air side of surfaces exactly on a block boundary, rather than the supporting block.
-        long key = BlockPos.asLong(Mth.floor(origin.x() + x + nx * SURFACE_OFFSET),
-                Mth.floor(origin.y() + y + ny * SURFACE_OFFSET),
-                Mth.floor(origin.z() + z + nz * SURFACE_OFFSET));
+        return value(level, key(origin.x() + x, origin.y() + y, origin.z() + z, nx, ny, nz));
+    }
+
+    static long key(double x, double y, double z, double nx, double ny, double nz) {
+        return BlockPos.asLong(Mth.floor(x + nx * SURFACE_OFFSET),
+                Mth.floor(y + ny * SURFACE_OFFSET), Mth.floor(z + nz * SURFACE_OFFSET));
+    }
+
+    int value(ClientLevel level, long key) {
         int light = samples.get(key);
         if (light == -1) {
             light = read(level, key);

@@ -618,33 +618,23 @@ public final class TrackGraph {
     public void validateTrailingPass(UUID id, List<UUID> owners, String pathId) {
         var value = assembly(id);
         if (!value.definition().supportsTrailingPass() || !value.paths().containsKey(pathId)
-                || value.trailingPass() == null && value.occupant() != null && !owners.contains(value.occupant())
-                || value.trailingPass() != null && !value.trailingPass().pathId().equals(pathId)) {
-            throw new IllegalArgumentException("Turnout passage is owned by another path or consist");
+                || value.occupant() != null && !owners.contains(value.occupant())) {
+            throw new IllegalArgumentException("Invalid turnout path or protection representative");
         }
     }
 
-    /** Called only after the complete movement step has passed validation and acquired ownership. */
-    public void beginTrailingPass(UUID id, List<UUID> owners, String pathId) {
+    /** Publish the return record and actual throw together, after validating this movement's exclusivity. */
+    public void throwTrailingPass(UUID id, String pathId) {
         var old = assembly(id);
-        validateTrailingPass(id, owners, pathId);
-        if (old.occupant() == null) throw new IllegalArgumentException("Trailing passage needs an occupied turnout");
-        if (old.trailingPass() != null) return;
-        var passage = new TrailingPass(pathId, old.state());
-        assemblies.put(id, old.withTrailingPass(passage));
-        onChange.run();
-    }
-
-    /** Called after a movement has validated its path and acquired shared protection. */
-    public void throwTrailingPass(UUID id) {
-        var old = assembly(id);
-        if (old.trailingPass() == null) throw new IllegalArgumentException("No trailing passage");
+        var returnState = old.trailingPass() == null ? old.state() : old.trailingPass().returnState();
         var state = old.state();
-        for (var control : old.definition().routes().get(old.trailingPass().pathId()).requirements().entrySet()) {
+        for (var control : old.definition().routes().get(pathId).requirements().entrySet()) {
             state = state.withControl(control.getKey(), control.getValue());
         }
         if (state.equals(old.state())) return;
-        var updated = old.withState(state);
+        // A later trailing move may return to the original position while protection is still held.
+        var passage = state.equals(returnState) ? null : new TrailingPass(pathId, returnState);
+        var updated = old.withTrailingPass(passage).withState(state);
         assemblies.put(id, updated); onChange.run();
         for (var listener : assemblyListeners) listener.accept(updated);
     }

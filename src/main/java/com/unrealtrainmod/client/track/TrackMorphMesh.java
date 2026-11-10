@@ -12,22 +12,19 @@ import com.mojang.blaze3d.vertex.VertexFormat;
 import com.unrealtrainmod.track.geometry.TrackVector;
 import com.unrealtrainmod.track.mesh.TrackMeshData;
 import com.unrealtrainmod.client.compat.iris.IrisCompat;
-import com.unrealtrainmod.client.compat.iris.IrisDrawScope;
-import com.unrealtrainmod.client.compat.iris.IrisRenderTypes;
 import com.unrealtrainmod.client.compat.iris.IrisRenderStats;
-import com.unrealtrainmod.client.ClientModelManager;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.world.phys.AABB;
 import org.joml.Matrix4f;
 
-/** Both endpoint positions stay on the GPU. The fallback streams only the two moving leaves. */
+/** Endpoint geometry remains static for native morphs; UV2 always has its own stream. */
 final class TrackMorphMesh implements TrackRenderMesh {
     private final TrackMeshData normal, reverse;
     private final AABB bounds;
-    private final TrackLighting lighting;
+    private final TrackLightBuffer lighting = new TrackLightBuffer(false);
     private VertexBuffer buffer;
-    private boolean morph, lightDirty = true;
-    private float movement, uploadedMovement = Float.NaN;
+    private boolean morph;
+    private float movement, sampledMovement = Float.NaN;
 
     TrackMorphMesh(TrackMeshData normal, TrackMeshData reverse) {
         this.normal = normal;
@@ -36,46 +33,61 @@ final class TrackMorphMesh implements TrackRenderMesh {
         var a = normal.bounds(); var b = reverse.bounds();
         bounds = new AABB(Math.min(a.minX(), b.minX()), Math.min(a.minY(), b.minY()), Math.min(a.minZ(), b.minZ()),
                 Math.max(a.maxX(), b.maxX()), Math.max(a.maxY(), b.maxY()), Math.max(a.maxZ(), b.maxZ())).inflate(0.001);
-        lighting = new TrackLighting(normal.origin());
     }
 
     void movement(float value) { movement = value; }
     @Override public AABB bounds() { return bounds; }
     @Override public TrackVector origin() { return normal.origin(); }
     @Override public boolean isEmpty() { return normal.vertexCount() == 0; }
-    @Override public boolean isUploaded() { return buffer != null; }
+    boolean isUploaded() { return buffer != null; }
     @Override public int source() { return TrackRenderStats.NATIVE; }
-    @Override public int drawCalls() { return 1; }
-    @Override public int drawVertices() { return IrisCompat.active() ? normal.vertexCount() / 4 * 6 : normal.vertexCount(); }
-    @Override public int drawTriangles() { return normal.vertexCount() / 2; }
-    @Override public int storedVertices() { return IrisCompat.active() ? normal.vertexCount() / 4 * 6 : normal.vertexCount(); }
 
-    @Override public int upload(ClientLevel level, int budget, TrackRenderStats stats) {
+    int upload(ClientLevel level, int budget, TrackRenderStats stats) {
         boolean shader = !IrisCompat.active() && TrackMorphShader.shader() != null;
-        long lightStart = stats == null ? 0 : System.nanoTime();
-        lightDirty |= lighting.refresh(level);
-        if (stats != null) stats.lightRefresh(System.nanoTime() - lightStart, lighting.checkedSamples(), lighting.changedSamples());
         if (buffer != null && morph != shader) close();
         boolean first = buffer == null;
-        boolean changed = !shader && movement != uploadedMovement;
-        if (!first && !lightDirty && !changed) return 0;
-        // Streaming leaves must keep up with display time even when static uploads exhaust their budget.
         if (first && budget == 0) return 0;
+        boolean moved = movement != sampledMovement;
+        boolean geometryChanged = first || (!shader && moved);
         morph = shader;
-        if (IrisCompat.active()) {
-            if (buffer == null) buffer = new VertexBuffer(VertexBuffer.Usage.DYNAMIC);
-            try {
-                int size = TrackIrisMesh.upload(buffer, normal, reverse, movement, lighting, level);
-                IrisRenderStats.upload(size);
-                if (stats != null) stats.activeUpload(size);
-                uploadedMovement = movement;
-                lightDirty = false;
-            } catch (RuntimeException | Error exception) { close(); throw exception; }
+        try {
+            if (geometryChanged) {
+                if (buffer == null) buffer = new VertexBuffer(VertexBuffer.Usage.DYNAMIC);
+                int size;
+                if (IrisCompat.active()) {
+                    var upload = TrackIrisMesh.upload(buffer, normal, reverse, movement, stats);
+                    size = upload.bytes();
+                    lighting.samples(upload.samples());
+                    IrisRenderStats.upload(size);
+                } else size = uploadNative(stats);
+                lighting.attach(buffer);
+                if (stats != null) {
+                    if (first) stats.uploaded(size, 0, size);
+                    else stats.activeUpload(size);
+                }
+            } else if (moved) {
+                // Native morph movement changes sampling positions, never the endpoint VBO.
+                var samples = new long[normal.vertexCount()];
+                for (int i = 0; i < samples.length; i++) samples[i] = lightSample(i);
+                lighting.samples(samples);
+            }
+            sampledMovement = movement;
+            boolean changed = lighting.refresh(level, stats);
+            if (changed && (first || moved || budget > 0)) {
+                lighting.upload(stats, first, !first && moved);
+                return first || !moved ? 1 : 0;
+            }
             return first ? 1 : 0;
-        }
+        } catch (RuntimeException | Error exception) {
+            close();
+            throw exception;
+        } finally { VertexBuffer.unbind(); }
+    }
+
+    private int uploadNative(TrackRenderStats stats) {
         var format = morph ? TrackMorphShader.FORMAT : DefaultVertexFormat.POSITION_COLOR_LIGHTMAP;
-        int bytesCount = normal.vertexCount() * format.getVertexSize();
-        if (buffer == null) buffer = new VertexBuffer(VertexBuffer.Usage.DYNAMIC);
+        var samples = new long[normal.vertexCount()];
+        int bytesCount = samples.length * format.getVertexSize();
         try (var bytes = new ByteBufferBuilder(bytesCount)) {
             long start = stats == null ? 0 : System.nanoTime();
             var builder = new BufferBuilder(bytes, VertexFormat.Mode.QUADS, format);
@@ -87,46 +99,40 @@ final class TrackMorphMesh implements TrackRenderMesh {
                 float x = normal.x(i) + (rx - normal.x(i)) * movement;
                 float y = normal.y(i) + (ry - normal.y(i)) * movement;
                 float z = normal.z(i) + (rz - normal.z(i)) * movement;
-                int light = lighting.sample(level, x, y, z, 0, 1, 0);
+                samples[i] = TrackLighting.key(o.x() + x, o.y() + y, o.z() + z, 0, 1, 0);
                 if (morph) builder.addVertex(normal.x(i), normal.y(i), normal.z(i))
-                        .setColor(normal.color(i)).setUv(rx, rz).setLight(light);
-                else builder.addVertex(x, y, z).setColor(normal.color(i)).setLight(light);
+                        .setColor(normal.color(i)).setUv(rx, rz).setLight(0);
+                else builder.addVertex(x, y, z).setColor(normal.color(i)).setLight(0);
             }
+            lighting.samples(samples);
             if (stats != null) stats.packed(System.nanoTime() - start);
             start = stats == null ? 0 : System.nanoTime();
             buffer.bind();
             buffer.upload(builder.buildOrThrow());
-            if (stats != null) {
-                stats.gpuUpload(System.nanoTime() - start);
-                stats.activeUpload(bytesCount);
-            }
-            uploadedMovement = movement;
-            lightDirty = false;
-        } catch (RuntimeException | Error exception) {
-            close();
-            throw exception;
-        } finally { VertexBuffer.unbind(); }
-        return first ? 1 : 0;
+            if (stats != null) stats.gpuUpload(System.nanoTime() - start);
+        }
+        return bytesCount;
     }
 
-    @Override public void drawIris(Matrix4f modelView, Matrix4f projection, TrackRenderStats stats) {
-        boolean changed = IrisDrawScope.draw(buffer, IrisRenderTypes.get(ClientModelManager.WHITE, false, false, true), modelView, projection);
-        if (stats != null) { if (changed) stats.renderTypeSetup(); stats.irisShaderBind(); }
+    private long lightSample(int i) {
+        var o = origin(); var r = reverse.origin();
+        float rx = (float)(reverse.x(i) + r.x() - o.x());
+        float ry = (float)(reverse.y(i) + r.y() - o.y());
+        float rz = (float)(reverse.z(i) + r.z() - o.z());
+        float x = normal.x(i) + (rx - normal.x(i)) * movement;
+        float y = normal.y(i) + (ry - normal.y(i)) * movement;
+        float z = normal.z(i) + (rz - normal.z(i)) * movement;
+        return TrackLighting.key(o.x() + x, o.y() + y, o.z() + z, 0, 1, 0);
     }
-    @Override public void draw(Matrix4f modelView, Matrix4f projection, TrackRenderStats stats) {
-        try (var state = new TrackRenderState(stats)) { draw(state, modelView, projection); }
-    }
-    @Override public void draw(TrackRenderState state, Matrix4f modelView, Matrix4f projection) {
-        if (morph) state.drawMorph(buffer, modelView, projection, movement);
-        else state.drawNative(buffer, modelView, projection);
-    }
-    @Override public void enqueue(TrackDrawQueue queue, Matrix4f modelView, int structure) {
+
+    void enqueue(TrackDrawQueue queue, Matrix4f modelView, int structure) {
         if (morph) queue.addMorph(buffer, modelView, structure, normal.vertexCount(), movement);
         else queue.addNative(buffer, modelView, structure, normal.vertexCount());
     }
+
     @Override public void close() {
-        if (buffer != null) { buffer.close(); buffer = null; }
-        lightDirty = true;
-        uploadedMovement = Float.NaN;
+        try { lighting.close(); }
+        finally { if (buffer != null) { buffer.close(); buffer = null; } }
+        sampledMovement = Float.NaN;
     }
 }

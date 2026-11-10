@@ -18,7 +18,7 @@ import java.util.UUID;
 
 /** Pure movement proposals, using route occurrences rather than segment IDs as positions. */
 final class TrainTurnoutMovement {
-    record Action(UUID assemblyId, String pathId, boolean begin, boolean throwSwitch) {}
+    record Action(UUID assemblyId, String pathId) {}
     private record Part(UUID assemblyId, String pathId, double start, double length,
                         double pathStart, double pathLength, boolean aligned) {
         double distanceFromA(double position) {
@@ -84,6 +84,20 @@ final class TrainTurnoutMovement {
         return next;
     }
 
+    private static boolean triggers(Part part, boolean forward, double bogie) {
+        return part.towardA(forward) && bogie >= part.start() - 1e-9 && bogie <= part.start() + part.length() + 1e-9
+                && part.distanceFromA(bogie) <= part.pathLength() * 0.1 + 1e-9;
+    }
+
+    /** Manual adjustment may use an existing approach, but cannot perform its switch throw. */
+    boolean requiresThrow(TrainMotion.Prepared motion, double from, double to) {
+        if (nextBoundary(motion, from, to) != to) return true;
+        boolean forward = to > from;
+        double leading = motion.leadingBogie(forward);
+        return parts.stream().anyMatch(part -> !TrackTransitionResolver.isPathEnabled(graph.assembly(part.assemblyId()), part.pathId())
+                && (triggers(part, forward, from + leading) || triggers(part, forward, to + leading)));
+    }
+
     List<Action> propose(TrainMotion.Prepared motion, TrackTraversalContext context, double from, double to) {
         if (parts.isEmpty()) return List.of();
         boolean forward = to > from;
@@ -98,20 +112,18 @@ final class TrainTurnoutMovement {
             if (min >= part.start() + part.length() || max <= part.start()) continue;
             var assembly = graph.assembly(part.assemblyId());
             if (TrackTransitionResolver.isPathEnabled(assembly, part.pathId())) continue;
-            var passage = assembly.trailingPass();
             if (!context.allows(assembly, part.pathId(), !part.aligned())) {
                 throw new IllegalArgumentException("Closed turnout path cannot be entered in this direction");
             }
-            boolean trigger = part.towardA(forward) && bogie >= part.start() - 1e-9 && bogie <= part.start() + part.length() + 1e-9
-                    && part.distanceFromA(bogie) <= part.pathLength() * 0.1 + 1e-9;
+            // Approaching a closed branch does not reserve or change its switch.
+            if (!triggers(part, forward, bogie)) continue;
             var previous = actions.get(part.assemblyId());
             if (previous != null && !previous.pathId().equals(part.pathId())) {
                 throw new IllegalArgumentException("One consist cannot squeeze two different paths of the same turnout");
             }
-            actions.put(part.assemblyId(), new Action(part.assemblyId(), part.pathId(), passage == null,
-                    trigger || previous != null && previous.throwSwitch()));
+            actions.put(part.assemblyId(), new Action(part.assemblyId(), part.pathId()));
         }
-        // A new lock must also preserve any already occupied, currently open path of this turnout.
+        // The actual throw must also preserve this consist's other occupied paths.
         for (var part : parts) {
             var action = actions.get(part.assemblyId());
             if (action != null && min <= part.start() + part.length() && max >= part.start()
