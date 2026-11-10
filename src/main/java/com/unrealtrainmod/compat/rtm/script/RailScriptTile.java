@@ -5,7 +5,6 @@
 package com.unrealtrainmod.compat.rtm.script;
 
 import com.unrealtrainmod.track.geometry.TrackGeometry;
-import com.unrealtrainmod.track.assembly.TrackAssemblyInstance;
 import java.util.HashMap;
 import java.util.Map;
 import net.minecraft.core.BlockPos;
@@ -29,9 +28,9 @@ public final class RailScriptTile {
         property = new Property(railModel == null ? "" : railModel);
     }
 
-    void assembly(TrackAssemblyInstance assembly) {
-        railSwitch = new RailScriptSwitch(assembly);
-        var origin = assembly.geometry().ports().get("A").position();
+    void turnout(RailTurnoutView view) {
+        railSwitch = new RailScriptSwitch(view);
+        var origin = view.origin();
         var position = BlockPos.containing(origin.x(), origin.y() + RailScriptMap.HEIGHT_OFFSET, origin.z());
         setStart(position);
         anchor = new RailScriptMap.Position(position, origin.y());

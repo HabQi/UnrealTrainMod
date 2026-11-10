@@ -40,6 +40,19 @@ public final class PreviewRenderer implements AutoCloseable {
     public static final float THUMBNAIL_DISTANCE = 128;
     private TextureTarget target;
 
+    /** Front elevation with a stable block-to-pixel mapping for engineering editors. */
+    public void renderOrthographic(GuiGraphics graphics, int x, int y, int width, int height,
+                                   double centerX, double centerY, double pixelsPerBlock, Consumer<PoseStack> drawScene) {
+        render(graphics, x, y, width, height, ModelBounds.MISSING, new PreviewCamera(), ignored -> {
+            float halfWidth = (float)(width / (2 * pixelsPerBlock));
+            float halfHeight = (float)(height / (2 * pixelsPerBlock));
+            RenderSystem.setProjectionMatrix(new Matrix4f().ortho(-halfWidth, halfWidth, -halfHeight, halfHeight, .05f, 4096),
+                    VertexSorting.DISTANCE_TO_ORIGIN);
+            var pose = new PoseStack(); pose.translate(-centerX, -centerY, -2048);
+            drawScene.accept(pose);
+        });
+    }
+
     public void render(GuiGraphics graphics, int x, int y, int width, int height,
                        ModelBounds bounds, PreviewCamera camera, Consumer<PoseStack> drawScene) {
         graphics.flush();

@@ -16,7 +16,6 @@ import com.unrealtrainmod.track.geometry.TrackGeometry;
 import com.unrealtrainmod.track.geometry.TrackVector;
 import com.unrealtrainmod.track.mesh.TrackMeshData;
 import com.unrealtrainmod.track.mesh.RailTrackMeshBuilder;
-import com.unrealtrainmod.track.assembly.TrackAssemblyDefinition;
 import com.unrealtrainmod.track.assembly.TrackAssemblyType;
 import com.unrealtrainmod.track.model.RailCatalog;
 import java.io.IOException;
@@ -131,7 +130,7 @@ public final class TrackWorldRenderer {
         int uploads = frameUploads;
         if (Double.isNaN(frameTime)) frameTime = cache.time(event.getPartialTick().getGameTimeDeltaPartialTick(level.tickRateManager().runsNormally()));
         double time = frameTime;
-        var dynamic = new ArrayList<ClientTrackCache.AssemblyEntry>();
+        var dynamic = new ArrayList<ClientTrackCache.TurnoutEntry>();
         var camera = event.getCamera().getPosition();
         Matrix4f modelView = new Matrix4f();
         try (var irisMetrics = iris ? IrisRenderStats.begin(IrisRenderStats.TRACK, shadow) : null;
@@ -173,53 +172,53 @@ public final class TrackWorldRenderer {
                 }
             }
             for (var entry : cache.assemblies.values()) {
-                if (entry.scriptFailed) entry.clearScriptMeshes();
                 boolean simple = entry.data.definition().type() == TrackAssemblyType.SIMPLE_TURNOUT;
                 var model = ClientRailModelManager.INSTANCE.model(entry.data.modelId());
-                boolean scriptedCustom = entry.data.definition() == TrackAssemblyDefinition.CUSTOM
-                        && model != null && model.scripted();
+                boolean scripted = !entry.turnouts.isEmpty() && model != null && model.scripted() && !entry.scriptFailed;
                 boolean inView = event.getFrustum().isVisible(entry.broadBounds());
-                if (scriptedCustom && !entry.scriptAttempted && !entry.scriptFailed && inView
+                if (scripted && !entry.prepared() && !shadow && inView
                         && entry.scriptPrepareFrame != frame && budget.available()) {
                     entry.scriptPrepareFrame = frame;
+                    var turnout = entry.nextPreparation();
                     long start = System.nanoTime();
-                    var anchor = entry.data.geometry().ports().get("A").position();
-                    String phase = entry.assemblyScript == null ? "turnoutScriptInit"
-                            : entry.staticSnapshot == null ? "turnoutStaticCapture" : "turnoutDynamicCapture";
-                    try { prepareAssemblyScript(entry, model, time); }
+                    var anchor = turnout.view.origin();
+                    String phase = turnout.assemblyScript == null ? "turnoutScriptInit"
+                            : turnout.staticSnapshot == null ? "turnoutStaticCapture" : "turnoutDynamicCapture";
+                    try { prepareAssemblyScript(turnout, model, time); }
                     finally { budget.finished(start, entry.data.modelId(), entry.data.id(),
-                            (int)Math.floor(anchor.x() / 16), (int)Math.floor(anchor.z() / 16), phase); }
+                            (int)Math.floor(anchor.x() / 16), (int)Math.floor(anchor.z() / 16), phase + "/" + turnout.view.end()); }
                 }
-                if (entry.scriptFailed) entry.clearScriptMeshes();
-                if (scriptedCustom && !entry.scriptFailed) {
-                    if (entry.parts != null) dynamic.add(entry);
-                    if (!inView || entry.staticSnapshot == null) continue;
-                } else if (!inView) continue;
+                if (scripted && !entry.scriptFailed && entry.prepared() && inView) {
+                    boolean complete = prepareTurnoutMeshes(entry, budget, level);
+                    if (complete && !shadow && !entry.scriptActive) {
+                        boolean ready = turnoutMeshesReady(entry, level);
+                        if (!iris) for (var turnout : entry.turnouts) {
+                            uploads = turnout.parts.prepareSources(turnout.currentSnapshot, uploads, stats);
+                            ready &= turnout.parts.sourcesReady(turnout.currentSnapshot);
+                        }
+                        if (ready) entry.activateScripts();
+                    }
+                }
+                if (entry.scriptActive) {
+                    dynamic.addAll(entry.turnouts);
+                    if (!inView) continue;
+                    for (long chunk : entry.chunks) {
+                        if (!level.hasChunk(ChunkPos.getX(chunk), ChunkPos.getZ(chunk))) continue;
+                        // A newly watched chunk also switches both ends together.
+                        if (entry.turnouts.stream().anyMatch(turnout -> !turnout.meshes.containsKey(chunk))) continue;
+                        if (stats != null) stats.chunk();
+                        for (var turnout : entry.turnouts) {
+                            uploads = draw(stats, queue, event, level, camera, modelView, uploads,
+                                    turnout.meshes.get(chunk), TrackRenderStats.STRUCTURE_ASSEMBLY);
+                        }
+                    }
+                    continue;
+                }
+                if (!inView) continue;
                 for (long chunk : entry.chunks) {
                     int x = ChunkPos.getX(chunk), z = ChunkPos.getZ(chunk);
                     if (!level.hasChunk(x, z)) continue;
                     if (stats != null) stats.chunk();
-                    if (scriptedCustom && !entry.scriptFailed) {
-                        var group = entry.meshes.get(chunk);
-                        if (group == null && budget.available()) {
-                            long start = System.nanoTime();
-                            try {
-                                group = List.of(new RailTrackGpuMesh(entry.staticSnapshot.build(x, z)));
-                            } catch (RuntimeException | LinkageError exception) {
-                                entry.scriptFailed = true;
-                                entry.assemblyScript.close();
-                                dynamic.remove(entry);
-                                LOGGER.warn("Cannot build scripted turnout {} in chunk {}, {}; using native appearance",
-                                        entry.data.id(), x, z, exception);
-                                break;
-                            } finally {
-                                budget.finished(start, entry.data.modelId(), entry.data.id(), x, z, "turnoutStaticReplay");
-                            }
-                            entry.meshes.put(chunk, group);
-                        }
-                        if (group != null) uploads = drawAll(stats, queue, event, level, camera, modelView, uploads, group);
-                        continue;
-                    }
                     if (simple) {
                         for (int pass = 0; pass < 2; pass++) {
                             boolean tongue = pass == 1;
@@ -247,7 +246,7 @@ public final class TrackWorldRenderer {
                                 group = List.of(mesh); meshes.put(chunk, group);
                             }
                             if (tongue) for (var mesh : group) {
-                                if (mesh instanceof TrackMorphMesh moving) moving.movement(entry.animation.position(time));
+                                if (mesh instanceof TrackMorphMesh moving) moving.movement(entry.turnouts.getFirst().animation.position(time));
                             }
                             uploads = drawAll(stats, queue, event, level, camera, modelView, uploads, group);
                         }
@@ -303,38 +302,69 @@ public final class TrackWorldRenderer {
         if (stats != null) stats.logIfDue();
     }
 
-    private static void prepareAssemblyScript(ClientTrackCache.AssemblyEntry entry, ClientRailModelManager.Model model, double time) {
+    private static void prepareAssemblyScript(ClientTrackCache.TurnoutEntry entry, ClientRailModelManager.Model model, double time) {
         if (model.script() == null) {
-            entry.scriptAttempted = true;
-            entry.scriptFailed = true;
-            LOGGER.warn("Turnout {} has an unavailable rail script; using native appearance", entry.data.id());
+            entry.owner.failScripts(entry, "script unavailable", null);
             return;
         }
+        String phase = entry.assemblyScript == null ? "script init"
+                : entry.staticSnapshot == null ? "static capture" : "dynamic capture";
         try {
             if (entry.assemblyScript == null) {
-                entry.assemblyScript = model.script().newAssembly(entry.data);
+                entry.assemblyScript = model.script().newTurnout(entry.view, entry.animation.position(time));
                 return;
             }
             if (entry.staticSnapshot == null) {
                 entry.staticSnapshot = entry.assemblyScript.captureAssemblyStatic(entry.animation.position(time),
-                        model.scaleForGauge(entry.data.gauge()), model.period());
-                if (entry.staticSnapshot == null) { entry.scriptAttempted = true; entry.scriptFailed = true; }
+                        model.scaleForGauge(entry.owner.data.gauge()), model.period());
+                if (entry.staticSnapshot == null) entry.owner.failScripts(entry, "static capture", null);
                 return;
             }
-            var a = entry.data.geometry().ports().get("A").position();
+            var a = entry.view.origin();
             var anchor = BlockPos.containing(a.x(), a.y() + 0.0625, a.z());
             entry.parts = new RailPartRenderer(new TrackVector(
                     anchor.getX(), anchor.getY(), anchor.getZ()), Math.floor(a.y() / 16) * 16);
             entry.scriptAttempted = true;
             entry.captureDynamic(time);
         } catch (IOException | RuntimeException | LinkageError exception) {
-            entry.scriptAttempted = true;
-            entry.scriptFailed = true;
-            if (entry.assemblyScript != null) entry.assemblyScript.close();
-            LOGGER.warn("Cannot initialise rail script for turnout {}; using native appearance: {}",
-                    entry.data.id(), exception.getMessage());
-            LOGGER.debug("Turnout script initialisation failure", exception);
+            entry.owner.failScripts(entry, phase, exception);
         }
+    }
+
+    /** Stage Java-only replays for both ends while retaining the original fallback appearance. */
+    private static boolean prepareTurnoutMeshes(ClientTrackCache.AssemblyEntry entry, BuildBudget budget, ClientLevel level) {
+        for (long chunk : entry.chunks) {
+            int x = ChunkPos.getX(chunk), z = ChunkPos.getZ(chunk);
+            if (!level.hasChunk(x, z)) continue;
+            for (var turnout : entry.turnouts) {
+                if (turnout.meshes.containsKey(chunk)) continue;
+                if (!budget.available()) return false;
+                long start = System.nanoTime();
+                try {
+                    turnout.meshes.put(chunk, new RailTrackGpuMesh(turnout.staticSnapshot.build(x, z)));
+                } catch (RuntimeException | LinkageError exception) {
+                    entry.failScripts(turnout, "static replay", exception);
+                    return false;
+                } finally {
+                    budget.finished(start, entry.data.modelId(), entry.data.id(), x, z, "turnoutStaticReplay/" + turnout.view.end());
+                }
+            }
+        }
+        return true;
+    }
+
+    private static boolean turnoutMeshesReady(ClientTrackCache.AssemblyEntry entry, ClientLevel level) {
+        boolean ready = true;
+        for (long chunk : entry.chunks) {
+            if (!level.hasChunk(ChunkPos.getX(chunk), ChunkPos.getZ(chunk))) continue;
+            for (var turnout : entry.turnouts) {
+                var mesh = turnout.meshes.get(chunk);
+                if (mesh.isEmpty()) continue;
+                TrackStaticBuffers.WORLD.request(mesh, TrackRenderStats.STRUCTURE_ASSEMBLY);
+                ready &= TrackStaticBuffers.WORLD.ready(mesh);
+            }
+        }
+        return ready;
     }
 
     private static int drawAll(TrackRenderStats stats, TrackDrawQueue queue, RenderLevelStageEvent event,

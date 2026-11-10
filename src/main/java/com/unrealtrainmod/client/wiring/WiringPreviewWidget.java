@@ -53,7 +53,7 @@ final class WiringPreviewWidget extends AbstractWidget implements AutoCloseable 
                         new ConnectorData(secondId, modelId, new Vec3(0, 0, 10), Direction.UP, Vec3.ZERO, Vec3.ZERO, 0),
                         Minecraft.getInstance().level == null ? 0 : Minecraft.getInstance().level.getGameTime(), partialTick)
                         : model.draws();
-                if (draws != null) WiringGeometry.render(draws, pose, buffers, 0xF000F0);
+                if (draws != null) WiringRenderCache.render(draws, pose, buffers, 0xF000F0, true, true);
                 if (!wire && model.definition().empty()) net.minecraft.client.renderer.LevelRenderer.renderLineBox(pose,
                         buffers.getBuffer(net.minecraft.client.renderer.RenderType.lines()), -.125, -.125, -.125, .125, .125, .125, .2f, 1, 1, 1);
                 buffers.endBatch();

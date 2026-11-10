@@ -31,7 +31,6 @@ public final class WiringModelManager extends SimplePreparableReloadListener<Wir
         }
     }
     record Prepared(Map<ResourceLocation, Model> models, Map<ResourceLocation, NativeImage> images) {}
-    private record Image(ResourceLocation id, boolean translucent) {}
     private record MeshKey(PackageAsset model, boolean smoothing) {}
     private final Map<ResourceLocation, Model> models = new HashMap<>();
     private final java.util.Set<ResourceLocation> textures = new java.util.HashSet<>();
@@ -40,7 +39,7 @@ public final class WiringModelManager extends SimplePreparableReloadListener<Wir
 
     @Override protected Prepared prepare(ResourceManager resources, ProfilerFiller profiler) {
         var result = new HashMap<ResourceLocation, Model>(); var images = new HashMap<ResourceLocation, NativeImage>();
-        var loadedImages = new HashMap<PackageAsset, Image>(); var meshes = new HashMap<MeshKey, ModelMesh>();
+        var loadedImages = new HashMap<PackageAsset, ResourceLocation>(); var meshes = new HashMap<MeshKey, ModelMesh>();
         try {
             for (boolean wire : new boolean[]{false, true}) for (var definition : WiringCatalog.all(wire)) {
                 try {
@@ -49,16 +48,13 @@ public final class WiringModelManager extends SimplePreparableReloadListener<Wir
                         var configured = entry.getValue(); var asset = configured.asset(); var image = loadedImages.get(asset);
                         if (image == null) {
                             var pixels = TextureLoader.readBase(asset);
-                            boolean translucent = false;
-                            for (int y = 0; y < pixels.getHeight() && !translucent; y++) for (int x = 0; x < pixels.getWidth(); x++) {
-                                int alpha = pixels.getPixelRGBA(x, y) >>> 24;
-                                if (alpha > 0 && alpha < 255) { translucent = true; break; }
-                            }
-                            var id = ResourceLocation.fromNamespaceAndPath(UnrealTrainMod.MODID,
+                            image = ResourceLocation.fromNamespaceAndPath(UnrealTrainMod.MODID,
                                     "textures/wiring/" + ResourceIds.hash(asset.toString()));
-                            image = new Image(id, translucent); loadedImages.put(asset, image); images.put(id, pixels);
+                            loadedImages.put(asset, image); images.put(image, pixels);
                         }
-                        bindings.put(entry.getKey(), new WiringGeometry.Material(image.id, configured.transparent() || image.translucent,
+                        // Match the existing RTM material rules. Shared textures may contain unrelated glass texels;
+                        // those texels must not disable depth writes for an opaque pole or bridge pier.
+                        bindings.put(entry.getKey(), new WiringGeometry.Material(image, configured.transparent(),
                                 !definition.culling(), configured.light()));
                     }
                     var white = new WiringGeometry.Material(TextureLoader.WHITE, false, !definition.culling(), false);
@@ -75,7 +71,9 @@ public final class WiringModelManager extends SimplePreparableReloadListener<Wir
                             var material = bindings.getOrDefault(batch.material().name(), bindings.getOrDefault("default", white));
                             if (batch.material().doubleSided() && !material.doubleSided()) material = new WiringGeometry.Material(
                                     material.texture(), material.translucent(), true, material.light());
-                            if (batch.material().alpha() < 1 && !material.translucent()) material = new WiringGeometry.Material(
+                            boolean reducedAlpha = batch.material().alpha() < 1
+                                    || java.util.Arrays.stream(batch.mesh().colors()).anyMatch(color -> (color >>> 24) < 255);
+                            if (reducedAlpha && !material.translucent()) material = new WiringGeometry.Material(
                                     material.texture(), true, material.doubleSided(), material.light());
                             batches.add(new WiringGeometry.Batch(part.name(), material, batch.mesh()));
                         }
@@ -108,6 +106,9 @@ public final class WiringModelManager extends SimplePreparableReloadListener<Wir
     }
     public void close() {
         WiringClient.clearRuntimes();
+        WiringRenderCache.clear();
+        com.unrealtrainmod.wiring.WiringScriptPolicy.clear();
+        com.unrealtrainmod.client.blueprint.BlueprintClient.clear();
         var manager = Minecraft.getInstance().getTextureManager(); textures.forEach(manager::release);
         textures.clear(); models.clear();
     }

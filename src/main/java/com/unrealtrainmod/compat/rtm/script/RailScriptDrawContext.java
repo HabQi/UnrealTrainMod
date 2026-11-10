@@ -51,6 +51,7 @@ final class RailScriptDrawContext extends ScriptMatrixContext {
     }
 
     void geometry(TrackGeometry geometry) { this.geometry = geometry; }
+    double modelScale() { return scale; }
 
     void captureStatic(List<Consumer<RailScriptDrawContext>> commands) { staticCommands = commands; }
     void captureDynamic(RailDrawSnapshot previous) { dynamicParts = new ArrayList<>(); previousDynamic = previous; }
@@ -153,10 +154,10 @@ final class RailScriptDrawContext extends ScriptMatrixContext {
     /** Sample once per placement; matrix and draw calls also work while recording a CPU list. */
     void drawAlong(RailScriptMap map, int split, int first, int last, RailScriptMap.Position anchor,
                    List<RailTrackMeshBuilder.Source> sources) {
-        var path = map.geometry();
         double height = anchor.posY - RailScriptMap.HEIGHT_OFFSET;
         for (int index = first; index <= last; index++) {
-            var frame = path.sample(split == 0 ? 0 : path.getLength() * ((double)index / split));
+            if (!map.ownsSample(split, index)) continue;
+            var frame = map.sample(split, index);
             var p = frame.position();
             var t = frame.tangent();
             float yaw = (float)Math.toDegrees(Math.atan2(t.x(), t.z()));

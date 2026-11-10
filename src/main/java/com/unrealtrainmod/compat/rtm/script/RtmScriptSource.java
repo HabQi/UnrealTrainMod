@@ -20,7 +20,7 @@ import java.util.zip.ZipFile;
 
 /**
  * Reads one legacy script and its {@code //include} dependencies from the owning ZIP. A missing
- * Minecraft LibRenderRail include can use the built-in static-stage library; no cross-package search is performed.
+ * Minecraft LibRenderRail include can use the built-in rail animation library; no cross-package search is performed.
  */
 public final class RtmScriptSource {
     private static final Pattern INCLUDE = Pattern.compile(

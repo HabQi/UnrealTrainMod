@@ -92,6 +92,8 @@ public class UnrealTrainMod {
             "insulator", p -> new com.unrealtrainmod.item.WiringItem(false, p), new Item.Properties().stacksTo(1));
     public static final DeferredItem<com.unrealtrainmod.item.WiringItem> WIRE = ITEMS.registerItem(
             "wire", p -> new com.unrealtrainmod.item.WiringItem(true, p), new Item.Properties().stacksTo(1));
+    public static final DeferredItem<com.unrealtrainmod.item.BlueprintItem> BLUEPRINT = ITEMS.registerItem(
+            "blueprint", com.unrealtrainmod.item.BlueprintItem::new, new Item.Properties().stacksTo(1));
     public static final DeferredItem<TurnoutBuilderItem> TURNOUT_BUILDER = ITEMS.registerItem(
             "turnout_builder", p -> new TurnoutBuilderItem(TrackConstructionType.SIMPLE_TURNOUT, p), new Item.Properties().stacksTo(1));
     public static final DeferredItem<TurnoutBuilderItem> DIAMOND_CROSSING_BUILDER = ITEMS.registerItem(
@@ -124,6 +126,7 @@ public class UnrealTrainMod {
                 output.accept(TRACK_WRENCH.get());
                 output.accept(INSULATOR.get());
                 output.accept(WIRE.get());
+                output.accept(BLUEPRINT.get());
                 output.accept(TURNOUT_BUILDER.get());
                 output.accept(DIAMOND_CROSSING_BUILDER.get());
                 output.accept(SINGLE_CROSSOVER_BUILDER.get());
@@ -154,6 +157,7 @@ public class UnrealTrainMod {
         HacksawItem.register(NeoForge.EVENT_BUS);
         TrackSyncManager.register(NeoForge.EVENT_BUS);
         com.unrealtrainmod.wiring.WiringManager.register(NeoForge.EVENT_BUS);
+        com.unrealtrainmod.blueprint.BlueprintManager.register(NeoForge.EVENT_BUS);
         TrackConstructionManager.register(NeoForge.EVENT_BUS);
         TurnoutConstructionManager.register(NeoForge.EVENT_BUS);
         TrainManager.register(NeoForge.EVENT_BUS);

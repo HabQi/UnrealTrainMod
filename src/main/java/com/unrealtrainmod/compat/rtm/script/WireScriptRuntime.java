@@ -20,9 +20,11 @@ public final class WireScriptRuntime implements AutoCloseable {
     private List<WiringGeometry.Draw> staticDraws;
     private ConnectorData lastFirst, lastSecond;
     private boolean failed;
+    private final boolean endpointOnly;
+    private List<WiringGeometry.Draw> retained;
 
     public WireScriptRuntime(RtmScriptCache cache, WiringModelManager.Model model) throws IOException {
-        this.model = model; program = cache.program(model.definition().renderer());
+        this.model = model; endpointOnly = com.unrealtrainmod.wiring.WiringScriptPolicy.of(model.definition().renderer()).endpointOnly(); program = cache.program(model.definition().renderer());
         instance = new RtmScriptInstance(program); renderer = new WireScriptRenderer(model, instance);
         var ps = new java.util.TreeSet<Integer>(); ps.add(0); ps.add(model.firstTexture().pass());
         model.batches().forEach(b -> ps.add(b.material().pass())); passes = List.copyOf(ps);
@@ -42,6 +44,7 @@ public final class WireScriptRuntime implements AutoCloseable {
     /** Null requests native fallback; an empty list is a successful script choosing to draw nothing. */
     public List<WiringGeometry.Draw> render(ConnectorData first, ConnectorData second, long tick, float partialTick) {
         if (failed) return null;
+        if (endpointOnly && first.equals(lastFirst) && second.equals(lastSecond)) return retained;
         var tile = new WireScriptViews.Tile(first, tick);
         var connection = new WireScriptViews.Connection(model.definition(), second);
         var target = new WireScriptViews.Vector(second.wirePoint().subtract(first.wirePoint()));
@@ -51,8 +54,14 @@ public final class WireScriptRuntime implements AutoCloseable {
                 lastFirst = first; lastSecond = second;
             }
             var result = new ArrayList<WiringGeometry.Draw>(staticDraws);
-            result.addAll(callback("renderWireDynamic", tile, connection, target, partialTick));
-            return List.copyOf(result);
+            var dynamic = callback("renderWireDynamic", tile, connection, target, partialTick);
+            if (endpointOnly) result.addAll(dynamic);
+            else for (var draw : dynamic) {
+                var batch = draw.batch();
+                result.add(new WiringGeometry.Draw(new WiringGeometry.Batch(batch.part(), batch.material(), batch.mesh(), true), draw.pose(), draw.normal(), draw.light()));
+            }
+            retained = List.copyOf(result);
+            return retained;
         } catch (Exception | LinkageError exception) {
             LoggerFactory.getLogger(WireScriptRuntime.class).warn("Wire script {} failed at {}: {}",
                     model.definition().config(), RtmScript.describe(program.prepared, exception), exception.getMessage());
@@ -73,6 +82,6 @@ public final class WireScriptRuntime implements AutoCloseable {
         return List.copyOf(output);
     }
     @Override public void close() {
-        failed = true; instance.close(); renderer.release(); staticDraws = null; lastFirst = null; lastSecond = null;
+        failed = true; instance.close(); renderer.release(); staticDraws = null; retained = null; lastFirst = null; lastSecond = null;
     }
 }

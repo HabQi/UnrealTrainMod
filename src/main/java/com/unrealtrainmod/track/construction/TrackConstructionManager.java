@@ -597,7 +597,6 @@ public final class TrackConstructionManager {
                     session.startHorizontalDirected, session.endHorizontalDirected);
         } catch (TrackGraphException exception) {
             Feedback feedback = switch (exception.reason()) {
-                case BLOCKED_VOLUME -> Feedback.BLOCKED_VOLUME;
                 case UNLOADED_VOLUME -> Feedback.UNLOADED_VOLUME;
                 case VOLUME_TOO_LARGE -> Feedback.VOLUME_TOO_LARGE;
                 case INVALID_POSITION -> Feedback.INVALID_POINT;

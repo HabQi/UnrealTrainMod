@@ -141,11 +141,6 @@ public final class TrackBlockManager {
                 throw new TrackGraphException(TrackGraphException.Reason.INVALID_POSITION);
             }
             if (!level.hasChunkAt(pos)) throw new TrackGraphException(TrackGraphException.Reason.UNLOADED_VOLUME);
-            BlockState state = level.getBlockState(pos);
-            if (!state.getFluidState().isEmpty()
-                    || (!state.is(UnrealTrainMod.TRACK_BLOCK.get()) && !state.canBeReplaced())) {
-                throw new TrackGraphException(TrackGraphException.Reason.BLOCKED_VOLUME);
-            }
         }
         // Shared cells remain in each segment's volume so either segment can be removed independently.
         return volume;

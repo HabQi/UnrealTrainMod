@@ -29,4 +29,11 @@ public final class ModDataComponents {
                     .persistent(ResourceLocation.CODEC).networkSynchronized(ResourceLocation.STREAM_CODEC).build());
 
     private ModDataComponents() {}
+
+    public static final DeferredHolder<DataComponentType<?>, DataComponentType<com.unrealtrainmod.blueprint.BlueprintDefinition>> BLUEPRINT =
+            TYPES.register("blueprint", () -> DataComponentType.<com.unrealtrainmod.blueprint.BlueprintDefinition>builder()
+                    .persistent(com.unrealtrainmod.blueprint.BlueprintDefinition.CODEC)
+                    .networkSynchronized(net.minecraft.network.codec.StreamCodec.of(
+                            (net.minecraft.network.RegistryFriendlyByteBuf b, com.unrealtrainmod.blueprint.BlueprintDefinition d) -> b.writeNbt(d.save()),
+                            b -> com.unrealtrainmod.blueprint.BlueprintDefinition.load(java.util.Objects.requireNonNull(b.readNbt())))).build());
 }

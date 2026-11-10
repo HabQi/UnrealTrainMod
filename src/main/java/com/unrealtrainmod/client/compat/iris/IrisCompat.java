@@ -92,6 +92,12 @@ public final class IrisCompat {
         finally { restoreTrackIdentity(identity); }
     }
 
+    /** Cached entity geometry must not overtake vertices already queued by an entity renderer. */
+    public static void flushEntityBuffers(MultiBufferSource buffers) {
+        var source = itemBuffer(buffers);
+        if (source != null) flushItemBuffer(source);
+    }
+
     static int entityVertexSize() { return entityFormat.getVertexSize(); }
 
     public static int[] currentIdentity() {
@@ -140,6 +146,7 @@ public final class IrisCompat {
                 com.unrealtrainmod.client.texture.MaterialTexture.releasePbr();
                 IrisMaterials.clear();
             } else com.unrealtrainmod.client.texture.MaterialTexture.invalidatePbr();
+            com.unrealtrainmod.client.wiring.WiringRenderCache.clear();
             active = next;
             ClientTrackCache.INSTANCE.invalidateGpuBuffers();
             com.unrealtrainmod.client.renderer.TrainModelRenderer.clearWorld();
@@ -152,11 +159,13 @@ public final class IrisCompat {
         if (active) com.unrealtrainmod.client.ClientModelManager.INSTANCE.prewarmIris();
         IrisRenderStats.beginFrame();
         TrackWorldRenderer.beginFrame();
+        com.unrealtrainmod.client.wiring.WiringRenderCache.beginFrame();
         com.unrealtrainmod.client.texture.PbrLoadQueue.beginFrame(active);
     }
 
     public static void onFramePost(RenderFrameEvent.Post event) {
         if (active && Minecraft.getInstance().level != null) IrisGeometryCache.endFrame();
+        com.unrealtrainmod.client.wiring.WiringRenderCache.endFrame();
         com.unrealtrainmod.client.GpuResidency.endFrame();
         com.unrealtrainmod.client.texture.PbrStats.logIfDue();
     }
@@ -172,6 +181,7 @@ public final class IrisCompat {
                     new Matrix4f((Matrix4f) modelView.invoke()), new Matrix4f((Matrix4f) projection.invoke()),
                     0, minecraft.getTimer(), minecraft.gameRenderer.getMainCamera(), (Frustum) frustum.invoke());
             TrackWorldRenderer.renderShadow(event);
+            com.unrealtrainmod.client.wiring.WiringClient.renderShadow(event);
         } catch (RuntimeException | Error exception) {
             throw exception;
         } catch (Throwable exception) {

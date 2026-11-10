@@ -14,6 +14,7 @@ import com.unrealtrainmod.track.assembly.TrackAssemblyInstance;
 import com.unrealtrainmod.track.assembly.TrackAssemblyDefinition;
 import com.unrealtrainmod.track.assembly.SwitchPosition;
 import com.unrealtrainmod.compat.rtm.script.RailScriptRuntime;
+import com.unrealtrainmod.compat.rtm.script.RailTurnoutView;
 import com.unrealtrainmod.compat.rtm.script.RailDrawSnapshot;
 import com.unrealtrainmod.compat.rtm.script.RailStaticSnapshot;
 import com.unrealtrainmod.client.ClientConfig;
@@ -46,6 +47,7 @@ import net.neoforged.neoforge.event.level.LevelEvent;
 /** Client-thread cache. Geometry is shared by UUID; each owning chunk keeps its own meshes. */
 public final class ClientTrackCache implements ResourceManagerReloadListener, AutoCloseable {
     public static final ClientTrackCache INSTANCE = new ClientTrackCache();
+    private static final org.slf4j.Logger LOGGER = org.slf4j.LoggerFactory.getLogger(ClientTrackCache.class);
     final Map<UUID, Entry> entries = new LinkedHashMap<>();
     final Map<Long, Set<UUID>> chunks = new LinkedHashMap<>();
     final Map<UUID, AssemblyEntry> assemblies = new LinkedHashMap<>();
@@ -69,8 +71,11 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
         if (world == null || mc.level != world || mc.isPaused() || !world.tickRateManager().runsNormally()) return;
         ticks++;
         for (var entry : assemblies.values()) {
-            if (ClientConfig.TURNOUT_ANIMATION_DURATION_SECONDS.get() == 0) entry.animation.finish();
-            entry.captureDynamic(ticks);
+            boolean prepared = entry.prepared();
+            for (var turnout : entry.turnouts) {
+                if (ClientConfig.TURNOUT_ANIMATION_DURATION_SECONDS.get() == 0) turnout.animation.finish();
+                if (prepared) turnout.captureDynamic(ticks);
+            }
         }
     }
 
@@ -78,7 +83,7 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
         var script = RailScriptRuntime.drainMetrics();
         if (stats != null) {
             int moving = 0;
-            for (var entry : assemblies.values()) if (entry.animation.moving(time)) moving++;
+            for (var entry : assemblies.values()) if (entry.moving(time)) moving++;
             stats.animation(moving, script.calls(), script.nanos());
         }
     }
@@ -144,7 +149,11 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
             if (!entry.chunks.remove(chunk)) continue;
             closeMeshes(entry.meshes.remove(chunk));
             closeMeshes(entry.tongues.remove(chunk));
-            if (entry.parts != null) entry.parts.invalidateInstances();
+            for (var turnout : entry.turnouts) {
+                var mesh = turnout.meshes.remove(chunk);
+                if (mesh != null) mesh.close();
+                if (turnout.parts != null) turnout.parts.invalidateInstances();
+            }
 
             if (entry.chunks.isEmpty()) { entry.close(); iterator.remove(); }
         }
@@ -204,7 +213,10 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
         for (var entry : assemblies.values()) {
             entry.meshes.values().forEach(group -> group.forEach(TrackRenderMesh::close));
             entry.tongues.values().forEach(group -> group.forEach(TrackRenderMesh::close));
-            if (entry.parts != null) entry.parts.invalidateInstances();
+            for (var turnout : entry.turnouts) {
+                turnout.meshes.values().forEach(TrackRenderMesh::close);
+                if (turnout.parts != null) turnout.parts.invalidateInstances();
+            }
         }
         TrackStaticBuffers.WORLD.close();
         TrackWorldRenderer.releaseDrawQueue();
@@ -232,8 +244,8 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
             if (scriptFailures.contains(ClientRailModelManager.INSTANCE.model(entry.data.modelId()))) entry.close();
         }
         for (var entry : assemblies.values()) {
-            // Custom turnouts have isolated script globals and do not inherit normal-track script failures.
-            if (entry.data.definition() != TrackAssemblyDefinition.CUSTOM
+            // Turnout views own independent script globals, including both crossover ends.
+            if (entry.turnouts.isEmpty()
                     && scriptFailures.contains(ClientRailModelManager.INSTANCE.model(entry.data.modelId()))) entry.close();
         }
         scriptFailures.clear();
@@ -271,20 +283,14 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
         final Set<Long> chunks = new LinkedHashSet<>();
         final Map<Long, List<TrackRenderMesh>> meshes = new HashMap<>();
         final Map<Long, List<TrackRenderMesh>> tongues = new HashMap<>();
-        final TurnoutAnimation animation;
-        RailStaticSnapshot staticSnapshot;
-        RailDrawSnapshot previousSnapshot, currentSnapshot;
-        double previousSnapshotTime, currentSnapshotTime;
-        long captureTick = Long.MIN_VALUE;
-        float capturedMovement = Float.NaN;
-        RailPartRenderer parts;
-        RailScriptRuntime assemblyScript;
-        boolean scriptAttempted, scriptFailed;
+        final List<TurnoutEntry> turnouts;
+        boolean scriptFailed, scriptActive, missingReported;
         long scriptPrepareFrame = -1;
-        boolean missingReported;
+        private int prepareCursor;
+
         AssemblyEntry(TrackAssemblyInstance data) {
             this.data = data;
-            animation = new TurnoutAnimation(data.state().controls().get("main") == SwitchPosition.REVERSE ? 1 : 0);
+            turnouts = RailTurnoutView.of(data).stream().map(view -> new TurnoutEntry(this, view)).toList();
             var segments = new LinkedHashMap<UUID, TrackGeometry>();
             for (var entry : data.paths().entrySet()) {
                 var parts = data.geometry().paths().get(entry.getKey());
@@ -297,16 +303,94 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
             }
             geometries = List.copyOf(segments.values());
         }
+
         AABB broadBounds() {
             var model = ClientRailModelManager.INSTANCE.model(data.modelId());
             return model == null ? data.bounds() : data.bounds().inflate(model.padding() * model.scaleForGauge(data.gauge()));
         }
+
         void setState(TrackAssemblyInstance data) {
-            float target = data.state().controls().get("main") == SwitchPosition.REVERSE ? 1 : 0;
+            for (var turnout : turnouts) turnout.setState(data);
+            this.data = data;
+        }
+
+        boolean moving(double time) {
+            return (scriptActive || data.definition() == TrackAssemblyDefinition.CUSTOM)
+                    && turnouts.stream().anyMatch(turnout -> turnout.animation.moving(time));
+        }
+
+        boolean prepared() { return !turnouts.isEmpty() && turnouts.stream().allMatch(TurnoutEntry::prepared); }
+
+        TurnoutEntry nextPreparation() {
+            for (int i = 0; i < turnouts.size(); i++) {
+                var turnout = turnouts.get(prepareCursor);
+                prepareCursor = (prepareCursor + 1) % turnouts.size();
+                if (!turnout.prepared()) return turnout;
+            }
+            return null;
+        }
+
+        void activateScripts() {
+            clearFallback();
+            scriptActive = true;
+        }
+
+        void failScripts(TurnoutEntry turnout, String phase, Throwable failure) {
+            if (scriptFailed) return;
+            LOGGER.warn("Turnout {}/{} failed at {}; using complete assembly fallback appearance: {}",
+                    data.id(), turnout.view.end(), phase, failure == null ? "script capture failed" : failure.getMessage());
+            if (failure != null) LOGGER.debug("Turnout view failure", failure);
+            scriptFailed = true;
+            scriptActive = false;
+            for (var child : turnouts) child.close();
+        }
+
+        private void clearFallback() {
+            meshes.values().forEach(ClientTrackCache::closeMeshes);
+            tongues.values().forEach(ClientTrackCache::closeMeshes);
+            meshes.clear(); tongues.clear();
+        }
+
+        @Override public void close() {
+            clearFallback();
+            turnouts.forEach(TurnoutEntry::close);
+            scriptFailed = scriptActive = missingReported = false;
+            scriptPrepareFrame = -1;
+            prepareCursor = 0;
+        }
+    }
+
+    /** One stable script/timeline per rendering end; ownership and chunk lifetime remain on the parent. */
+    static final class TurnoutEntry implements AutoCloseable {
+        final AssemblyEntry owner;
+        final RailTurnoutView view;
+        final Set<Long> chunks;
+        final Map<Long, TrackStaticMesh> meshes = new HashMap<>();
+        final TurnoutAnimation animation;
+        RailStaticSnapshot staticSnapshot;
+        RailDrawSnapshot previousSnapshot, currentSnapshot;
+        double previousSnapshotTime, currentSnapshotTime;
+        long captureTick = Long.MIN_VALUE;
+        float capturedMovement = Float.NaN;
+        RailPartRenderer parts;
+        RailScriptRuntime assemblyScript;
+        boolean scriptAttempted;
+
+        TurnoutEntry(AssemblyEntry owner, RailTurnoutView view) {
+            this.owner = owner; this.view = view; chunks = owner.chunks;
+            animation = new TurnoutAnimation(position(owner.data));
+        }
+
+        private float position(TrackAssemblyInstance data) {
+            return data.state().controls().get(view.control()) == SwitchPosition.REVERSE ? 1 : 0;
+        }
+
+        boolean prepared() { return staticSnapshot != null && currentSnapshot != null && parts != null; }
+
+        void setState(TrackAssemblyInstance data) {
+            float target = position(data);
             double time = INSTANCE.displayTime;
-            // Rebase the interpolation pair to the actually displayed pose before reversing direction.
-            if (target != (this.data.state().controls().get("main") == SwitchPosition.REVERSE ? 1 : 0)
-                    && currentSnapshot != null) {
+            if (target != position(owner.data) && currentSnapshot != null) {
                 float fraction = snapshotFraction(time);
                 var previous = currentSnapshot.matches(previousSnapshot) ? previousSnapshot : null;
                 var rebased = new ArrayList<RailDrawSnapshot.Part>();
@@ -318,7 +402,6 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
                 previousSnapshotTime = currentSnapshotTime = time;
             }
             animation.target(target, time, ClientConfig.TURNOUT_ANIMATION_DURATION_SECONDS.get());
-            this.data = data;
         }
 
         float snapshotFraction(double time) {
@@ -327,13 +410,13 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
         }
 
         void captureDynamic(double time) {
-            if (!scriptAttempted || assemblyScript == null || scriptFailed || captureTick == INSTANCE.ticks) return;
+            if (!scriptAttempted || assemblyScript == null || owner.scriptFailed || captureTick == INSTANCE.ticks) return;
             float movement = animation.position(time);
             if (currentSnapshot != null && movement == capturedMovement) return;
             captureTick = INSTANCE.ticks;
-            var model = ClientRailModelManager.INSTANCE.model(data.modelId());
-            var snapshot = assemblyScript.captureAssemblyDynamic(movement, model.scaleForGauge(data.gauge()), model.period());
-            if (snapshot == null) { scriptFailed = true; return; }
+            var model = ClientRailModelManager.INSTANCE.model(owner.data.modelId());
+            var snapshot = assemblyScript.captureAssemblyDynamic(movement, model.scaleForGauge(owner.data.gauge()), model.period());
+            if (snapshot == null) { owner.failScripts(this, "dynamic capture", null); return; }
             previousSnapshot = currentSnapshot;
             previousSnapshotTime = currentSnapshotTime;
             currentSnapshot = snapshot;
@@ -345,18 +428,9 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
             }
         }
 
-        void clearScriptMeshes() {
-            if (staticSnapshot == null && currentSnapshot == null) return;
-            for (var group : meshes.values()) closeMeshes(group);
-            meshes.clear();
-            staticSnapshot = null;
-            previousSnapshot = currentSnapshot = null;
-            if (parts != null) { parts.close(); parts = null; }
-        }
         @Override public void close() {
-            for (var meshes : meshes.values()) closeMeshes(meshes);
-            for (var meshes : tongues.values()) closeMeshes(meshes);
-            meshes.clear(); tongues.clear(); missingReported = false;
+            meshes.values().forEach(TrackRenderMesh::close);
+            meshes.clear();
             staticSnapshot = null;
             previousSnapshot = currentSnapshot = null;
             captureTick = Long.MIN_VALUE;
@@ -365,8 +439,6 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
             if (assemblyScript != null) assemblyScript.close();
             assemblyScript = null;
             scriptAttempted = false;
-            scriptFailed = false;
-            scriptPrepareFrame = -1;
         }
     }
 

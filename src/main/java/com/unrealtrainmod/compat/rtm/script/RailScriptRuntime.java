@@ -11,7 +11,6 @@ import java.util.function.Consumer;
 import java.util.function.Supplier;
 import javax.script.ScriptException;
 import com.unrealtrainmod.track.geometry.TrackGeometry;
-import com.unrealtrainmod.track.assembly.TrackAssemblyInstance;
 import com.unrealtrainmod.track.mesh.RailTrackMeshBuilder;
 import com.unrealtrainmod.track.mesh.RailTrackMeshData;
 import java.io.IOException;
@@ -20,7 +19,7 @@ import net.minecraft.core.BlockPos;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-/** Isolated legacy rail script generating cached normal-track or custom-turnout geometry. */
+/** Isolated legacy rail script generating cached normal-track or turnout-view geometry. */
 public final class RailScriptRuntime implements AutoCloseable {
     private static final Logger LOGGER = LoggerFactory.getLogger("UnrealTrainMod RTM scripts");
 
@@ -82,26 +81,26 @@ public final class RailScriptRuntime implements AutoCloseable {
     public static RailScriptRuntime create(RtmScriptCache cache, PackageAsset script, String railName, String label,
                                             List<RailTrackMeshBuilder.Source> sources)
             throws IOException {
-        var runtime = create(cache.program(script), railName, label, sources, null);
+        var runtime = create(cache.program(script), railName, label, sources, null, 0);
         ScriptDiagnostics.scriptScope("rail", script, RtmScript.RAIL_RENDERER
                 + (runtime.hasRenderRailStatic ? "; renderRailStatic builds cached geometry at Pass 0"
                         : "; no renderRailStatic, default static repetition is used")
                 + (runtime.hasShouldRenderObject ? "; shouldRenderObject filters renderStaticParts" : "; no object filter")
-                + (runtime.hasRenderRailDynamic ? "; renderRailDynamic captures tick snapshots for custom turnouts" : ""));
+                + (runtime.hasRenderRailDynamic ? "; renderRailDynamic captures tick snapshots for turnout views" : ""));
         return runtime;
     }
 
     /** Shares compiled code, never the tile, global variables, lists or failure state. */
-    public RailScriptRuntime newAssembly(TrackAssemblyInstance assembly) throws IOException {
-        return create(program, railName, label + " [turnout " + assembly.id() + "]", sources, assembly);
+    public RailScriptRuntime newTurnout(RailTurnoutView view, float movement) throws IOException {
+        return create(program, railName, label + " [turnout " + view.owner() + "/" + view.end() + "]", sources, view, movement);
     }
 
     private static RailScriptRuntime create(RtmScriptProgram program, String railName, String label,
-                                             List<RailTrackMeshBuilder.Source> sources, TrackAssemblyInstance assembly)
+                                             List<RailTrackMeshBuilder.Source> sources, RailTurnoutView view, float movement)
             throws IOException {
         var renderer = new RailScriptRenderer(sources, label);
         var tile = new RailScriptTile(railName);
-        if (assembly != null) tile.assembly(assembly);
+        if (view != null) { tile.turnout(view); tile.movement(movement); }
         RtmScriptInstance instance = null;
         boolean transferred = false;
         try {
@@ -190,7 +189,7 @@ public final class RailScriptRuntime implements AutoCloseable {
             return true;
         } catch (Exception | LinkageError exception) {
             Throwable failure = filterFailure == null ? exception : filterFailure;
-            LOGGER.warn("Turnout script {} {} failed at {}; using native turnout appearance: {}",
+            LOGGER.warn("Turnout script {} {} failed at {}; using assembly fallback appearance: {}",
                     label, filterFailure == null ? phase : "shouldRenderObject",
                     RtmScript.describe(prepared, failure), failure.getMessage());
             LOGGER.debug("Turnout script capture failure", failure);

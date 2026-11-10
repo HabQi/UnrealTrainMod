@@ -300,7 +300,6 @@ public final class TurnoutConstructionManager {
     private static Feedback failure(TrackGraphException exception) {
         return switch (exception.reason()) {
             case UNKNOWN_NODE, NODE_CONNECTED -> Feedback.INVALID_NODE;
-            case BLOCKED_VOLUME -> Feedback.BLOCKED_VOLUME;
             case UNLOADED_VOLUME -> Feedback.UNLOADED_VOLUME;
             case VOLUME_TOO_LARGE -> Feedback.VOLUME_TOO_LARGE;
             case VEHICLE_PRESENT -> Feedback.VEHICLE_PRESENT;

@@ -69,7 +69,28 @@ final class RailPartRenderer implements AutoCloseable {
         lighting = new TrackLighting(anchor);
     }
 
-    int draw(TrackRenderState state, ClientTrackCache.AssemblyEntry entry, RenderLevelStageEvent event,
+    /** Warm shared native sources before replacing the complete parent appearance. */
+    int prepareSources(RailDrawSnapshot snapshot, int uploads, TrackRenderStats stats) {
+        if (StaticModelShader.state() == null) return uploads;
+        for (var part : snapshot.parts()) {
+            if (uploads == 0) break;
+            if (part.source().mesh().indices().length == 0) continue;
+            var shared = ClientRailModelManager.INSTANCE.sharedPart(part.source().mesh());
+            if (shared.gpu == null) { shared.upload(stats); uploads--; }
+        }
+        return uploads;
+    }
+
+    boolean sourcesReady(RailDrawSnapshot snapshot) {
+        if (StaticModelShader.state() == null) return true;
+        for (var part : snapshot.parts()) {
+            if (part.source().mesh().indices().length != 0
+                    && ClientRailModelManager.INSTANCE.sharedPart(part.source().mesh()).gpu == null) return false;
+        }
+        return true;
+    }
+
+    int draw(TrackRenderState state, ClientTrackCache.TurnoutEntry entry, RenderLevelStageEvent event,
              ClientLevel level, double time, int uploads, TrackRenderStats stats) {
         var snapshot = entry.currentSnapshot;
         if (snapshot == null) return uploads;
@@ -157,7 +178,7 @@ final class RailPartRenderer implements AutoCloseable {
         return uploads;
     }
 
-    int drawIris(ClientTrackCache.AssemblyEntry entry, RenderLevelStageEvent event, ClientLevel level,
+    int drawIris(ClientTrackCache.TurnoutEntry entry, RenderLevelStageEvent event, ClientLevel level,
                  double time, TrackDrawQueue queue, int uploads, TrackRenderStats stats) {
         var snapshot = entry.currentSnapshot;
         if (snapshot == null) return uploads;

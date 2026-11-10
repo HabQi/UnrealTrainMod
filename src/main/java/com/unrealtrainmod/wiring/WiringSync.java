@@ -11,7 +11,6 @@ import net.minecraft.nbt.ListTag;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.ChunkPos;
-import net.minecraft.world.phys.AABB;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.neoforge.event.entity.player.PlayerEvent;
 import net.neoforged.neoforge.event.level.ChunkWatchEvent;
@@ -49,12 +48,14 @@ public final class WiringSync {
         }
     }
     public static void changed(ServerLevel level) {
-        var users = LEVELS.get(level); if (users == null) return;
         var data = WiringSavedData.get(level);
+        var dirty = data.takeChangedChunks();
+        var users = LEVELS.get(level); if (users == null || dirty.isEmpty()) return;
         // Compute each watched chunk only once even when several players watch it.
         var snapshots = new HashMap<Long, CompoundTag>();
         for (var user : users.values()) if (user.player.serverLevel() == level) {
             user.chunks.replaceAll((chunk, previous) -> {
+                if (!dirty.contains(chunk)) return previous;
                 var next = snapshots.computeIfAbsent(chunk, c -> snapshot(data, new ChunkPos(c)));
                 if (!next.equals(previous)) send(user.player, chunk, next);
                 return next;
@@ -63,18 +64,13 @@ public final class WiringSync {
     }
     private static CompoundTag snapshot(WiringSavedData data, ChunkPos chunk) {
         var nodes = new LinkedHashMap<UUID, ConnectorData>(); var edges = new ListTag();
-        for (var node : data.connectors()) if (intersects(node.bounds(), chunk)) nodes.put(node.id(), node);
-        for (var wire : data.wires()) {
+        for (var node : data.connectorsInChunk(chunk.toLong())) nodes.put(node.id(), node);
+        for (var wire : data.wiresInChunk(chunk.toLong())) {
             var a = data.connector(wire.first()); var b = data.connector(wire.second());
-            if (!intersects(wire.bounds(a, b), chunk)) continue;
             nodes.put(a.id(), a); nodes.put(b.id(), b); edges.add(wire.save());
         }
         var tag = new CompoundTag(); var list = new ListTag(); nodes.values().forEach(n -> list.add(n.save()));
         tag.put("Connectors", list); tag.put("Wires", edges); return tag;
-    }
-    private static boolean intersects(AABB box, ChunkPos chunk) {
-        return box.maxX >= chunk.getMinBlockX() && box.minX <= chunk.getMaxBlockX() + 1
-                && box.maxZ >= chunk.getMinBlockZ() && box.minZ <= chunk.getMaxBlockZ() + 1;
     }
     private static void send(ServerPlayer player, long chunk, CompoundTag tag) {
         var nodes = tag.getList("Connectors", 10); var wires = tag.getList("Wires", 10);

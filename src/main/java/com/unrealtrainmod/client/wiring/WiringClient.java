@@ -42,9 +42,25 @@ public final class WiringClient {
         WireScriptRuntime script;
         boolean attempted, failedGeometry;
         ConnectorData first, second;
+        ConnectorData boundsFirst, boundsSecond;
+        net.minecraft.world.phys.AABB bounds;
         List<WiringGeometry.Draw> nativeDraws;
-        void close() { if (script != null) script.close(); }
+        ShapeKey shape;
+        void close() { releaseShape(); if (script != null) script.close(); }
+        void releaseShape() {
+            if (shape == null) return;
+            var shared = SHAPES.get(shape); shared.references--; shared.lastUsed = com.unrealtrainmod.client.compat.iris.IrisGeometryCache.frame();
+            shape = null;
+        }
     }
+    private record ShapeKey(WiringModelManager.Model model, Vec3 delta) {}
+    private static final class SharedShape {
+        final List<WiringGeometry.Draw> draws;
+        int references = 1;
+        long lastUsed = com.unrealtrainmod.client.compat.iris.IrisGeometryCache.frame();
+        SharedShape(List<WiringGeometry.Draw> draws) { this.draws = draws; }
+    }
+    private static final Map<ShapeKey, SharedShape> SHAPES = new HashMap<>();
     private static final Map<Long, ChunkState> CHUNKS = new HashMap<>();
     private static final Map<Long, ChunkState> PENDING_CHUNKS = new HashMap<>();
     private static final Map<UUID, ConnectorData> NODES = new HashMap<>();
@@ -125,6 +141,14 @@ public final class WiringClient {
     public static List<WiringGeometry.Draw> wireDraws(UUID id, WiringModelManager.Model model,
             ConnectorData first, ConnectorData second, long tick, float partialTick) {
         var span = SPANS.computeIfAbsent(id, key -> new Span());
+        boolean share = com.unrealtrainmod.wiring.WiringScriptPolicy.of(model.definition().renderer()).endpointOnly();
+        var shape = share ? new ShapeKey(model, second.wirePoint().subtract(first.wirePoint())) : null;
+        if (shape != null) {
+            if (shape.equals(span.shape)) return SHAPES.get(shape).draws;
+            span.releaseShape();
+            var cached = SHAPES.get(shape);
+            if (cached != null) { cached.references++; cached.lastUsed = com.unrealtrainmod.client.compat.iris.IrisGeometryCache.frame(); span.shape = shape; return cached.draws; }
+        }
         if (!span.attempted) {
             span.attempted = true;
             if (model.definition().renderer() != null) try { span.script = new WireScriptRuntime(SCRIPTS, model); }
@@ -133,7 +157,7 @@ public final class WiringClient {
             }
         }
         if (span.script != null) {
-            var draws = span.script.render(first, second, tick, partialTick); if (draws != null) return draws;
+            var draws = span.script.render(first, second, tick, partialTick); if (draws != null) return retain(span, shape, draws);
         }
         if (!first.equals(span.first) || !second.equals(span.second)) {
             span.first = first; span.second = second; span.failedGeometry = false;
@@ -145,11 +169,22 @@ public final class WiringClient {
                 LoggerFactory.getLogger(WiringClient.class).warn("Unable to build wire {}: {}", model.definition().config(), e.getMessage());
             }
         }
-        return model.definition().empty() || span.failedGeometry ? null : span.nativeDraws;
+        return model.definition().empty() || span.failedGeometry ? null : retain(span, shape, span.nativeDraws);
+    }
+
+    private static List<WiringGeometry.Draw> retain(Span span, ShapeKey key, List<WiringGeometry.Draw> draws) {
+        if (key != null) { SHAPES.put(key, new SharedShape(draws)); span.shape = key; }
+        return draws;
     }
 
     private static void render(RenderLevelStageEvent event) {
-        if (event.getStage() != RenderLevelStageEvent.Stage.AFTER_ENTITIES || WIRES.isEmpty()) return;
+        if (event.getStage() != RenderLevelStageEvent.Stage.AFTER_ENTITIES
+                || com.unrealtrainmod.client.compat.iris.IrisCompat.shadowPass()) return;
+        if (!WIRES.isEmpty()) renderWires(event);
+        WiringRenderCache.flushWorld();
+    }
+    public static void renderShadow(RenderLevelStageEvent event) { renderWires(event); }
+    private static void renderWires(RenderLevelStageEvent event) {
         var mc = Minecraft.getInstance(); if (mc.level == null) return;
         var oldShader = RenderSystem.getShader(); var oldColor = RenderSystem.getShaderColor().clone();
         var modelView = RenderSystem.getModelViewStack(); modelView.pushMatrix(); modelView.set(event.getModelViewMatrix());
@@ -161,14 +196,14 @@ public final class WiringClient {
             for (var wire : WIRES.values()) {
                 var a = NODES.get(wire.first()); var b = NODES.get(wire.second()); if (a == null || b == null) continue;
                 a = displayed(a); b = displayed(b);
-                var bounds = wire.bounds(a, b);
+                var bounds = bounds(wire, a, b);
                 if (!event.getFrustum().isVisible(bounds)) continue;
                 var model = WiringModelManager.INSTANCE.model(wire.model());
                 var pose = new PoseStack(); var start = a.wirePoint();
                 pose.translate(start.x - camera.x, start.y - camera.y, start.z - camera.z);
                 var draws = model == null ? null : wireDraws(wire.id(), model, a, b, mc.level.getGameTime(), partial);
-                if (draws == null) line(pose, buffers, b.wirePoint().subtract(start));
-                else WiringGeometry.render(draws, pose, buffers, LevelRenderer.getLightColor(mc.level, BlockPos.containing(start)));
+                if (draws == null) { WiringRenderStats.fallback(model == null ? "missing_model" : "wire_geometry_unavailable"); line(pose, buffers, b.wirePoint().subtract(start)); }
+                else WiringRenderCache.render(draws, pose, buffers, LevelRenderer.getLightColor(mc.level, BlockPos.containing(start)), false, true);
             }
             buffers.endBatch();
         } finally {
@@ -176,15 +211,23 @@ public final class WiringClient {
             modelView.popMatrix(); RenderSystem.applyModelViewMatrix();
         }
     }
+    public static net.minecraft.world.phys.AABB bounds(WireData wire, ConnectorData first, ConnectorData second) {
+        var span = SPANS.computeIfAbsent(wire.id(), id -> new Span());
+        if (!first.equals(span.boundsFirst) || !second.equals(span.boundsSecond)) {
+            span.boundsFirst = first; span.boundsSecond = second; span.bounds = wire.bounds(first, second);
+        }
+        return span.bounds;
+    }
     private static void line(PoseStack pose, MultiBufferSource buffers, Vec3 target) {
         var out = buffers.getBuffer(RenderType.lines()); var m = pose.last().pose();
         var d = target.lengthSqr() > 0 ? target.scale(1 / target.length()) : new Vec3(0, 1, 0);
         out.addVertex(m, 0, 0, 0).setColor(0xFFFF00FF).setNormal((float)d.x, (float)d.y, (float)d.z);
         out.addVertex(m, (float)target.x, (float)target.y, (float)target.z).setColor(0xFFFF00FF).setNormal((float)d.x, (float)d.y, (float)d.z);
     }
-    public static void clearRuntimes() { SPANS.values().forEach(Span::close); SPANS.clear(); SCRIPTS.clear(); }
+    static void trimShapes(long frame) { SHAPES.values().removeIf(shape -> shape.references == 0 && shape.lastUsed < frame - 120); }
+    public static void clearRuntimes() { SPANS.values().forEach(Span::close); SPANS.clear(); SHAPES.clear(); SCRIPTS.clear(); }
     public static void release(UUID id) { var span = SPANS.remove(id); if (span != null) span.close(); }
-    public static void clear() { clearRuntimes(); CHUNKS.clear(); PENDING_CHUNKS.clear(); NODES.clear(); WIRES.clear(); preview = null; }
+    public static void clear() { clearRuntimes(); WiringRenderCache.clear(); CHUNKS.clear(); PENDING_CHUNKS.clear(); NODES.clear(); WIRES.clear(); preview = null; }
     private static void unload(LevelEvent.Unload e) { if (e.getLevel().isClientSide()) clear(); }
     private static void logout(ClientPlayerNetworkEvent.LoggingOut e) { clear(); }
 }

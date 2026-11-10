@@ -33,16 +33,34 @@ public final class RailScriptMap {
     }
 
     private final TrackGeometry geometry;
+    private final boolean ownsEnd;
+    private final int cachedSplit;
+    private final TrackPose[] samples;
 
-    RailScriptMap(TrackGeometry geometry) { this.geometry = geometry; }
+    RailScriptMap(TrackGeometry geometry) { this(geometry, true, false); }
+
+    RailScriptMap(TrackGeometry geometry, boolean ownsEnd) { this(geometry, ownsEnd, true); }
+
+    private RailScriptMap(TrackGeometry geometry, boolean ownsEnd, boolean animated) {
+        this.geometry = geometry;
+        this.ownsEnd = ownsEnd;
+        cachedSplit = Math.max(1, (int)Math.floor(geometry.getLength() * 2));
+        samples = animated ? new TrackPose[cachedSplit + 1] : null;
+        if (animated) for (int i = 0; i <= cachedSplit; i++) samples[i] = geometry.sample(geometry.getLength() * i / cachedSplit);
+    }
 
     public double getLength() { return geometry.getLength(); }
-    public Position getStartRP() { return new Position(geometry.sample(0)); }
-    public Position getEndRP() { return new Position(geometry.sample(getLength())); }
+    public Position getStartRP() { return new Position(sample(cachedSplit, 0)); }
+    public Position getEndRP() { return new Position(sample(cachedSplit, cachedSplit)); }
 
-    private TrackPose sample(int split, double index) {
+    /** Only the D-end rendering view excludes its shared crossover midpoint. */
+    public boolean ownsSample(int split, double index) { return ownsEnd || split == 0 || index < split; }
+
+    TrackPose sample(int split, double index) {
         if (split < 0 || !Double.isFinite(index)) throw new IllegalArgumentException("Invalid rail sampling parameters");
-        return geometry.sample(split == 0 ? 0 : getLength() * (index / split));
+        if (split == 0) return samples == null ? geometry.sample(0) : samples[0];
+        if (samples != null && split == cachedSplit && index == Math.rint(index)) return samples[(int)Math.clamp(index, 0, cachedSplit)];
+        return geometry.sample(getLength() * (index / split));
     }
 
     public double[] getRailPos(int split, double index) {

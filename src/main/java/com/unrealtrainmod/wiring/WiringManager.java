@@ -164,6 +164,7 @@ public final class WiringManager {
 
     public static boolean canReach(ServerPlayer player, ConnectorData node) {
         if (node == null || !player.mayBuild() || !player.isAlive()) return false;
+        if (com.unrealtrainmod.blueprint.BlueprintManager.underConstruction(node.id())) return false;
         double reach = player.entityInteractionRange() + 1;
         return node.bounds().distanceToSqr(player.getEyePosition()) <= reach * reach;
     }

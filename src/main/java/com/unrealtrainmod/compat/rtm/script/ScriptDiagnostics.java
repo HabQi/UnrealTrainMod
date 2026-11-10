@@ -59,11 +59,11 @@ public final class ScriptDiagnostics {
         }
     }
 
-    /** Reports the limited built-in replacement once per owning script and resource reload. */
+    /** Reports the built-in rail replacement once per owning script and resource reload. */
     public static void builtinLibrary(PackageAsset script, String library) {
         String key = "builtin-library|" + script + "|" + library;
         if (REPORTED.add(key)) LOGGER.info(
-                "RTM script {}!{} uses {}: static-stage compatibility only; dynamic rail drawing is unsupported",
+                "RTM script {}!{} uses {}: cached static rails and rigid WTRE turnout animation helpers",
                 script.archive(), script.entry(), library);
     }
 

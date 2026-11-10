@@ -4,10 +4,7 @@
  */
 package com.unrealtrainmod.compat.rtm.script;
 
-import com.unrealtrainmod.track.assembly.SwitchPosition;
-import com.unrealtrainmod.track.assembly.TrackAssemblyInstance;
-
-/** One native A-to-B/A-to-C turnout, with stable map identities for legacy script caches. */
+/** One read-only A-to-B/A-to-C rendering view, with stable map identities for legacy script caches. */
 public final class RailScriptSwitch {
     public static final class Point {
         public final RailScriptMap rmMain, rmBranch;
@@ -15,14 +12,13 @@ public final class RailScriptSwitch {
         public final RailDir branchDir;
         private float movement;
 
-        private Point(RailScriptMap main, RailScriptMap branch, RailDir direction, SwitchPosition position) {
+        private Point(RailScriptMap main, RailScriptMap branch, RailDir direction) {
             rmMain = main;
             rmBranch = branch;
             branchDir = direction;
             // Maps run A -> B/C. Only the common entrance is their positive endpoint.
             mainDirIsPositive = direction != RailDir.NONE;
             branchDirIsPositive = direction != RailDir.NONE;
-            movement = position == SwitchPosition.NORMAL ? 0 : 1;
         }
 
         public float getMovement() { return branchDir == RailDir.NONE ? 0 : movement; }
@@ -31,10 +27,9 @@ public final class RailScriptSwitch {
     private final Point[] points;
     private final RailScriptMap[] maps;
 
-    RailScriptSwitch(TrackAssemblyInstance assembly) {
-        var paths = assembly.geometry().paths();
-        var main = new RailScriptMap(paths.get("straight").getFirst());
-        var branch = new RailScriptMap(paths.get("diverging").getFirst());
+    RailScriptSwitch(RailTurnoutView view) {
+        var main = new RailScriptMap(view.main(), true);
+        var branch = new RailScriptMap(view.branch(), view.ownsBranchEnd());
         maps = new RailScriptMap[]{main, branch};
         var mainEnd = main.geometry().sample(main.getLength());
         var branchEnd = branch.geometry().sample(branch.getLength()).position();
@@ -42,9 +37,9 @@ public final class RailScriptSwitch {
         double side = dx * mainEnd.lateral().x() + dz * mainEnd.lateral().z();
         var direction = side > 0 ? RailDir.LEFT : RailDir.RIGHT;
         points = new Point[]{
-                new Point(main, branch, direction, assembly.state().controls().get("main")),
-                new Point(main, null, RailDir.NONE, SwitchPosition.NORMAL),
-                new Point(branch, null, RailDir.NONE, SwitchPosition.NORMAL)};
+                new Point(main, branch, direction),
+                new Point(main, null, RailDir.NONE),
+                new Point(branch, null, RailDir.NONE)};
     }
 
     public Point[] getPoints() { return points.clone(); }

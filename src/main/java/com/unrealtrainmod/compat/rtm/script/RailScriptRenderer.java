@@ -93,6 +93,9 @@ public final class RailScriptRenderer extends RtmPartsRenderer {
     /** A prepared native rail definition has a single model variant. */
     public int getCurrentRailIndex() { return 0; }
 
+    /** Authored lateral offsets use the same scale as the prepared rail model. */
+    public double getRailModelScale() { return current().modelScale(); }
+
     /** Repeats the prepared geometry along the native centerline and applies shouldRenderObject. */
     public void renderStaticParts(Object tile, double x, double y, double z) { current().repeat(sources, x, y, z); }
 

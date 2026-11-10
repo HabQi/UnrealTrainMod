@@ -15,4 +15,9 @@ public interface TrackGeometry {
     default TrackGeometry reversed() {
         return new ReversedTrackGeometry(this);
     }
+
+    /** Read-only distance interval; retains the original curve and its sampling caches. */
+    default TrackGeometry section(double start, double end) {
+        return new TrackGeometrySection(this, start, end);
+    }
 }

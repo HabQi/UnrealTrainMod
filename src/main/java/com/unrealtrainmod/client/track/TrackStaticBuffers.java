@@ -339,10 +339,17 @@ final class TrackStaticBuffers implements AutoCloseable {
         return uploads;
     }
 
-    boolean enqueueRanges(TrackStaticMesh mesh, TrackDrawQueue queue, Matrix4f modelView, TrackRenderStats stats) {
+    boolean ready(TrackStaticMesh mesh) {
         var parts = sources.get(mesh);
+        if (parts == null) return false;
         // Keep a source pending until all of its material ranges are ready.
         for (var part : parts) if (part.ranges.isEmpty()) return false;
+        return true;
+    }
+
+    boolean enqueueRanges(TrackStaticMesh mesh, TrackDrawQueue queue, Matrix4f modelView, TrackRenderStats stats) {
+        if (!ready(mesh)) return false;
+        var parts = sources.get(mesh);
         for (var part : parts) for (var range : part.ranges) queue.addStaticRange(range, modelView, stats);
         return true;
     }

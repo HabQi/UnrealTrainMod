@@ -117,6 +117,7 @@ public class UnrealTrainModClient {
 
     public UnrealTrainModClient(ModContainer container) {
         com.unrealtrainmod.client.wiring.WiringClient.register(NeoForge.EVENT_BUS);
+        com.unrealtrainmod.client.blueprint.BlueprintClient.register(NeoForge.EVENT_BUS);
         container.registerConfig(ModConfig.Type.CLIENT, ClientConfig.SPEC);
         // Expose the client configuration in the Mods screen.
         container.registerExtensionPoint(IConfigScreenFactory.class, ModConfigScreen::new);
