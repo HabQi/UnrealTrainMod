@@ -491,7 +491,8 @@ public final class IrisModelRenderer {
 
     private static void prepare(Snapshot snapshot, PoseStack viewPose, boolean shadow) {
         snapshot.prepared.clear();
-        boolean staticTransparency = !shadow && ClientConfig.USE_STATIC_TRANSLUCENT_BATCHES.getAsBoolean();
+        boolean staticTransparency = !shadow
+                && ClientConfig.TRANSLUCENT_RENDER_MODE.get() == ClientConfig.TranslucentRenderMode.PERFORMANCE;
         PoseStack.Pose local = null, posed = null;
         Matrix4f view = null;
         boolean supported = false;
@@ -608,7 +609,7 @@ public final class IrisModelRenderer {
         }
         IrisRenderStats.submit(start);
         if (shadow) return;
-        if (ClientConfig.USE_STATIC_TRANSLUCENT_BATCHES.getAsBoolean()) {
+        if (ClientConfig.TRANSLUCENT_RENDER_MODE.get() == ClientConfig.TranslucentRenderMode.PERFORMANCE) {
             drawStaticTranslucent(snapshot, buffers, temporal);
             drawLightLayers(snapshot, buffers, temporal);
             return;
@@ -625,7 +626,7 @@ public final class IrisModelRenderer {
             for (int i = 0; i < centers.length; i += 3) sorted.add(d, i / 3,
                     m.m02() * centers[i] + m.m12() * centers[i + 1] + m.m22() * centers[i + 2] + m.m32());
         }
-        if (ClientConfig.SORT_TRANSLUCENT_TRIANGLES.getAsBoolean()) sorted.sort();
+        sorted.sort();
         IrisRenderStats.sort(start);
         start = IrisRenderStats.clock();
         for (int i = 0; i < sorted.count; i++) {

@@ -377,7 +377,7 @@ final class TrackRenderStats {
         // It also contains staging-buffer allocation, upload VAO binding and draw-scope state backup.
         // Draw-scope cleanup is already included in windowDraw.
         long traverse = Math.max(0L, windowStage - windowBuild - windowLight - windowPack - windowVbo - windowGroup - windowDraw);
-        LOGGER.info("Track [{}] path={} frames={} stage avg={}ms max={}ms "
+        LOGGER.info("Track [{}] path={} bufferMode=sharedPages frames={} window={}ms stage avg={}ms max={}ms "
                         + "(traverse={} build={} light={} pack={} vbo={} group={} draw={} ms/frame) "
                         + "| perFrame chunks={} candidates={} visible={} empty={} pending={} "
                         + "draws={} [nativeTrack={} railTrack={} nativeAssembly={} railAssembly={}] "
@@ -385,12 +385,12 @@ final class TrackRenderStats {
                         + "vboBytes={} iboBytes={} stagingBytes={} rtSetups={} shaderBinds={} programSwitches={} "
                         + "lightChecked={} lightChanged={} "
                         + "| window draws={} verts={} tris={} builds={} uploads={} vboBytes={} iboBytes={} "
-                        + "| chunkMerge={} railBatches={} chunkMaterials={} extraBatches={} "
+                        + "| chunkMerge=counted railBatches={} chunkMaterials={} extraBatches={} "
                         + "| gpuStill={} samples={} avg={}ms max={}ms "
                         + "| animation turnouts={} jsCalls={} js={}ms parts={} instanceBytes={} activeBytes={} staticBytes={} "
                         + "gpuMoving samples={} avg={}ms max={}ms "
                         + "| buildBudget skipped={} slowBuilds={} maxSlow={}ms resource={}",
-                scene, path, frames,
+                scene, path, frames, ms(now - windowStart),
                 ms(windowStage / frames), ms(windowMaxStage),
                 ms(traverse / frames), ms(windowBuild / frames), ms(windowLight / frames),
                 ms(windowPack / frames), ms(windowVbo / frames), ms(windowGroup / frames), ms(windowDraw / frames),
@@ -408,7 +408,6 @@ final class TrackRenderStats {
                 avg(windowProgramSwitches, frames), avg(windowLightChecked, frames),
                 avg(windowLightChanged, frames),
                 drawSlots, vertexSlots, triangleSlots, windowBuilds, windowUploads, windowVboBytes, windowIboBytes,
-                path.endsWith("Groups") ? "counted" : "notGrouped",
                 avg(windowRailChunkBatches, frames), avg(windowRailChunkMaterials, frames),
                 avg(windowRailChunkBatches - windowRailChunkMaterials, frames),
                 !gpuTimer.supported() ? "unsupported" : windowGpuSamples == 0 ? "noSamples" : "sampled",
@@ -420,7 +419,7 @@ final class TrackRenderStats {
                 windowAnimatedGpuSamples == 0 ? "n/a" : ms(windowAnimatedGpu / windowAnimatedGpuSamples),
                 windowAnimatedGpuSamples == 0 ? "n/a" : ms(windowMaxAnimatedGpu),
                 windowBudgetSkipped, windowSlowBuilds, ms(windowMaxSlowBuild), windowSlowResource);
-        LOGGER.info("Track buffers [{}] path={} perFrame rangesBefore={} rangesAfter={} multiDrawCalls={} "
+        LOGGER.info("Track buffers [{}] path={} bufferMode=sharedPages perFrame rangesBefore={} rangesAfter={} multiDrawCalls={} "
                         + "multiDrawRanges={} savedCalls={} lightBytes={} pageBuilds={} pageRebuilds={} residentPages={} residentBytes={}",
                 scene, path, avg(windowRangeBefore, frames), avg(windowRangeAfter, frames),
                 avg(windowMultiDrawCalls, frames), avg(windowMultiDrawRanges, frames),

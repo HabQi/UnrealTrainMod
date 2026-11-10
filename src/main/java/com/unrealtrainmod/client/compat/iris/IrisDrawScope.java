@@ -51,12 +51,18 @@ public final class IrisDrawScope implements AutoCloseable {
 
     public IrisDrawScope() { this(false, false); }
     public static IrisDrawScope entity() { return new IrisDrawScope(true, false); }
+    /** World preview models use the entity phase with a neutral, non-item identity. */
+    public static IrisDrawScope preview() { return new IrisDrawScope(true, false, true); }
     /** HandRenderer already owns the hand phase and projection; do not wrap it as an entity pass. */
     public static IrisDrawScope hand() { return new IrisDrawScope(false, true); }
     public static IrisDrawScope current() { return current; }
     public boolean lastDrawAppliedShader() { return lastDrawAppliedShader; }
 
     private IrisDrawScope(boolean entity, boolean hand) {
+        this(entity, hand, false);
+    }
+
+    private IrisDrawScope(boolean entity, boolean hand, boolean preview) {
         this.entity = entity;
         retainShader = entity;
         RenderSystem.backupGlState(state);
@@ -68,8 +74,8 @@ public final class IrisDrawScope implements AutoCloseable {
         }
         RenderSystem.activeTexture(activeTexture);
         identity = IrisCompat.currentIdentity();
-        drawIdentity = entity || hand ? identity : new int[3];
-        if (!entity && !hand) IrisCompat.restoreTrackIdentity(drawIdentity);
+        drawIdentity = (entity || hand) && !preview ? identity : new int[3];
+        if ((!entity && !hand) || preview) IrisCompat.restoreTrackIdentity(drawIdentity);
         current = this;
         if (metrics != null) metrics.captured();
     }

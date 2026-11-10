@@ -11,7 +11,6 @@ import com.mojang.blaze3d.systems.RenderSystem;
 import com.unrealtrainmod.client.compat.iris.IrisCompat;
 import com.unrealtrainmod.client.compat.iris.IrisDrawScope;
 import com.unrealtrainmod.client.compat.iris.IrisRenderStats;
-import com.unrealtrainmod.client.ClientConfig;
 import com.unrealtrainmod.track.mesh.TrackMeshBuilder;
 import com.unrealtrainmod.track.geometry.TrackGeometry;
 import com.unrealtrainmod.track.geometry.TrackVector;
@@ -120,15 +119,12 @@ public final class TrackWorldRenderer {
         var level = Minecraft.getInstance().level;
         if (level == null || cache.world() != level || (cache.entries.isEmpty() && cache.assemblies.isEmpty())) return;
         RenderSystem.assertOnRenderThread();
-        // All three paths share cached geometry, visibility decisions, build and upload budgets.
         boolean iris = IrisCompat.active();
-        boolean stateCache = !iris && ClientConfig.USE_TRACK_RENDER_STATE_CACHE.getAsBoolean();
-        boolean groupMaterials = (iris || stateCache) && ClientConfig.GROUP_TRACK_DRAWS_BY_MATERIAL.getAsBoolean();
         TrackRenderStats stats = TrackRenderStats.begin(level, shadow ? "shadow" : "world",
-                iris ? (groupMaterials ? "IrisCachedGroups" : "IrisCached") : groupMaterials ? "materialGroups" : stateCache ? "stateCache" : "legacy");
+                iris ? "IrisCachedGroups" : "materialGroups");
         long stageStart = stats == null ? 0L : System.nanoTime();
         TrackDrawQueue queue = DRAW_QUEUE;
-        queue.begin(groupMaterials, stateCache);
+        queue.begin();
         TrackStaticBuffers.WORLD.beginView();
         var budget = frameBudget;
         budget.stats = stats;
@@ -140,8 +136,7 @@ public final class TrackWorldRenderer {
         Matrix4f modelView = new Matrix4f();
         try (var irisMetrics = iris ? IrisRenderStats.begin(IrisRenderStats.TRACK, shadow) : null;
              var irisScope = iris ? new IrisDrawScope() : null;
-             var protection = stateCache || iris ? null : new TrackRenderState(stats);
-             var state = stateCache ? new TrackRenderState(stats) : null) {
+             var state = iris ? null : new TrackRenderState(stats)) {
             long irisPrepareStart = IrisRenderStats.clock();
             // Script failures are recorded during a build; rebuild those meshes at a point outside cache iteration.
             cache.flushScriptFailures();
@@ -279,22 +274,21 @@ public final class TrackWorldRenderer {
                     }
                 }
             }
-            // Build and upload all replacement pages before resolving any GPU range references.
+            // Build and upload replacement pages before resolving any GPU range references.
             uploads = TrackStaticBuffers.WORLD.prepare(level, budget, uploads, stats);
             long resolveStart = stats == null ? 0 : System.nanoTime();
             queue.resolve(TrackStaticBuffers.WORLD, stats);
             if (stats != null) stats.grouped(System.nanoTime() - resolveStart);
             TrackStaticBuffers.WORLD.collectStats(stats);
-            if (!iris) queue.draw(state != null ? state : protection, event.getProjectionMatrix(), stats);
+            if (!iris) queue.draw(state, event.getProjectionMatrix(), stats);
             // Shared track scope also owns rigid shaders; each renderer releases its instance attributes.
             for (var entry : dynamic) {
                 uploads = iris ? entry.parts.drawIris(entry, event, level, time, queue, uploads, stats)
-                        : state != null ? entry.parts.draw(state, entry, event, level, time, true, groupMaterials, uploads, stats)
-                        : entry.parts.draw(entry, event, level, time, false, groupMaterials, uploads, stats);
+                        : entry.parts.draw(state, entry, event, level, time, uploads, stats);
             }
             if (iris) {
                 IrisRenderStats.prepare(irisPrepareStart);
-                if (groupMaterials) irisScope.beginTrackBatch();
+                irisScope.beginTrackBatch();
                 queue.draw(null, event.getProjectionMatrix(), stats);
             }
             cache.collectStats(stats, time);
@@ -364,8 +358,8 @@ public final class TrackWorldRenderer {
         if (!event.getFrustum().isVisible(mesh.bounds())) return uploads;
         if (stats != null) stats.visible();
         if (mesh instanceof TrackStaticMesh fixed) {
-            TrackStaticBuffers.WORLD.request(fixed, structure);
             var origin = mesh.origin();
+            TrackStaticBuffers.WORLD.request(fixed, structure);
             modelView.set(event.getModelViewMatrix()).translate((float)(origin.x() - camera.x),
                     (float)-camera.y, (float)(origin.z() - camera.z));
             long start = stats == null ? 0 : System.nanoTime();

@@ -85,7 +85,7 @@ public final class RailPreviewRenderer implements AutoCloseable {
             if (mesh.isEmpty()) return;
             buffers.request(mesh, TrackRenderStats.STRUCTURE_TRACK);
             buffers.prepare(null, null, Integer.MAX_VALUE, null);
-            queue.begin(true, true);
+            queue.begin();
             queue.addStatic(mesh, new Matrix4f(pose.last().pose()), TrackRenderStats.STRUCTURE_TRACK);
             queue.resolve(buffers, null);
             // The preview owns a native shader scope even when Iris is enabled in the world.

@@ -10,7 +10,6 @@ import com.mojang.blaze3d.vertex.DefaultVertexFormat;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexFormat;
 import com.mojang.blaze3d.vertex.VertexBuffer;
-import com.unrealtrainmod.client.compat.iris.IrisCompat;
 import com.unrealtrainmod.client.compat.iris.IrisDrawScope;
 import com.unrealtrainmod.client.compat.iris.IrisRenderTypes;
 import com.unrealtrainmod.client.compat.iris.IrisVertices;
@@ -70,17 +69,8 @@ final class RailPartRenderer implements AutoCloseable {
         lighting = new TrackLighting(anchor);
     }
 
-    int draw(ClientTrackCache.AssemblyEntry entry, RenderLevelStageEvent event, ClientLevel level,
-             double time, boolean stateCache, boolean groupMaterials, int uploads, TrackRenderStats stats) {
-        if (IrisCompat.active()) return drawIris(entry, event, level, time, null, uploads, stats);
-        try (var state = new TrackRenderState(stats)) {
-            return draw(state, entry, event, level, time, stateCache, groupMaterials, uploads, stats);
-        }
-    }
-
     int draw(TrackRenderState state, ClientTrackCache.AssemblyEntry entry, RenderLevelStageEvent event,
-             ClientLevel level, double time, boolean stateCache, boolean groupMaterials,
-             int uploads, TrackRenderStats stats) {
+             ClientLevel level, double time, int uploads, TrackRenderStats stats) {
         var snapshot = entry.currentSnapshot;
         if (snapshot == null) return uploads;
         long groupStart = stats == null ? 0 : System.nanoTime();
@@ -132,21 +122,9 @@ final class RailPartRenderer implements AutoCloseable {
             if (stats != null) stats.grouped(System.nanoTime() - groupStart);
             return uploads;
         }
-        var groups = new ArrayList<List<Draw>>();
-        if (groupMaterials) {
-            var grouped = new LinkedHashMap<Key, List<Draw>>();
-            for (var draw : draws) grouped.computeIfAbsent(draw.key, ignored -> new ArrayList<>()).add(draw);
-            groups.addAll(grouped.values());
-        } else {
-            // Preserve submission order while still instancing adjacent identical commands.
-            List<Draw> group = null;
-            for (var draw : draws) {
-                if (group == null || !group.getFirst().key.equals(draw.key)) {
-                    group = new ArrayList<>(); groups.add(group);
-                }
-                group.add(draw);
-            }
-        }
+        var grouped = new LinkedHashMap<Key, List<Draw>>();
+        for (var draw : draws) grouped.computeIfAbsent(draw.key, ignored -> new ArrayList<>()).add(draw);
+        var groups = grouped.values();
         boolean instanced = StaticModelShader.state() != null && InstancedModelShader.usable();
         if (stats != null) stats.grouped(System.nanoTime() - groupStart);
         var fixed = new ArrayList<Draw>();
@@ -169,8 +147,7 @@ final class RailPartRenderer implements AutoCloseable {
                 boolean active = group.getFirst().key.moving;
                 int offset = active ? movingOffset : fixedOffset;
                 var instances = active ? movingInstances : fixedInstances;
-                submit(state, group, instanced, instances, offset, modelView, event, stateCache, stats);
-                if (!stateCache) state.endBatch();
+                submit(state, group, instanced, instances, offset, modelView, event, stats);
                 if (active) movingOffset += group.size(); else fixedOffset += group.size();
             }
         } finally {
@@ -209,13 +186,7 @@ final class RailPartRenderer implements AutoCloseable {
             var type = IrisRenderTypes.get(source.texture(), source.doubleSided(), false, false);
             if (gpu != null) {
                 var posedView = new Matrix4f(modelView).mul(local);
-                if (queue != null) {
-                    queue.addCached(gpu, type, posedView, light);
-                } else {
-                    boolean changed = IrisDrawScope.current().drawCached(gpu, type, posedView, event.getProjectionMatrix(), light);
-                    IrisRenderStats.gpu(source.mesh().indices().length / 3);
-                    if (stats != null) { if (changed) stats.renderTypeSetup(); stats.irisShaderBind(); }
-                }
+                queue.addCached(gpu, type, posedView, light);
             } else {
                 var builder = new BufferBuilder(fallback, VertexFormat.Mode.TRIANGLES, DefaultVertexFormat.NEW_ENTITY);
                 for (int index : source.mesh().indices()) writer.vertex(builder, source.mesh(), index, prepared.pose, light, false);
@@ -231,12 +202,12 @@ final class RailPartRenderer implements AutoCloseable {
                 if (stats != null) { stats.activeUpload(bytes); if (changed) stats.renderTypeSetup(); stats.irisShaderBind(); }
             }
             drawn++;
-            if (gpu == null || queue == null) IrisRenderStats.submit(start);
-            if (stats != null) {
-                if (gpu == null || queue == null) stats.drawn(TrackRenderStats.RAIL_MODEL, TrackRenderStats.STRUCTURE_ASSEMBLY, 1,
+            if (gpu == null) IrisRenderStats.submit(start);
+            if (stats != null && gpu == null) {
+                stats.drawn(TrackRenderStats.RAIL_MODEL, TrackRenderStats.STRUCTURE_ASSEMBLY, 1,
                         source.mesh().indices().length, source.mesh().indices().length / 3,
-                        gpu == null ? 0 : gpu.vertices, System.nanoTime() - start);
-                if (gpu == null || queue == null) stats.ranges(1, 1, 0);
+                        0, System.nanoTime() - start);
+                stats.ranges(1, 1, 0);
             }
         }
         if (stats != null) stats.dynamicParts(drawn);
@@ -298,8 +269,7 @@ final class RailPartRenderer implements AutoCloseable {
     }
 
     private void submit(TrackRenderState state, List<Draw> group, boolean instanced, InstanceBuffer instances, int offset,
-                        Matrix4f modelView, RenderLevelStageEvent event,
-                        boolean stateCache, TrackRenderStats stats) {
+                        Matrix4f modelView, RenderLevelStageEvent event, TrackRenderStats stats) {
         var key = group.getFirst().key;
         // Match the chunk-relative fog coordinates of the existing fixed track shaders.
         var renderOrigin = new Vector3f((float)(anchor.x() - (double)ChunkPos.getX(key.chunk) * 16),
@@ -329,7 +299,6 @@ final class RailPartRenderer implements AutoCloseable {
                     shader.renderOrigin().upload();
                     key.mesh.gpu.draw(false, 0, count);
                 }
-                if (!stateCache) state.endBatch();
             }
             calls = group.size();
         }

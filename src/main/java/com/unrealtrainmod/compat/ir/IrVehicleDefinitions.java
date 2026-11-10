@@ -41,6 +41,7 @@ final class IrVehicleDefinitions {
             if (key != null) objects.computeIfAbsent(key, ignored -> new ArrayList<>()).add(name);
         }
         var controls = new LinkedHashMap<String, IrControlDefinition>();
+        var labels = new HashMap<String, String>();
         var modelControls = new LinkedHashMap<String, IrModelControl>();
         var engines = new HashSet<String>();
         var horns = new HashSet<String>();
@@ -62,7 +63,7 @@ final class IrVehicleDefinitions {
             if (key.startsWith("ENGINE_START_")) engines.add(group);
             if (key.startsWith("HORN_CONTROL_")) horns.add(group);
             if (key.startsWith("BELL_CONTROL_")) bells.add(group);
-            if (label == null) label = key;
+            if (label != null) labels.putIfAbsent(group, label);
             IrReadout driver = key.startsWith("THROTTLE_BRAKE_") ? IrReadout.THROTTLE_BRAKE
                     : key.startsWith("THROTTLE_") ? IrReadout.THROTTLE
                     : key.startsWith("TRAIN_BRAKE_") ? IrReadout.TRAIN_BRAKE
@@ -70,7 +71,7 @@ final class IrVehicleDefinitions {
             float base = key.startsWith("REVERSER_") || key.startsWith("THROTTLE_BRAKE_") ? 0.5f : 0;
             var type = press ? IrControlDefinition.Type.PRESS : toggle ? IrControlDefinition.Type.TOGGLE
                     : IrControlDefinition.Type.CONTINUOUS;
-            var control = new IrControlDefinition(group, label, type, defaults.getOrDefault(group, base), driver);
+            var control = new IrControlDefinition(group, key, type, defaults.getOrDefault(group, base), driver);
             controls.merge(group, control, IrVehicleDefinitions::merge);
             modelControls.put(key, new IrModelControl(group, type, !noInteract));
             var bounds = new ModelBounds.Builder();
@@ -79,6 +80,10 @@ final class IrVehicleDefinitions {
             soundBindings.put(key, new IrSoundDefinitions.Binding(group, driver,
                     new TrackVector(center.centerZ() * scale, center.centerY() * scale, -center.centerX() * scale)));
         }
+        labels.forEach((group, label) -> {
+            var control = controls.get(group);
+            controls.put(group, new IrControlDefinition(group, label, control.type(), control.defaultValue(), control.driver()));
+        });
         var animations = new ArrayList<IrAnimationDefinition>();
         if (json.has("animations")) for (var element : GsonHelper.getAsJsonArray(json, "animations")) {
             try {

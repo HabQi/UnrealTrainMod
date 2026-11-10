@@ -26,17 +26,15 @@ final class TrackDrawQueue implements AutoCloseable {
                         int source, int structure, int vertices, int triangles, int storedVertices,
                         float movement, IrisGeometryCache.Mesh cached, int light,
                         TrackStaticMesh pending, TrackStaticBuffers.Range range) {}
-    private final List<Draw> requests = new ArrayList<>(), ordered = new ArrayList<>();
+    private final List<Draw> requests = new ArrayList<>();
     private final LinkedHashMap<RenderType, List<Draw>> groups = new LinkedHashMap<>();
-    private boolean grouped, reuseState, resolved, iris;
+    private boolean resolved, iris;
     private IntBuffer first, counts;
     private PointerBuffer offsets;
     private int capacity;
 
-    void begin(boolean grouped, boolean reuseState) {
+    void begin() {
         clear();
-        this.grouped = grouped;
-        this.reuseState = reuseState;
         iris = IrisCompat.active();
         resolved = false;
     }
@@ -49,21 +47,21 @@ final class TrackDrawQueue implements AutoCloseable {
     void resolve(TrackStaticBuffers buffers, TrackRenderStats stats) {
         for (var request : requests) {
             if (request.pending() == null) { addResolved(request); continue; }
-            if (!buffers.ready(request.pending())) {
+            if (!buffers.enqueueRanges(request.pending(), this, request.modelView(), stats)) {
                 if (stats != null) stats.pending();
-                continue;
-            }
-            for (var range : buffers.ranges(request.pending())) {
-                var page = range.page();
-                addResolved(new Draw(page.type, page.buffer, request.modelView(), page.source, page.structure,
-                        range.count(), range.count() / 3, range.storedVertices(),
-                        Float.NaN, null, 0, null, range));
-                if (stats != null && page.source == TrackRenderStats.RAIL_MODEL
-                        && page.structure == TrackRenderStats.STRUCTURE_TRACK) stats.railChunkBatch(page.chunk, page.type);
             }
         }
         requests.clear();
         resolved = true;
+    }
+
+    void addStaticRange(TrackStaticBuffers.Range range, Matrix4f modelView, TrackRenderStats stats) {
+        var page = range.page();
+        addResolved(new Draw(page.type, page.buffer, modelView, page.source, page.structure,
+                range.count(), range.count() / 3, range.storedVertices(),
+                Float.NaN, null, 0, null, range));
+        if (stats != null && page.source == TrackRenderStats.RAIL_MODEL
+                && page.structure == TrackRenderStats.STRUCTURE_TRACK) stats.railChunkBatch(page.chunk, page.type);
     }
 
     void addNative(VertexBuffer buffer, Matrix4f modelView, int structure, int vertices) {
@@ -90,16 +88,14 @@ final class TrackDrawQueue implements AutoCloseable {
     }
 
     private void addResolved(Draw draw) {
-        if (grouped) groups.computeIfAbsent(draw.type(), ignored -> new ArrayList<>()).add(draw);
-        else ordered.add(draw);
+        groups.computeIfAbsent(draw.type(), ignored -> new ArrayList<>()).add(draw);
     }
 
     void draw(TrackRenderState state, Matrix4f projection, TrackRenderStats stats) {
         long start = stats == null ? 0L : System.nanoTime();
         long irisStart = IrisRenderStats.clock();
         try {
-            if (grouped) for (var group : groups.values()) drawList(group, state, projection, stats);
-            else drawList(ordered, state, projection, stats);
+            for (var group : groups.values()) drawList(group, state, projection, stats);
         } finally {
             IrisRenderStats.submit(irisStart);
             clear();
@@ -117,7 +113,7 @@ final class TrackDrawQueue implements AutoCloseable {
             var draw = draws.get(i);
             if (draw.range() != null) {
                 int end = i + 1;
-                if (grouped) while (end < draws.size()) {
+                while (end < draws.size()) {
                     var next = draws.get(end);
                     if (next.range() == null || next.range().page() != draw.range().page()
                             || !next.modelView().equals(draw.modelView())) break;
@@ -146,7 +142,6 @@ final class TrackDrawQueue implements AutoCloseable {
                     state.prepareParts(draw.type(), draw.modelView(), projection);
                     draw.buffer().bind();
                     draw.range().page().buffer.drawRanges(first, counts, offsets, ranges);
-                    if (!reuseState) state.endBatch();
                 }
                 if (stats != null) {
                     stats.ranges(end - i, ranges, ranges > 1 ? ranges : 0);
@@ -164,7 +159,6 @@ final class TrackDrawQueue implements AutoCloseable {
             } else {
                 if (!Float.isNaN(draw.movement())) state.drawMorph(draw.buffer(), draw.modelView(), projection, draw.movement());
                 else state.drawNative(draw.buffer(), draw.modelView(), projection);
-                if (!reuseState) state.endBatch();
             }
             if (stats != null) {
                 stats.ranges(1, 1, 0);
@@ -184,7 +178,7 @@ final class TrackDrawQueue implements AutoCloseable {
     }
 
     void clear() {
-        requests.clear(); ordered.clear(); groups.clear();
+        requests.clear(); groups.clear();
     }
 
     @Override public void close() {

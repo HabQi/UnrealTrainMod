@@ -146,7 +146,8 @@ public final class IrisRenderStats {
             if (System.nanoTime() - window.start < 5_000_000_000L) return;
             var main = window.values[0]; var shadow = window.values[1];
             LOGGER.info(
-                        "{} rendering [Iris cached]: window={}ms main views={} submissions={} triangles={} directGpuDraws={} cpuVertexRefs={} cacheHit/Miss={}/{} cpuPrepare/Sort/Submit={}/{}/{}ms ownedUpload={}B "
+                        "{} rendering [Iris cached]" + (window == WINDOWS[TRACK] ? " bufferMode=sharedPages" : "")
+                                + ": window={}ms main views={} submissions={} triangles={} directGpuDraws={} cpuVertexRefs={} cacheHit/Miss={}/{} cpuPrepare/Sort/Submit={}/{}/{}ms ownedUpload={}B "
                             + "lights=triangles:{}/gpu:{}/cpuVertexRefs:{}/cache:{}/{} upload:{}B; "
                             + "shadow views={} submissions={} triangles={} directGpuDraws={} cpuVertexRefs={} cacheHit/Miss={}/{} cpuPrepare/Sort/Submit={}/{}/{}ms ownedUpload={}B "
                             + "lights=triangles:{}/gpu:{}/cpuVertexRefs:{}/cache:{}/{} upload:{}B; cache={}B peak={}B pending={}",

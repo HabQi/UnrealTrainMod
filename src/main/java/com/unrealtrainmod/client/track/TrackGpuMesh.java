@@ -8,7 +8,7 @@ import com.unrealtrainmod.track.geometry.TrackVector;
 import com.unrealtrainmod.track.mesh.TrackMeshData;
 import net.minecraft.world.phys.AABB;
 
-/** Native quad source; the chunk material cache owns its GPU storage. */
+/** Native quad source; shared pages own its GPU storage. */
 final class TrackGpuMesh extends TrackStaticMesh {
     private final TrackMeshData data;
     private final AABB bounds;

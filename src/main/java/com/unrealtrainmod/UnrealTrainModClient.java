@@ -61,6 +61,11 @@ public class UnrealTrainModClient {
     }
 
     @SubscribeEvent
+    static void registerConstructionModels(ModelEvent.RegisterAdditional event) {
+        com.unrealtrainmod.client.track.TotalStationRenderer.registerModels(event);
+    }
+
+    @SubscribeEvent
     static void registerItemExtensions(RegisterClientExtensionsEvent event) {
         event.registerItem(new IClientItemExtensions() {
             @Override
@@ -72,7 +77,10 @@ public class UnrealTrainModClient {
     }
 
     @SubscribeEvent
-    static void onItemModelsBaked(ModelEvent.BakingCompleted event) { CachedItemRenderer.invalidate(); }
+    static void onItemModelsBaked(ModelEvent.BakingCompleted event) {
+        CachedItemRenderer.invalidate();
+        com.unrealtrainmod.client.track.TotalStationRenderer.onModelsBaked(event);
+    }
 
     @SubscribeEvent
     static void registerDrivingKeys(RegisterKeyMappingsEvent event) { TrainDrivingClient.registerKeys(event); }
@@ -188,6 +196,8 @@ public class UnrealTrainModClient {
         NeoForge.EVENT_BUS.addListener(ClientTrackConstruction.INSTANCE::onClone);
         NeoForge.EVENT_BUS.addListener(ClientTrackConstruction.INSTANCE::onLogout);
         NeoForge.EVENT_BUS.addListener(TrackConstructionRenderer::render);
+        NeoForge.EVENT_BUS.addListener(com.unrealtrainmod.client.track.TotalStationRenderer::onLevelUnload);
+        NeoForge.EVENT_BUS.addListener(com.unrealtrainmod.client.track.TotalStationRenderer::onFramePost);
         NeoForge.EVENT_BUS.addListener(ClientTurnoutConstruction.INSTANCE::onSync);
         NeoForge.EVENT_BUS.addListener(ClientTurnoutConstruction.INSTANCE::onTick);
         NeoForge.EVENT_BUS.addListener(ClientTurnoutConstruction.INSTANCE::onUnload);
@@ -206,6 +216,7 @@ public class UnrealTrainModClient {
         VehicleScriptManager.clear();
         ClientThumbnailManager.INSTANCE.close();
         CachedItemRenderer.invalidate();
+        com.unrealtrainmod.client.track.TotalStationRenderer.close();
         ClientModelManager.INSTANCE.close();
         TrainModelRenderer.closeWorld();
         ClientTrackCache.INSTANCE.close();

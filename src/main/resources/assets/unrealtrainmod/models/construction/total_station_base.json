@@ -1,0 +1,12 @@
+{
+  "loader": "neoforge:obj",
+  "model": "unrealtrainmod:models/construction/total_station_base.obj",
+  "automatic_culling": false,
+  "flip_v": true,
+  "emissive_ambient": false,
+  "ambientocclusion": false,
+  "textures": {
+    "texture": "unrealtrainmod:construction/total_station",
+    "particle": "unrealtrainmod:construction/total_station"
+  }
+}

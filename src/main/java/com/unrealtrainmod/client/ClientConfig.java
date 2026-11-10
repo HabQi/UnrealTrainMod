@@ -18,6 +18,13 @@ public final class ClientConfig {
         }
     }
 
+    public enum TranslucentRenderMode implements TranslatableEnum {
+        PERFORMANCE, SORTED;
+        @Override public Component getTranslatedName() {
+            return Component.translatable("unrealtrainmod.configuration.translucentRenderMode." + name());
+        }
+    }
+
     public static final ModConfigSpec.IntValue MAX_PACKAGE_TEXTURE_SIZE = BUILDER
             .comment("Maximum longest edge of package base textures for vehicles, rails and wiring. Zero keeps original sizes.",
                     "Default 2048. Preserves aspect ratio, never enlarges images and uses nearest sampling to preserve alpha classes.",
@@ -63,22 +70,14 @@ public final class ClientConfig {
             .translation("unrealtrainmod.configuration.turnoutAnimationDurationSeconds")
             .defineInRange("turnoutAnimationDurationSeconds", 1.0, 0.0, 10.0);
 
-    public static final ModConfigSpec.BooleanValue SORT_TRANSLUCENT_TRIANGLES = BUILDER
-            .comment("Sort vehicle translucent triangles from far to near in world and preview rendering.",
-                    "On the native path, disabling only skips sorting; depth calculation, index uploads and adjacent draw merging remain active.",
-                    "Also applies to Iris; its dynamic translucent mode retains CPU vertex submission.",
-                    "Ignored while useStaticTranslucentBatches is enabled.",
-                    "Overlapping translucent surfaces may blend incorrectly when disabled.")
-            .translation("unrealtrainmod.configuration.sortTranslucentTriangles")
-            .define("sortTranslucentTriangles", false);
-
-    public static final ModConfigSpec.BooleanValue USE_STATIC_TRANSLUCENT_BATCHES = BUILDER
-            .comment("Group vehicle translucent batches by material and draw directly from static indices.",
-                    "Skips triangle collection, depth calculation, sorting and dynamic index uploads on the GPU path.",
-                    "With Iris, reuses shared local GPU geometry and draws after deferred lighting instead of rewriting vertices each frame.",
-                    "Overrides sortTranslucentTriangles; overlapping translucent surfaces may blend incorrectly.")
-            .translation("unrealtrainmod.configuration.useStaticTranslucentBatches")
-            .define("useStaticTranslucentBatches", true);
+    public static final ModConfigSpec.EnumValue<TranslucentRenderMode> TRANSLUCENT_RENDER_MODE = BUILDER
+            .comment("Vehicle transparency in native and Iris world/preview rendering. Default PERFORMANCE.",
+                    "PERFORMANCE groups static batches by material, avoiding per-frame triangle sorting and dynamic uploads.",
+                    "Overlapping translucent surfaces may blend incorrectly in this mode.",
+                    "SORTED orders triangles from far to near, with extra CPU work and native index or Iris vertex uploads.",
+                    "Changes apply on the next relevant draw without a resource reload. Light overlays remain separate.")
+            .translation("unrealtrainmod.configuration.translucentRenderMode")
+            .defineEnum("translucentRenderMode", TranslucentRenderMode.PERFORMANCE);
 
     public static final ModConfigSpec.IntValue IRIS_GEOMETRY_CACHE_MIB = BUILDER
             .comment("Soft GPU geometry cache budget in MiB for Iris vehicles, static transparency, items and track parts.",
@@ -95,16 +94,6 @@ public final class ClientConfig {
                     "Changes apply without reloading models; the separate light cache is unchanged.")
             .translation("unrealtrainmod.configuration.irisGeometryCacheRetentionSeconds")
             .defineInRange("irisGeometryCacheRetentionSeconds", 10.0, 0.0, 60.0);
-
-    public static final ModConfigSpec.BooleanValue USE_VEHICLE_INSTANCING = BUILDER
-            .comment("Instance vehicle CUTOUT and MIXED opaque passes across all visible vehicles by shared mesh range.",
-                    "Applies to native world and preview rendering; Iris uses separate material grouping and opaque range merging.",
-                    "Enabled by default; disable for side-by-side comparison with the normal GPU draw path.",
-                    "Opaque draws are grouped by material; translucent passes and CPU fallback are not instanced.",
-                    "Requires OpenGL 3.3 and the instanced model shader; otherwise the normal path is used automatically.",
-                    "Takes effect immediately without reloading models or restarting the game.")
-            .translation("unrealtrainmod.configuration.useVehicleInstancing")
-            .define("useVehicleInstancing", true);
 
     public static final ModConfigSpec.BooleanValue LOG_VEHICLE_INSTANCING_STATS = BUILDER
             .comment("Log five-second vehicle render windows for world and preview queues separately.",
@@ -134,34 +123,17 @@ public final class ClientConfig {
             .translation("unrealtrainmod.configuration.logItemRenderStats")
             .define("logItemRenderStats", false);
 
-    public static final ModConfigSpec.BooleanValue USE_TRACK_RENDER_STATE_CACHE = BUILDER
-            .comment("Reuse render type, shader program, samplers and direction lights across consecutive native track draws.",
-                    "Enabled by default; disable to compare per-range submission on identical shared cached geometry.",
-                    "All paths reuse cached geometry and keep the same build/upload budgets without re-laying tracks.",
-                    "With groupTrackDrawsByMaterial, compatible visible ranges share actual GL draws within each chunk.",
-                    "Only controls the native backend; Iris uses its own draw state scope.",
-                    "Affects world tracks from the next frame; rail preview and thumbnails always use their own",
-                    "short-lived state scope.")
-            .translation("unrealtrainmod.configuration.useTrackRenderStateCache")
-            .define("useTrackRenderStateCache", true);
-
-    public static final ModConfigSpec.BooleanValue GROUP_TRACK_DRAWS_BY_MATERIAL = BUILDER
-            .comment("Batch visible world track ranges by material using shared chunk buffers and multi-draw.",
-                    "Enabled by default; native rendering requires useTrackRenderStateCache, while Iris groups independently.",
-                    "Preserves per-mesh culling; adjacent ranges merge and disjoint ranges use multi-draw. Rigid parts keep instancing.",
-                    "Changes submission order between materials; coplanar overlays may be covered differently.",
-                    "Takes effect on the next frame without rebuilding meshes; previews and thumbnails are unchanged.")
-            .translation("unrealtrainmod.configuration.groupTrackDrawsByMaterial")
-            .define("groupTrackDrawsByMaterial", true);
-
     public static final ModConfigSpec.BooleanValue LOG_TRACK_RENDER_STATS = BUILDER
             .comment("Log lightweight track render statistics in roughly five-second windows.",
+                    "Also reports construction instruments separately: native/Iris/fallback parts, draws, triangles,",
+                    "native uploads, CPU submission time and fallback reasons; excludes preview lines and text.",
                     "Reports per-frame chunk visits, candidate/visible/empty/pending meshes, draw calls split by",
                     "native or rail-model geometry and by segment or assembly, submitted vertices and triangles,",
                     "builds, VBO uploads and bytes, render type setups, shader binds, program switches, sampled",
                     "light positions, and CPU time for the whole track stage and its sub-phases, including grouping.",
                     "Also reports stored vertex records, static vertex/index bytes, separate UV2 light bytes, and chunk/material",
                     "range counts before/after merging, actual saved calls, multi-draw coverage, shared page builds and residency.",
+                    "Labels the fixed bufferMode=sharedPages and reports the actual statistics window duration.",
                     "Also samples the track GPU timeline span every 16 frames using nonblocking timestamps,",
                     "excluding builds, static uploads and empty frames; motion samples include streaming uploads.",
                     "Separates stationary and animated GPU samples, and reports turnout/JS/part/streaming metrics.",

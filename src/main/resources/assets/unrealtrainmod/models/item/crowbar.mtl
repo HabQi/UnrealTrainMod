@@ -5,6 +5,11 @@ Kd 1.0 1.0 1.0
 d 1.0
 map_Kd #texture
 
+newmtl Forged_tool_steel
+Kd 1.0 1.0 1.0
+d 1.0
+map_Kd #texture
+
 newmtl Red_powder_coat
 Kd 1.0 1.0 1.0
 d 1.0

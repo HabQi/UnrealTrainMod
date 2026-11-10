@@ -29,6 +29,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -56,6 +57,7 @@ import org.slf4j.LoggerFactory;
 /** One authority per level. Membership, candidate checks and commits all use the server thread. */
 public final class TrainManager {
     private static final Logger LOGGER = LoggerFactory.getLogger(TrainManager.class);
+    private static final int RECOVERY_RETRY_TICKS = 20;
     private static final Map<ServerLevel, TrainManager> LEVELS = new IdentityHashMap<>();
     private final ServerLevel level;
     private final TrainDriverManager drivers;
@@ -67,6 +69,7 @@ public final class TrainManager {
     // Recovery belongs to the consist, independently of individual entity tick ages.
     private final Set<UUID> restored = new HashSet<>();
     private final Set<UUID> pending = new HashSet<>();
+    private final Map<UUID, Long> recoveryRetries = new LinkedHashMap<>();
     // Includes vehicles whose deferred registration has not run or has failed.
     private final Set<UUID> loadedVehicles = new LinkedHashSet<>();
     private TrainSavedData savedData;
@@ -189,6 +192,7 @@ public final class TrainManager {
             graph.removeAssemblyRemoveListener(assemblyRemoveListener);
         }
         pending.clear();
+        recoveryRetries.clear();
         loadedVehicles.clear();
         attached.clear();
         restored.clear();
@@ -252,6 +256,7 @@ public final class TrainManager {
     }
 
     private void put(TrainConsist train) {
+        recoveryRetries.remove(train.id());
         trains.put(train.id(), train);
         for (var car : train.cars()) entityTrains.put(car.entityId(), train.id());
         savedData.put(train);
@@ -427,6 +432,7 @@ public final class TrainManager {
     }
 
     private void remove(TrainConsist train) {
+        recoveryRetries.remove(train.id());
         occupancy.remove(train.id());
         trains.remove(train.id());
         restored.remove(train.id());
@@ -841,6 +847,7 @@ public final class TrainManager {
     }
 
     private void stop(TrainConsist train, StopReason reason) {
+        if (reason != StopReason.UNLOADED_AREA) recoveryRetries.remove(train.id());
         if (reason == StopReason.INCOMPLETE_CONSIST || reason == StopReason.MEMBER_MISMATCH || reason == StopReason.MISSING_MODEL) {
             restored.remove(train.id());
         }
@@ -851,8 +858,9 @@ public final class TrainManager {
         sync(train);
     }
 
-    /** Recovery never moves a subset of the consist, and is not retried by the normal tick loop. */
+    /** Recovery never moves a subset of the consist; only unavailable areas are retried automatically. */
     private StopReason restore(TrainConsist train) {
+        boolean waiting = recoveryRetries.remove(train.id()) != null;
         restored.remove(train.id());
         train.stop(StopReason.STOPPED);
         train.clearRoute();
@@ -891,6 +899,10 @@ public final class TrainManager {
             return null;
         } catch (StateException exception) {
             stop(train, exception.reason());
+            if (exception.reason() == StopReason.UNLOADED_AREA) {
+                recoveryRetries.put(train.id(), level.getGameTime() + RECOVERY_RETRY_TICKS);
+                if (!waiting) LOGGER.debug("Consist {} recovery waiting for entity-ticking chunks", train.id());
+            }
             return exception.reason();
         }
     }
@@ -1381,6 +1393,29 @@ public final class TrainManager {
         reservations.refreshLoaded();
     }
 
+    /** Retry at most one complete consist per normal tick, in waiting order. */
+    private void retryRecovery() {
+        TrainConsist retry = null;
+        long now = level.getGameTime();
+        for (var iterator = recoveryRetries.entrySet().iterator(); iterator.hasNext();) {
+            var entry = iterator.next();
+            var train = trains.get(entry.getKey());
+            if (train == null || isRestored(train) || train.stopReason() != StopReason.UNLOADED_AREA) {
+                iterator.remove();
+            } else if (entry.getValue() <= now) {
+                retry = train;
+                break;
+            }
+        }
+        if (retry == null) return;
+        var failure = restore(retry);
+        if (failure == null) {
+            LOGGER.info("Consist {} recovery completed after waiting for entity-ticking chunks", retry.id());
+        } else if (failure != StopReason.UNLOADED_AREA) {
+            LOGGER.warn("Consist {} recovery stopped: {}", retry.id(), failure);
+        }
+    }
+
     private void tick() {
         if (graph != null) reservations.refreshLoaded();
         for (UUID id : Set.copyOf(pending)) {
@@ -1388,7 +1423,8 @@ public final class TrainManager {
             if (level.getEntity(id) instanceof TrainEntity entity) {
                 try {
                     var train = info(entity);
-                    if (train.stopReason() != StopReason.STOPPED && train.stopReason() != StopReason.INCOMPLETE_CONSIST) {
+                    if (train.stopReason() != StopReason.STOPPED && train.stopReason() != StopReason.INCOMPLETE_CONSIST
+                            && train.stopReason() != StopReason.UNLOADED_AREA) {
                         LOGGER.warn("Consist {} restored stopped: {}", train.id(), train.stopReason());
                     }
                 } catch (StateException exception) {
@@ -1400,6 +1436,7 @@ public final class TrainManager {
             publishRuntimeStates();
             return;
         }
+        retryRecovery();
         drivers.tick();
         irControls.tick();
         var couplingVehicles = autoCouplingVehicles();

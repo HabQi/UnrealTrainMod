@@ -27,7 +27,12 @@ import net.minecraft.util.RandomSource;
 public record ItemGeometry(List<RenderBatch> batches) {
     private record Vertex(int x, int y, int z, int color, int u, int v, int normal) {}
 
-    static ItemGeometry extract(BakedModel model) {
+    /** Also used by standalone world previews sharing the static baked-OBJ geometry path. */
+    public static ItemGeometry extract(BakedModel model) {
+        return extract(quads(model));
+    }
+
+    public static List<BakedQuad> quads(BakedModel model) {
         var random = RandomSource.create(42);
         var quads = new ArrayList<BakedQuad>();
         for (var direction : Direction.values()) {
@@ -36,6 +41,11 @@ public record ItemGeometry(List<RenderBatch> batches) {
         }
         random.setSeed(42);
         quads.addAll(model.getQuads(null, null, random));
+        return List.copyOf(quads);
+    }
+
+    /** Reuse a captured fallback quad list without querying the baked model twice. */
+    public static ItemGeometry extract(List<BakedQuad> quads) {
         var sprites = new IdentityHashMap<TextureAtlasSprite, Boolean>();
         var vertices = new FloatArrayList();
         var colors = new IntArrayList();

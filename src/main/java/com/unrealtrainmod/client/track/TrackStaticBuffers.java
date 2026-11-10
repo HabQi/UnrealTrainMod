@@ -28,6 +28,7 @@ import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.renderer.RenderType;
 import net.minecraft.client.renderer.texture.OverlayTexture;
 import net.minecraft.world.level.ChunkPos;
+import org.joml.Matrix4f;
 
 /** Chunk/material pages with source-local visibility and transactional replacement of range views. */
 final class TrackStaticBuffers implements AutoCloseable {
@@ -248,6 +249,7 @@ final class TrackStaticBuffers implements AutoCloseable {
     private long view;
     private final IdentityHashMap<TrackStaticMesh, List<Part>> sources = new IdentityHashMap<>();
     private final LinkedHashMap<Key, Group> groups = new LinkedHashMap<>();
+    private final List<Group> requestedGroups = new ArrayList<>();
 
     TrackStaticBuffers(boolean fullBright) { this.fullBright = fullBright; }
 
@@ -258,13 +260,17 @@ final class TrackStaticBuffers implements AutoCloseable {
         }
         view++;
         requestedBuilds = false;
+        requestedGroups.clear();
     }
 
     void request(TrackStaticMesh mesh, int structure) {
         if (!sources.containsKey(mesh)) mesh.register(this, structure);
         for (var part : sources.get(mesh)) {
             part.requested = view;
-            part.group.requested = view;
+            if (part.group.requested != view) {
+                part.group.requested = view;
+                requestedGroups.add(part.group);
+            }
             requestedBuilds |= part.group.dirty;
             for (var range : part.ranges) range.page().requested = view;
         }
@@ -301,8 +307,7 @@ final class TrackStaticBuffers implements AutoCloseable {
     }
 
     int prepare(ClientLevel level, TrackWorldRenderer.BuildBudget budget, int uploads, TrackRenderStats stats) {
-        for (var group : groups.values()) {
-            if (group.requested != view) continue;
+        for (var group : requestedGroups) {
             if (group.dirty) {
                 if (group.pending == null) group.pending = new Build(group);
                 while (!group.pending.complete() && uploads > 0 && (budget == null || budget.pageAvailable())) {
@@ -334,15 +339,12 @@ final class TrackStaticBuffers implements AutoCloseable {
         return uploads;
     }
 
-    boolean ready(TrackStaticMesh mesh) {
-        for (var part : sources.get(mesh)) if (part.ranges.isEmpty()) return false;
+    boolean enqueueRanges(TrackStaticMesh mesh, TrackDrawQueue queue, Matrix4f modelView, TrackRenderStats stats) {
+        var parts = sources.get(mesh);
+        // Keep a source pending until all of its material ranges are ready.
+        for (var part : parts) if (part.ranges.isEmpty()) return false;
+        for (var part : parts) for (var range : part.ranges) queue.addStaticRange(range, modelView, stats);
         return true;
-    }
-
-    List<Range> ranges(TrackStaticMesh mesh) {
-        var result = new ArrayList<Range>();
-        for (var part : sources.get(mesh)) result.addAll(part.ranges);
-        return result;
     }
 
     void remove(TrackStaticMesh mesh) {
@@ -378,6 +380,7 @@ final class TrackStaticBuffers implements AutoCloseable {
         groups.values().forEach(Group::close);
         groups.clear();
         sources.clear();
+        requestedGroups.clear();
         requestedBuilds = false;
     }
 }

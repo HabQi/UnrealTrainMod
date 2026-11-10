@@ -145,8 +145,8 @@ final class TrackRenderState implements AutoCloseable {
         lightShader = null;
     }
 
-    /** Legacy submission still shares one backup scope, but reapplies state for the next draw. */
-    void endBatch() {
+    /** Clears the active batch before restoring the caller's render state. */
+    private void endBatch() {
         if (activeType != null) { activeType.clearRenderState(); activeType = null; }
         if (appliedShader != null) {
             restoreLights();

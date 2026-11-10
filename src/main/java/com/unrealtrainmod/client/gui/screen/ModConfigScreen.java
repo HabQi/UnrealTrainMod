@@ -47,27 +47,24 @@ public final class ModConfigScreen extends OptionsSubScreen {
     }
 
     private enum Category {
-        DEBUG_LOGS("debugLogs",
-                ClientConfig.LOG_VEHICLE_INSTANCING_STATS,
-                ClientConfig.LOG_ITEM_RENDER_STATS,
-                ClientConfig.LOG_TRACK_RENDER_STATS),
+        GENERAL("general",
+                ClientConfig.SHOW_ACTIVATION_WARNING,
+                ClientConfig.TURNOUT_ANIMATION_DURATION_SECONDS),
         PERFORMANCE("performance",
                 ClientConfig.MAX_PACKAGE_TEXTURE_SIZE,
                 ClientConfig.PBR_QUALITY,
+                ClientConfig.TRANSLUCENT_RENDER_MODE),
+        GPU_CACHE("gpuCache",
                 ClientConfig.BASE_TEXTURE_CACHE_MIB,
                 ClientConfig.NATIVE_GEOMETRY_CACHE_MIB,
                 ClientConfig.PBR_TEXTURE_CACHE_MIB,
                 ClientConfig.GPU_CACHE_RETENTION_SECONDS,
-                ClientConfig.SORT_TRANSLUCENT_TRIANGLES,
-                ClientConfig.USE_STATIC_TRANSLUCENT_BATCHES,
                 ClientConfig.IRIS_GEOMETRY_CACHE_MIB,
-                ClientConfig.IRIS_GEOMETRY_CACHE_RETENTION_SECONDS,
-                ClientConfig.USE_VEHICLE_INSTANCING,
-                ClientConfig.USE_TRACK_RENDER_STATE_CACHE,
-                ClientConfig.GROUP_TRACK_DRAWS_BY_MATERIAL),
-        GENERAL("general",
-                ClientConfig.SHOW_ACTIVATION_WARNING,
-                ClientConfig.TURNOUT_ANIMATION_DURATION_SECONDS);
+                ClientConfig.IRIS_GEOMETRY_CACHE_RETENTION_SECONDS),
+        DEBUG_LOGS("debugLogs",
+                ClientConfig.LOG_VEHICLE_INSTANCING_STATS,
+                ClientConfig.LOG_ITEM_RENDER_STATS,
+                ClientConfig.LOG_TRACK_RENDER_STATS);
 
         private final String translationKey;
         private final Set<ModConfigSpec.ConfigValue<?>> values;

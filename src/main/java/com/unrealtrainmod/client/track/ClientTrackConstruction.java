@@ -41,6 +41,7 @@ public final class ClientTrackConstruction {
     private TrackVerticalCurveParameters startVertical;
     private TrackVerticalCurveParameters endVertical;
     private Feedback previewFeedback;
+    private float selectionYaw;
 
     private ClientTrackConstruction() {}
 
@@ -64,11 +65,14 @@ public final class ClientTrackConstruction {
         var player = minecraft.player;
         if (minecraft.level == null || player == null
                 || !minecraft.level.dimension().location().equals(payload.dimension())) return;
+        float selectedYaw = draft != null && world == minecraft.level && draft.start().equals(payload.start())
+                ? selectionYaw : player.getYRot();
         clear();
         if (payload.phase() != Phase.EMPTY) {
             if (!player.isAlive()) return;
             world = minecraft.level;
             draft = payload;
+            selectionYaw = selectedYaw;
             restorePreview();
         }
         if (payload.feedback() == Feedback.CLEARED) return;
@@ -114,6 +118,27 @@ public final class ClientTrackConstruction {
 
     public boolean horizontalDirected(boolean start) {
         return draft != null && (start ? draft.startHorizontalDirected() : draft.endHorizontalDirected());
+    }
+
+    /** Both instruments look into the new track, including its endpoint grade. */
+    TrackVector stationDirection(boolean start) {
+        TrackVector tangent;
+        if (geometry != null) {
+            tangent = geometry.sample(start ? 0 : geometry.getLength()).tangent();
+        } else {
+            var vertical = previewVertical(start);
+            var horizontal = endpointTangent(start, vertical == null ? selectionYaw : vertical.referenceYaw());
+            double grade = 0;
+            if (vertical != null) grade = vertical.gradeAlong(horizontal) / 1000;
+            else if (draft.end() != null) {
+                var a = draft.start().position();
+                var b = draft.end().position();
+                double distance = Math.hypot(b.x() - a.x(), b.z() - a.z());
+                if (distance > 0) grade = (b.y() - a.y()) / distance;
+            }
+            tangent = new TrackVector(horizontal.x(), grade, horizontal.z());
+        }
+        return start ? tangent : new TrackVector(-tangent.x(), -tangent.y(), -tangent.z());
     }
 
     public TrackVerticalCurveParameters previewVertical(boolean start) { return start ? startVertical : endVertical; }
@@ -234,5 +259,6 @@ public final class ClientTrackConstruction {
         startVertical = null;
         endVertical = null;
         previewFeedback = null;
+        selectionYaw = 0;
     }
 }

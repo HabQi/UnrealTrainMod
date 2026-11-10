@@ -244,6 +244,11 @@ public final class IrisGeometryCache {
 
     /** Static items share local geometry across hand, entity and shadow views. */
     public static Mesh requestItem(IndexedMesh mesh, int first, int count) {
+        return requestStatic(mesh, first, count);
+    }
+
+    /** Static baked models and previews use the same synchronous, pose-independent cache. */
+    public static Mesh requestStatic(IndexedMesh mesh, int first, int count) {
         return request(mesh, first, count, false, true, false);
     }
 

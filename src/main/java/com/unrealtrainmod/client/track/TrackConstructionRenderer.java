@@ -17,12 +17,13 @@ import com.unrealtrainmod.track.geometry.TrackPoint;
 import com.unrealtrainmod.track.geometry.TrackPose;
 import com.unrealtrainmod.track.geometry.TrackVector;
 import com.unrealtrainmod.track.geometry.VerticalTrackGeometry;
+import java.util.ArrayList;
 import net.minecraft.client.renderer.LevelRenderer;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.world.phys.Vec3;
 import net.neoforged.neoforge.client.event.RenderLevelStageEvent;
 
-/** A small immediate line pass; no persistent mesh, GPU buffer, or formal track cache entry. */
+/** Immediate construction instruments and lines, separate from the formal track cache. */
 public final class TrackConstructionRenderer {
     private TrackConstructionRenderer() {}
 
@@ -42,13 +43,16 @@ public final class TrackConstructionRenderer {
         try (var bytes = new ByteBufferBuilder(4096)) {
             RenderSystem.setShaderColor(1, 1, 1, 1);
             var buffers = MultiBufferSource.immediate(bytes);
-            var lines = buffers.getBuffer(TrackRenderTypes.PREVIEW);
             Vec3 camera = event.getCamera().getPosition();
-            marker(lines, draft.start().position(), camera, red, green);
+            var stations = new ArrayList<TotalStationRenderer.Placement>(2);
+            stations.add(TotalStationRenderer.placement(draft.start().position(), state.stationDirection(true)));
             if (draft.end() != null) {
-                marker(lines, draft.end().position(), camera, red, green);
-                marker(lines, draft.end().position(), camera, red, green, 0.18);
+                stations.add(TotalStationRenderer.placement(draft.end().position(), state.stationDirection(false)));
             }
+            TotalStationRenderer.render(stations, camera, buffers);
+            var lines = buffers.getBuffer(TrackRenderTypes.PREVIEW);
+            int color = invalid ? 0xFFFF3333 : 0xFF33FF33;
+            for (var station : stations) TotalStationRenderer.beam(station, camera, lines, color);
             var geometry = state.geometry();
             if (geometry != null) {
                 int steps = Math.max(1, (int)Math.ceil(geometry.getLength() / 0.5));
@@ -143,14 +147,6 @@ public final class TrackConstructionRenderer {
         var n = pose.normal();
         return new TrackVector(p.x() + l.x() * lateral + n.x() * normal,
                 p.y() + l.y() * lateral + n.y() * normal, p.z() + l.z() * lateral + n.z() * normal);
-    }
-
-    private static void marker(VertexConsumer lines, TrackVector p, Vec3 camera, float red, float green) {
-        marker(lines, p, camera, red, green, 0.12);
-    }
-
-    private static void marker(VertexConsumer lines, TrackVector p, Vec3 camera, float red, float green, double radius) {
-        marker(lines, p, camera, red, green, 0.2f, radius);
     }
 
     private static void marker(VertexConsumer lines, TrackVector p, Vec3 camera, float red, float green, float blue, double radius) {

@@ -14,6 +14,7 @@ import com.unrealtrainmod.track.geometry.BezierTrackGeometry;
 import com.unrealtrainmod.track.geometry.TrackGeometry;
 import com.unrealtrainmod.track.geometry.TrackPose;
 import com.unrealtrainmod.track.geometry.TrackVector;
+import java.util.ArrayList;
 import java.util.Locale;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
@@ -41,14 +42,15 @@ public final class TurnoutConstructionRenderer {
         try (var bytes = new ByteBufferBuilder(4096)) {
             RenderSystem.setShaderColor(1, 1, 1, 1);
             var buffers = MultiBufferSource.immediate(bytes);
-            var lines = buffers.getBuffer(TrackRenderTypes.PREVIEW);
             var camera = event.getCamera().getPosition();
-            for (var point : draft.points()) {
-                var p = point.position();
-                line(lines, new TrackVector(p.x() - 0.16, p.y(), p.z()), new TrackVector(p.x() + 0.16, p.y(), p.z()), camera, color);
-                line(lines, new TrackVector(p.x(), p.y() - 0.16, p.z()), new TrackVector(p.x(), p.y() + 0.16, p.z()), camera, color);
-                line(lines, new TrackVector(p.x(), p.y(), p.z() - 0.16), new TrackVector(p.x(), p.y(), p.z() + 0.16), camera, color);
+            var stations = new ArrayList<TotalStationRenderer.Placement>(draft.points().size());
+            for (int i = 0; i < draft.points().size(); i++) {
+                var station = TotalStationRenderer.placement(draft.points().get(i).position(), state.stationDirection(i));
+                stations.add(station);
             }
+            TotalStationRenderer.render(stations, camera, buffers);
+            var lines = buffers.getBuffer(TrackRenderTypes.PREVIEW);
+            for (var station : stations) TotalStationRenderer.beam(station, camera, lines, color);
             if (geometry != null) for (var parts : geometry.paths().values()) {
                 for (var part : parts) {
                     path(lines, part, draft.gauge(), camera, color);
@@ -72,14 +74,13 @@ public final class TurnoutConstructionRenderer {
                 if (!volume.containsKey(p.south())) line(lines, c, d, camera, color);
                 if (!volume.containsKey(p.west())) line(lines, d, a, camera, color);
             }
-            if (geometry != null) for (var port : geometry.ports().values()) arrow(lines, port.position(), port.outwardYaw(), camera, color);
             buffers.endBatch(TrackRenderTypes.PREVIEW);
             var font = Minecraft.getInstance().font;
             for (int i = 0; i < draft.points().size(); i++) {
                 String name = java.util.List.of("A", "B", "C", "D").get(i);
                 var point = draft.points().get(i).position();
                 var pose = new PoseStack();
-                pose.translate(point.x() - camera.x, point.y() - camera.y + 0.6, point.z() - camera.z);
+                pose.translate(point.x() - camera.x, point.y() - camera.y + 1.5, point.z() - camera.z);
                 pose.mulPose(event.getCamera().rotation()); pose.scale(0.025f, -0.025f, 0.025f);
                 var port = geometry == null ? null : geometry.ports().get(name);
                 double direction = port == null ? 0 : ((port.outwardYaw() % 360) + 540) % 360 - 180;
@@ -117,14 +118,6 @@ public final class TurnoutConstructionRenderer {
     private static TrackVector offset(TrackPose pose, double side) {
         return new TrackVector(pose.position().x() + pose.lateral().x() * side, pose.position().y() + 0.015,
                 pose.position().z() + pose.lateral().z() * side);
-    }
-    private static void arrow(VertexConsumer lines, TrackVector p, double yaw, Vec3 camera, int color) {
-        double angle = Math.toRadians(yaw), dx = -Math.sin(angle), dz = Math.cos(angle);
-        var tip = new TrackVector(p.x() + dx * 2, p.y() + 0.12, p.z() + dz * 2);
-        line(lines, new TrackVector(p.x(), p.y() + 0.12, p.z()), tip, camera, color);
-        for (int side : new int[]{-1, 1}) line(lines, tip,
-                new TrackVector(tip.x() - dx * 0.5 + dz * side * 0.3, tip.y(), tip.z() - dz * 0.5 - dx * side * 0.3),
-                camera, color);
     }
     private static void line(VertexConsumer lines, TrackVector a, TrackVector b, Vec3 camera, int color) {
         double dx = b.x() - a.x(), dy = b.y() - a.y(), dz = b.z() - a.z();

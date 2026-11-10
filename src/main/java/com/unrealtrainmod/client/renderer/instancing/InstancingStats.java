@@ -58,7 +58,6 @@ public final class InstancingStats implements AutoCloseable {
     private final Map<ResourceLocation, Long> windowModels = new LinkedHashMap<>();
     private int frames;
     private long windowStart, lastFrame, windowId;
-    private boolean configuredInstancing;
     private String transparency = "";
     private VehicleGpuTimer opaqueTimer, translucentTimer;
     private long maxOpaque, maxTranslucent, maxEntity;
@@ -68,12 +67,10 @@ public final class InstancingStats implements AutoCloseable {
 
     public void beginFrame() {
         long now = System.nanoTime();
-        boolean instancing = ClientConfig.USE_VEHICLE_INSTANCING.getAsBoolean();
-        String mode = ClientConfig.USE_STATIC_TRANSLUCENT_BATCHES.getAsBoolean() ? "staticMaterial"
-                : ClientConfig.SORT_TRANSLUCENT_TRIANGLES.getAsBoolean() ? "sorted" : "unsorted";
+        String mode = ClientConfig.TRANSLUCENT_RENDER_MODE.get() == ClientConfig.TranslucentRenderMode.PERFORMANCE
+                ? "staticMaterial" : "sorted";
         if (windowStart == 0 || now - lastFrame > IDLE_RESET
-                || configuredInstancing != instancing || !transparency.equals(mode)) {
-            configuredInstancing = instancing;
+                || !transparency.equals(mode)) {
             transparency = mode;
             resetWindow(now);
         }
@@ -197,7 +194,7 @@ public final class InstancingStats implements AutoCloseable {
         long now = System.nanoTime();
         lastFrame = now;
         if (now - windowStart < LOG_INTERVAL) return;
-        LOGGER.info("Vehicle render [{}] frames={} window={}ms fpsEstimate={} frameAvg={}ms instancingConfigured={} transparency={} "
+        LOGGER.info("Vehicle render [{}] frames={} window={}ms fpsEstimate={} frameAvg={}ms transparency={} "
                         + "| perFrame vehicles={} requests={} cutout={} mixed={} groups={} covered={} gpuCalls={} cpuFallback={} "
                         + "opaqueCalls={} rangeCallsBefore={} rangeCallsAfter={} rangeCallsSaved={} translucentCalls={} "
                         + "opaqueTris={} translucentTris={} shaderBinds={} shaderSwitches={} upload={}B scriptCalls={} "
@@ -209,7 +206,7 @@ public final class InstancingStats implements AutoCloseable {
                         + "| sharedPrewarm calls={} total={}ms failures={} | models={}",
                 scene, frames, ms(now-windowStart),
                 String.format(Locale.ROOT, "%.1f", frames * 1_000_000_000d / (now-windowStart)),
-                ms((now-windowStart)/frames), configuredInstancing, transparency,
+                ms((now-windowStart)/frames), transparency,
                 avg(window.vehicles), avg(window.requests), avg(window.cutout), avg(window.mixed), avg(window.groups), avg(window.covered),
                 avg(window.gpuCalls), avg(window.fallback), avg(window.groups+window.gpuCalls+window.fallback),
                 avg(window.rangeCallsBefore), avg(window.rangeCallsAfter), avg(window.rangeCallsBefore-window.rangeCallsAfter),

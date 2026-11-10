@@ -1,0 +1,44 @@
+newmtl Adjustment_red
+Kd 1 1 1
+d 1
+map_Kd #texture
+
+newmtl Brushed_aluminium
+Kd 1 1 1
+d 1
+map_Kd #texture
+
+newmtl Dark_optical_glass
+Kd 1 1 1
+d 1
+map_Kd #texture
+
+newmtl Display_surface
+Kd 1 1 1
+d 1
+map_Kd #texture
+
+newmtl Graphite_housing
+Kd 1 1 1
+d 1
+map_Kd #texture
+
+newmtl Lens_coating
+Kd 1 1 1
+d 1
+map_Kd #texture
+
+newmtl Optical_barrel
+Kd 1 1 1
+d 1
+map_Kd #texture
+
+newmtl Rubber_feet
+Kd 1 1 1
+d 1
+map_Kd #texture
+
+newmtl Survey_yellow
+Kd 1 1 1
+d 1
+map_Kd #texture

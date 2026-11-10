@@ -515,7 +515,7 @@ public final class ModelRenderQueue implements ModelDrawSink, AutoCloseable {
     }
 
     private boolean instancingEnabled() {
-        return vehicleScene && ClientConfig.USE_VEHICLE_INSTANCING.getAsBoolean() && customShader && InstancedModelShader.usable();
+        return vehicleScene && customShader && InstancedModelShader.usable();
     }
 
     public void drawTranslucent() {
@@ -539,14 +539,14 @@ public final class ModelRenderQueue implements ModelDrawSink, AutoCloseable {
     }
 
     private void drawTranslucentPass() {
-        if (ClientConfig.USE_STATIC_TRANSLUCENT_BATCHES.getAsBoolean()) {
+        if (ClientConfig.TRANSLUCENT_RENDER_MODE.get() == ClientConfig.TranslucentRenderMode.PERFORMANCE) {
             drawStaticTranslucent();
             drawLightPass();
             return;
         }
         collectTriangles();
         if (triangles != 0) {
-            if (ClientConfig.SORT_TRANSLUCENT_TRIANGLES.getAsBoolean()) sortTriangles();
+            sortTriangles();
             try (var state = new ModelRenderState(frontLighting)) {
                 prepareGpuIndices();
                 for (int start = 0; start < triangles;) {
