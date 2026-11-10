@@ -190,8 +190,8 @@ public final class TrackCurveScreen extends Screen {
         if (open.turnout()) {
             var state = ClientTurnoutConstruction.INSTANCE;
             state.editPreview(open.endpoint(), automatic ? null : parsed, horizontalEdited);
-            if (automatic && open.endpoint() > 0 && !open.horizontalLocked()) {
-                parsed = state.automaticEndParameters(open.endpoint());
+            if (automatic) {
+                parsed = state.automaticParameters(open.endpoint());
                 updating = true;
                 angle.setNumber(parsed.angle());
                 length.setValue(Double.toString(parsed.length()));
@@ -263,11 +263,11 @@ public final class TrackCurveScreen extends Screen {
         gradeIncreaseLarge.visible = verticalPage;
         verticalLengthSlider.visible = verticalPage;
         verticalLength.setVisible(verticalPage);
-        angle.active = !pending && !open.horizontalLocked();
-        angleDecreaseLarge.active = !pending && !open.horizontalLocked();
-        angleDecreaseSmall.active = !pending && !open.horizontalLocked();
-        angleIncreaseSmall.active = !pending && !open.horizontalLocked();
-        angleIncreaseLarge.active = !pending && !open.horizontalLocked();
+        angle.active = !pending;
+        angleDecreaseLarge.active = !pending;
+        angleDecreaseSmall.active = !pending;
+        angleIncreaseSmall.active = !pending;
+        angleIncreaseLarge.active = !pending;
         length.setEditable(!pending);
         lengthSlider.active = !pending;
         grade.active = !pending && !open.verticalLocked();
@@ -342,8 +342,8 @@ public final class TrackCurveScreen extends Screen {
         if (feedback != null && feedback != Feedback.START && feedback != Feedback.READY && feedback != Feedback.TURNOUT_A && feedback != Feedback.TURNOUT_B) {
             return Component.translatable(feedback.translationKey());
         }
-        if (open.horizontalLocked() && !verticalPage) return label("direction_locked");
-        if (open.turnout() && automatic && open.endpoint() > 0) return label("turnout_automatic_hint");
+        if (open.turnout() && !automatic) return label("turnout_handle_hint");
+        if (open.turnout() && automatic) return label("turnout_automatic_hint");
         if (verticalPage && verticalAutomatic && !open.verticalLocked()) return label("automatic_vertical_hint");
         if (!open.turnout() && !verticalPage && automatic) return label("automatic_horizontal_hint");
         if (!open.turnout() && !verticalPage && !automatic && ClientTrackConstruction.INSTANCE.horizontalDirected(open.start())) {

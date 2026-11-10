@@ -17,10 +17,10 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
-/** Private typed draft. Curve parameters belong only to ordinary turnouts. */
+/** Private draft with one inward horizontal control per selected port. */
 public record TurnoutConstructionPayload(ResourceLocation dimension, UUID revision, TrackConstructionType kind,
         List<TrackPlacementEndpoint> points, double gauge, List<TrackCurveParameters> curves,
-        List<TrackCurveParameters> defaults, List<Boolean> locked, Feedback feedback, Feedback validation)
+        double yaw, Feedback feedback, Feedback validation)
         implements CustomPacketPayload {
     public static final Type<TurnoutConstructionPayload> TYPE = new Type<>(
             ResourceLocation.fromNamespaceAndPath(UnrealTrainMod.MODID, "turnout_construction"));
@@ -29,27 +29,20 @@ public record TurnoutConstructionPayload(ResourceLocation dimension, UUID revisi
                 b.writeResourceLocation(p.dimension()); b.writeUUID(p.revision()); b.writeEnum(p.kind()); b.writeVarInt(p.points().size());
                 for (int i = 0; i < p.points().size(); i++) {
                     TrackConstructionPayload.writeEndpoint(b, p.points().get(i));
-                    if (p.kind() == TrackConstructionType.SIMPLE_TURNOUT) {
-                        TrackPayloadCodec.writeCurve(b, p.curves().get(i));
-                        TrackPayloadCodec.writeCurve(b, p.defaults().get(i)); b.writeBoolean(p.locked().get(i));
-                    }
+                    TrackPayloadCodec.writeCurve(b, p.curves().get(i));
                 }
-                b.writeDouble(p.gauge()); b.writeEnum(p.feedback()); b.writeEnum(p.validation());
+                b.writeDouble(p.gauge()); b.writeDouble(p.yaw()); b.writeEnum(p.feedback()); b.writeEnum(p.validation());
             }, b -> {
                 var dimension = b.readResourceLocation(); var revision = b.readUUID(); var kind = b.readEnum(TrackConstructionType.class);
                 int count = b.readVarInt();
                 if (!kind.implemented() || count < 0 || count > kind.pointCount()) throw new IllegalArgumentException("Invalid structure draft");
                 var points = new ArrayList<TrackPlacementEndpoint>(); var curves = new ArrayList<TrackCurveParameters>();
-                var defaults = new ArrayList<TrackCurveParameters>(); var locked = new ArrayList<Boolean>();
                 for (int i = 0; i < count; i++) {
                     points.add(java.util.Objects.requireNonNull(TrackConstructionPayload.readEndpoint(b)));
-                    if (kind == TrackConstructionType.SIMPLE_TURNOUT) {
-                        curves.add(TrackPayloadCodec.readCurve(b));
-                        defaults.add(java.util.Objects.requireNonNull(TrackPayloadCodec.readCurve(b))); locked.add(b.readBoolean());
-                    }
+                    curves.add(TrackPayloadCodec.readCurve(b));
                 }
-                return new TurnoutConstructionPayload(dimension, revision, kind, points, b.readDouble(), curves, defaults,
-                        locked, b.readEnum(Feedback.class), b.readEnum(Feedback.class));
+                return new TurnoutConstructionPayload(dimension, revision, kind, points, b.readDouble(), curves,
+                        b.readDouble(), b.readEnum(Feedback.class), b.readEnum(Feedback.class));
             });
     @Override public Type<TurnoutConstructionPayload> type() { return TYPE; }
 }

@@ -14,7 +14,7 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 public record OpenTrackCurvePayload(ResourceLocation dimension, UUID revision, UUID editorId,
-                                    ConstructionKind kind, int endpoint, boolean horizontalLocked, boolean automatic, TrackCurveParameters initial,
+                                    ConstructionKind kind, int endpoint, boolean automatic, TrackCurveParameters initial,
                                     boolean verticalAutomatic, boolean verticalLocked, TrackVerticalCurveParameters initialVertical)
         implements CustomPacketPayload {
     public enum ConstructionKind { TRACK, TURNOUT }
@@ -29,7 +29,6 @@ public record OpenTrackCurvePayload(ResourceLocation dimension, UUID revision, U
                 buffer.writeUUID(payload.editorId());
                 buffer.writeEnum(payload.kind());
                 buffer.writeVarInt(payload.endpoint());
-                buffer.writeBoolean(payload.horizontalLocked());
                 buffer.writeBoolean(payload.automatic());
                 buffer.writeDouble(payload.initial().angle());
                 buffer.writeDouble(payload.initial().length());
@@ -37,7 +36,7 @@ public record OpenTrackCurvePayload(ResourceLocation dimension, UUID revision, U
                 buffer.writeBoolean(payload.verticalLocked());
                 TrackPayloadCodec.writeVertical(buffer, payload.initialVertical());
             }, buffer -> new OpenTrackCurvePayload(buffer.readResourceLocation(), buffer.readUUID(), buffer.readUUID(),
-                    buffer.readEnum(ConstructionKind.class), buffer.readVarInt(), buffer.readBoolean(), buffer.readBoolean(), new TrackCurveParameters(buffer.readDouble(), buffer.readDouble()),
+                    buffer.readEnum(ConstructionKind.class), buffer.readVarInt(), buffer.readBoolean(), new TrackCurveParameters(buffer.readDouble(), buffer.readDouble()),
                     buffer.readBoolean(), buffer.readBoolean(), java.util.Objects.requireNonNull(TrackPayloadCodec.readVertical(buffer))));
 
     @Override public Type<OpenTrackCurvePayload> type() { return TYPE; }

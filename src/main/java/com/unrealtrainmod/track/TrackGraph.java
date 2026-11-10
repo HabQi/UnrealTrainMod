@@ -9,7 +9,7 @@ import com.unrealtrainmod.track.geometry.TrackGeometry;
 import com.unrealtrainmod.track.geometry.TrackPoint;
 import com.unrealtrainmod.track.geometry.TrackVector;
 import com.unrealtrainmod.track.geometry.VerticalTrackGeometry;
-import com.unrealtrainmod.track.assembly.TrackAssemblyDefinition;
+import com.unrealtrainmod.track.construction.TrackConstructionType;
 import com.unrealtrainmod.track.assembly.TrackAssemblyInstance;
 import com.unrealtrainmod.track.assembly.TrailingPass;
 import com.unrealtrainmod.track.assembly.JunctionState;
@@ -37,7 +37,7 @@ public final class TrackGraph {
     private Consumer<List<TrackSegment>> segmentValidator = segments -> {};
     private final Map<UUID, TrackAssemblyInstance> assemblies = new LinkedHashMap<>();
     private final Map<UUID, UUID> segmentAssemblies = new HashMap<>();
-    private final Map<UUID, UUID> portAssemblies = new HashMap<>();
+    private final Map<UUID, Set<UUID>> portAssemblies = new HashMap<>();
     private final List<Consumer<TrackAssemblyInstance>> assemblyListeners = new ArrayList<>();
     private final List<Consumer<TrackAssemblyInstance>> assemblyRemoveListeners = new ArrayList<>();
 
@@ -198,24 +198,22 @@ public final class TrackGraph {
 
     private void validateExternalSegment(TrackSegment segment) {
         for (UUID port : List.of(segment.startNodeId(), segment.endNodeId())) {
-            var assembly = assemblyAtPort(port);
-            if (assembly == null) continue;
-            long external = connections(port).stream().filter(c -> !assembly.segments().contains(c.segmentId())).count();
-            if (external != 0) throw new IllegalArgumentException("Turnout port already has an external track");
-            validatePortTangent(segment, port, assembly);
+            if (nodes.containsKey(port) && isAssemblyInternalNode(port)) throw new IllegalArgumentException("Cannot connect to an assembly's internal node");
+            if (!assembliesAtPort(port).isEmpty()) validateFlatEndpoint(segment, port);
         }
     }
 
-    private static void validatePortTangent(TrackSegment segment, UUID port, TrackAssemblyInstance assembly) {
+    private static void validateFlatEndpoint(TrackSegment segment, UUID port) {
         boolean start = segment.startNodeId().equals(port);
-        var tangent = segment.geometry().sample(start ? 0 : segment.geometry().getLength()).tangent();
-        double sign = start ? 1 : -1;
-        double yaw = assembly.portAt(port).outwardYaw();
-        double radians = Math.toRadians(yaw);
-        double dot = sign * (-Math.sin(radians) * tangent.x() + Math.cos(radians) * tangent.z());
-        if (Math.abs(tangent.y()) > 1e-6 || dot < Math.cos(Math.toRadians(1))) {
-            throw new IllegalArgumentException("External track must meet the flat turnout port within one degree");
+        if (Math.abs(segment.geometry().sample(start ? 0 : segment.geometry().getLength()).tangent().y()) > 1e-6) {
+            throw new IllegalArgumentException("External track must meet a horizontal turnout port");
         }
+    }
+
+    /** Internal path nodes cannot become external junctions without splitting the owning structure. */
+    public boolean isAssemblyInternalNode(UUID node) {
+        return connections(node).stream().map(c -> assemblyForSegment(c.segmentId())).filter(Objects::nonNull)
+                .anyMatch(a -> a.ports().values().stream().noneMatch(p -> p.nodeId().equals(node)));
     }
 
     private TrackSegment insertSegment(TrackSegment segment) {
@@ -285,215 +283,62 @@ public final class TrackGraph {
         return value;
     }
     public TrackAssemblyInstance assemblyForSegment(UUID id) { return assemblies.get(segmentAssemblies.get(id)); }
-    public TrackAssemblyInstance assemblyAtPort(UUID id) { return assemblies.get(portAssemblies.get(id)); }
+    public List<TrackAssemblyInstance> assembliesAtPort(UUID id) {
+        return portAssemblies.getOrDefault(id, Set.of()).stream().map(assemblies::get).toList();
+    }
     public void addAssemblyListener(Consumer<TrackAssemblyInstance> listener) { assemblyListeners.add(listener); }
     public void removeAssemblyListener(Consumer<TrackAssemblyInstance> listener) { assemblyListeners.remove(listener); }
     public void addAssemblyRemoveListener(Consumer<TrackAssemblyInstance> listener) { assemblyRemoveListeners.add(listener); }
     public void removeAssemblyRemoveListener(Consumer<TrackAssemblyInstance> listener) { assemblyRemoveListeners.remove(listener); }
 
-    public TrackAssemblyInstance createTurnout(UUID originId, TrackAssemblyDefinition definition, double yaw) {
-        TrackNode origin = node(originId);
-        return createTurnout(new TrackPlacementEndpoint(originId, origin.position()), origin.gauge(), definition, yaw);
-    }
+    public record PreparedAssembly(TrackAssemblyInstance instance, List<TrackNode> nodes, List<TrackSegment> segments) {}
 
-    /** Pure preparation: all topology checks run against unpublished nodes and segments. */
-    public PreparedAssembly prepareTurnout(TrackPlacementEndpoint origin, double gauge,
-                                            TrackAssemblyDefinition definition, double yaw) {
-        TrackNode a = placementNode(origin, gauge);
-        if (origin.nodeId() != null && (assemblyAtPort(a.id()) != null || connections(a.id()).size() > 1)) {
-            throw new IllegalArgumentException("Turnout origin must be a free endpoint");
-        }
-        if (!Double.isFinite(yaw)) throw new IllegalArgumentException("Invalid turnout yaw");
-        yaw = ((yaw % 360) + 540) % 360 - 180;
-        var geometry = definition.geometry(a.position(), yaw, gauge);
+    /** Pure preparation shared by server validation and the atomic placement. Curves point into the draft. */
+    public PreparedAssembly prepareAssembly(TrackConstructionType kind, List<TrackPlacementEndpoint> endpoints,
+                                             double gauge, List<TrackCurveParameters> curves, List<Boolean> edited,
+                                             double yaw, String modelId) {
+        if (!kind.implemented() || endpoints.size() != kind.pointCount()) throw new IllegalArgumentException("Incomplete structure");
+        var definition = AssemblyPlacementGeometry.definition(kind);
+        var geometry = AssemblyPlacementGeometry.create(kind, endpoints.stream().map(TrackPlacementEndpoint::position).toList(),
+                gauge, curves, yaw);
         var preparedNodes = new LinkedHashMap<UUID, TrackNode>();
         var ports = new LinkedHashMap<String, TrackPort>();
-        for (var entry : geometry.ports().entrySet()) {
-            var port = entry.getValue();
-            UUID id = entry.getKey().equals("A") ? a.id() : UUID.randomUUID();
-            ports.put(entry.getKey(), new TrackPort(id, port.outwardYaw()));
-            double handle = geometry.paths().entrySet().stream()
-                    .filter(path -> definition.routes().get(path.getKey()).entrance().equals(entry.getKey())
-                            || definition.routes().get(path.getKey()).exit().equals(entry.getKey()))
-                    .mapToDouble(path -> path.getValue().stream().mapToDouble(TrackGeometry::getLength).sum()).min().orElseThrow() / 3;
-            preparedNodes.put(id, new TrackNode(id, port.position(), gauge,
-                    new TrackCurveParameters(entry.getKey().equals("A") ? yaw : port.outwardYaw(), handle)));
+        var names = List.of("A", "B", "C", "D");
+        for (int i = 0; i < endpoints.size(); i++) {
+            var endpoint = endpoints.get(i);
+            var node = placementNode(endpoint, gauge);
+            if (endpoint.nodeId() != null && isAssemblyInternalNode(node.id())) {
+                throw new IllegalArgumentException("Cannot connect to an assembly's internal node");
+            }
+            if (preparedNodes.containsKey(node.id())) throw new IllegalArgumentException("Duplicate structure endpoint");
+            var updated = new TrackNode(node.id(), node.position(), gauge,
+                    endpoint.nodeId() == null || edited.get(i) ? curves.get(i) : node.curve(), node.verticalCurve());
+            preparedNodes.put(node.id(), updated);
+            ports.put(names.get(i), new TrackPort(node.id(), geometry.ports().get(names.get(i)).outwardYaw()));
         }
         var batch = new ArrayList<TrackSegment>();
         var paths = new LinkedHashMap<String, TrackPath>();
         for (var entry : geometry.paths().entrySet()) {
             var route = definition.routes().get(entry.getKey());
-            var parts = entry.getValue();
-            var steps = new ArrayList<TrackConnection>();
-            var previous = preparedNodes.get(ports.get(route.entrance()).nodeId());
-            for (int i = 0; i < parts.size(); i++) {
-                var part = parts.get(i);
-                TrackNode next;
-                if (i == parts.size() - 1) next = preparedNodes.get(ports.get(route.exit()).nodeId());
-                else {
-                    next = new TrackNode(UUID.randomUUID(), part.sample(part.getLength()).position(), gauge);
-                    preparedNodes.put(next.id(), next);
-                }
-                var curve = part instanceof BezierTrackGeometry bezier ? bezier : null;
-                var segment = prepareSegment(UUID.randomUUID(), previous, next,
-                        curve == null ? null : curve.control1(), curve == null ? null : curve.control2(), null, part);
-                batch.add(segment);
-                steps.add(new TrackConnection(segment.id(), true));
-                previous = next;
-            }
-            paths.put(entry.getKey(), new TrackPath(steps));
-        }
-        var instance = new TrackAssemblyInstance(UUID.randomUUID(), definition, ports, paths, a.position(), yaw, gauge,
-                definition.initialState(), 0, null, geometry);
-        var byId = batch.stream().collect(java.util.stream.Collectors.toMap(TrackSegment::id, segment -> segment));
-        for (var node : preparedNodes.values()) {
-            if (!node.id().equals(a.id()) && nodes.containsKey(node.id())) {
-                throw new IllegalArgumentException("Duplicate assembly node ID");
-            }
-        }
-        validateAssembly(instance, preparedNodes::get, byId::get);
-        return new PreparedAssembly(instance, List.copyOf(preparedNodes.values()), List.copyOf(batch));
-    }
-
-    /** Curves contain the shared directed toe; a null exit curve keeps that free exit automatic. */
-    public PreparedAssembly prepareTurnout(List<TrackPlacementEndpoint> endpoints, double gauge,
-                                           List<TrackCurveParameters> curves, List<Boolean> edited, String modelId) {
-        if (endpoints.size() != 3 || curves.size() != 3 || edited.size() != 3) {
-            throw new IllegalArgumentException("A turnout needs three endpoints");
-        }
-        var preparedNodes = new LinkedHashMap<UUID, TrackNode>();
-        var ports = new LinkedHashMap<String, TrackPort>();
-        var endpointNodes = new ArrayList<TrackNode>();
-        for (int i = 0; i < 3; i++) {
-            var endpoint = endpoints.get(i);
-            var node = placementNode(endpoint, gauge);
-            if (endpoint.nodeId() != null && (assemblyAtPort(node.id()) != null || connections(node.id()).size() > 1)) {
-                throw new IllegalArgumentException("Turnout ports must be free endpoints");
-            }
-            if (preparedNodes.containsKey(node.id())) throw new IllegalArgumentException("Duplicate turnout endpoint");
-            var curve = endpoint.nodeId() == null || edited.get(i) ? curves.get(i) : node.curve();
-            var updated = new TrackNode(node.id(), node.position(), gauge, curve, node.verticalCurve());
-            preparedNodes.put(updated.id(), updated); endpointNodes.add(updated);
-        }
-        var a = endpointNodes.get(0);
-        var geometry = TurnoutPlacementGeometry.create(a.position(), endpointNodes.get(1).position(),
-                endpointNodes.get(2).position(), gauge, curves.get(0), curves.get(1), curves.get(2),
-                endpoints.get(1).nodeId() != null && !connections(endpointNodes.get(1).id()).isEmpty(),
-                endpoints.get(2).nodeId() != null && !connections(endpointNodes.get(2).id()).isEmpty());
-        for (int i = 0; i < 3; i++) {
-            String name = List.of("A", "B", "C").get(i);
-            ports.put(name, new TrackPort(endpointNodes.get(i).id(), geometry.ports().get(name).outwardYaw()));
-        }
-        var batch = new ArrayList<TrackSegment>();
-        var paths = new LinkedHashMap<String, TrackPath>();
-        for (int i = 1; i < 3; i++) {
-            String name = i == 1 ? "straight" : "diverging";
-            var part = (BezierTrackGeometry) geometry.paths().get(name).getFirst();
-            var segment = prepareSegment(UUID.randomUUID(), a, endpointNodes.get(i), part.control1(), part.control2(), modelId, part);
-            batch.add(segment); paths.put(name, new TrackPath(List.of(new TrackConnection(segment.id(), true))));
-        }
-        var definition = TrackAssemblyDefinition.CUSTOM;
-        var instance = new TrackAssemblyInstance(UUID.randomUUID(), definition, ports, paths, a.position(), curves.get(0).angle(),
-                gauge, definition.initialState(), 0, null, geometry, modelId);
-        var byId = batch.stream().collect(java.util.stream.Collectors.toMap(TrackSegment::id, segment -> segment));
-        validateAssembly(instance, preparedNodes::get, byId::get);
-        return new PreparedAssembly(instance, List.copyOf(preparedNodes.values()), List.copyOf(batch));
-    }
-
-    public TrackAssemblyInstance createTurnout(List<TrackPlacementEndpoint> endpoints, double gauge,
-                                              List<TrackCurveParameters> curves, List<Boolean> edited, String modelId) {
-        return commitAssembly(prepareTurnout(endpoints, gauge, curves, edited, modelId));
-    }
-
-    public record PreparedAssembly(TrackAssemblyInstance instance, List<TrackNode> nodes, List<TrackSegment> segments) {}
-
-    public PreparedAssembly prepareDiamondCrossing(List<TrackPlacementEndpoint> endpoints, double gauge, String modelId) {
-        if (endpoints.size() != 4) throw new IllegalArgumentException("A crossing needs four endpoints");
-        var geometry = DiamondCrossingGeometry.create(endpoints.stream().map(TrackPlacementEndpoint::position).toList(), gauge);
-        var preparedNodes = new ArrayList<TrackNode>();
-        var ports = new LinkedHashMap<String, TrackPort>();
-        var names = List.of("A", "B", "C", "D");
-        var nodeIds = new java.util.HashSet<UUID>();
-        for (int i = 0; i < endpoints.size(); i++) {
-            var endpoint = endpoints.get(i);
-            var node = placementNode(endpoint, gauge);
-            if (endpoint.nodeId() != null && (assemblyAtPort(node.id()) != null || connections(node.id()).size() > 1)) {
-                throw new IllegalArgumentException("Crossing ports must be free endpoints");
-            }
-            if (!nodeIds.add(node.id())) throw new IllegalArgumentException("Duplicate crossing endpoint");
-            preparedNodes.add(node);
-            ports.put(names.get(i), new TrackPort(node.id(), geometry.ports().get(names.get(i)).outwardYaw()));
-        }
-        var definition = TrackAssemblyDefinition.DIAMOND_CROSSING;
-        var batch = new ArrayList<TrackSegment>();
-        var paths = new LinkedHashMap<String, TrackPath>();
-        for (int i = 0; i < 2; i++) {
-            String name = i == 0 ? "line_one" : "line_two";
-            var part = geometry.paths().get(name).getFirst();
-            var segment = prepareSegment(UUID.randomUUID(), preparedNodes.get(i * 2), preparedNodes.get(i * 2 + 1),
-                    null, null, modelId, part);
-            batch.add(segment);
-            paths.put(name, new TrackPath(List.of(new TrackConnection(segment.id(), true))));
-        }
-        var instance = new TrackAssemblyInstance(UUID.randomUUID(), definition, ports, paths, preparedNodes.getFirst().position(),
-                geometry.ports().get("B").outwardYaw(), gauge, definition.initialState(), 0, null, geometry, modelId);
-        var nodesById = preparedNodes.stream().collect(java.util.stream.Collectors.toMap(TrackNode::id, n -> n));
-        var byId = batch.stream().collect(java.util.stream.Collectors.toMap(TrackSegment::id, s -> s));
-        validateAssembly(instance, nodesById::get, byId::get);
-        return new PreparedAssembly(instance, List.copyOf(preparedNodes), List.copyOf(batch));
-    }
-
-    public TrackAssemblyInstance createDiamondCrossing(List<TrackPlacementEndpoint> endpoints, double gauge, String modelId) {
-        return commitAssembly(prepareDiamondCrossing(endpoints, gauge, modelId));
-    }
-
-    public PreparedAssembly prepareSingleCrossover(List<TrackPlacementEndpoint> endpoints, double gauge, String modelId) {
-        if (endpoints.size() != 4) throw new IllegalArgumentException("A single crossover needs four endpoints");
-        var geometry = SingleCrossoverGeometry.create(endpoints.stream().map(TrackPlacementEndpoint::position).toList(), gauge);
-        var preparedNodes = new ArrayList<TrackNode>();
-        var ports = new LinkedHashMap<String, TrackPort>();
-        var names = List.of("A", "B", "C", "D");
-        var nodeIds = new java.util.HashSet<UUID>();
-        for (int i = 0; i < endpoints.size(); i++) {
-            var endpoint = endpoints.get(i);
-            var node = placementNode(endpoint, gauge);
-            if (endpoint.nodeId() != null && (assemblyAtPort(node.id()) != null || connections(node.id()).size() > 1)) {
-                throw new IllegalArgumentException("Crossover ports must be free endpoints");
-            }
-            if (!nodeIds.add(node.id())) throw new IllegalArgumentException("Duplicate crossover endpoint");
-            preparedNodes.add(node);
-            ports.put(names.get(i), new TrackPort(node.id(), geometry.ports().get(names.get(i)).outwardYaw()));
-        }
-        var definition = TrackAssemblyDefinition.SINGLE_CROSSOVER;
-        var batch = new ArrayList<TrackSegment>();
-        var paths = new LinkedHashMap<String, TrackPath>();
-        var routeNames = List.of("first_straight", "second_straight", "crossover");
-        for (int i = 0; i < routeNames.size(); i++) {
-            String name = routeNames.get(i);
-            var route = definition.routes().get(name);
-            int entrance = names.indexOf(route.entrance()), exit = names.indexOf(route.exit());
-            var part = geometry.paths().get(name).getFirst();
+            var part = entry.getValue().getFirst();
             var curve = part instanceof BezierTrackGeometry bezier ? bezier : null;
-            var segment = prepareSegment(UUID.randomUUID(), preparedNodes.get(entrance), preparedNodes.get(exit),
-                    curve == null ? null : curve.control1(), curve == null ? null : curve.control2(), modelId, part);
+            var segment = prepareSegment(UUID.randomUUID(), preparedNodes.get(ports.get(route.entrance()).nodeId()),
+                    preparedNodes.get(ports.get(route.exit()).nodeId()), curve == null ? null : curve.control1(),
+                    curve == null ? null : curve.control2(), modelId, part);
             batch.add(segment);
-            paths.put(name, new TrackPath(List.of(new TrackConnection(segment.id(), true))));
+            paths.put(entry.getKey(), new TrackPath(List.of(new TrackConnection(segment.id(), true))));
         }
-        var instance = new TrackAssemblyInstance(UUID.randomUUID(), definition, ports, paths, preparedNodes.getFirst().position(),
-                geometry.ports().get("B").outwardYaw(), gauge, definition.initialState(), 0, null, geometry, modelId);
-        var nodesById = preparedNodes.stream().collect(java.util.stream.Collectors.toMap(TrackNode::id, n -> n));
-        var byId = batch.stream().collect(java.util.stream.Collectors.toMap(TrackSegment::id, s -> s));
-        validateAssembly(instance, nodesById::get, byId::get);
-        return new PreparedAssembly(instance, List.copyOf(preparedNodes), List.copyOf(batch));
+        var instance = new TrackAssemblyInstance(UUID.randomUUID(), definition, ports, paths, endpoints.getFirst().position(),
+                geometry.ports().get("A").outwardYaw() + 180, gauge, definition.initialState(), 0, null, geometry, modelId);
+        var byId = batch.stream().collect(java.util.stream.Collectors.toMap(TrackSegment::id, segment -> segment));
+        validateAssembly(instance, preparedNodes::get, byId::get);
+        return new PreparedAssembly(instance, List.copyOf(preparedNodes.values()), List.copyOf(batch));
     }
 
-    public TrackAssemblyInstance createSingleCrossover(List<TrackPlacementEndpoint> endpoints, double gauge, String modelId) {
-        return commitAssembly(prepareSingleCrossover(endpoints, gauge, modelId));
-    }
-
-    public TrackAssemblyInstance createTurnout(TrackPlacementEndpoint origin, double gauge,
-                                               TrackAssemblyDefinition definition, double yaw) {
-        return commitAssembly(prepareTurnout(origin, gauge, definition, yaw));
+    public TrackAssemblyInstance createAssembly(TrackConstructionType kind, List<TrackPlacementEndpoint> endpoints,
+                                                 double gauge, List<TrackCurveParameters> curves, List<Boolean> edited,
+                                                 double yaw, String modelId) {
+        return commitAssembly(prepareAssembly(kind, endpoints, gauge, curves, edited, yaw, modelId));
     }
 
     private TrackAssemblyInstance commitAssembly(PreparedAssembly prepared) {
@@ -528,11 +373,9 @@ public final class TrackGraph {
                     || !samePosition(node.position(), value.geometry().ports().get(entry.getKey()).position())) {
                 throw new IllegalArgumentException("Assembly port geometry mismatch");
             }
-            if (portAssemblies.containsKey(port.nodeId())) throw new IllegalArgumentException("Duplicate assembly port");
             var external = connections.getOrDefault(port.nodeId(), List.of()).stream()
                     .filter(c -> !value.segments().contains(c.segmentId())).toList();
-            if (external.size() > 1) throw new IllegalArgumentException("Too many assembly connections");
-            for (var connection : external) validatePortTangent(segment(connection.segmentId()), port.nodeId(), value);
+            for (var connection : external) validateFlatEndpoint(segment(connection.segmentId()), port.nodeId());
         }
         var portIds = value.ports().values().stream().map(TrackPort::nodeId).collect(java.util.stream.Collectors.toSet());
         for (var entry : value.paths().entrySet()) {
@@ -583,7 +426,7 @@ public final class TrackGraph {
 
     private void indexAssembly(TrackAssemblyInstance value) {
         assemblies.put(value.id(), value);
-        value.ports().values().forEach(port -> portAssemblies.put(port.nodeId(), value.id()));
+        value.ports().values().forEach(port -> portAssemblies.computeIfAbsent(port.nodeId(), ignored -> new LinkedHashSet<>()).add(value.id()));
         value.segments().forEach(id -> segmentAssemblies.put(id, value.id()));
     }
 
@@ -643,7 +486,11 @@ public final class TrackGraph {
         var value = assembly(id);
         var removed = value.segments().stream().map(this::segment).toList();
         assemblies.remove(id);
-        value.ports().values().forEach(port -> portAssemblies.remove(port.nodeId()));
+        value.ports().values().forEach(port -> {
+            var owners = portAssemblies.get(port.nodeId());
+            owners.remove(id);
+            if (owners.isEmpty()) portAssemblies.remove(port.nodeId());
+        });
         value.segments().forEach(segmentAssemblies::remove);
         for (var segment : removed) unindexSegment(segment);
         onChange.run();

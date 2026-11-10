@@ -5,12 +5,8 @@
 package com.unrealtrainmod.track.assembly;
 
 import com.unrealtrainmod.track.TrackConnection;
-import com.unrealtrainmod.track.DiamondCrossingGeometry;
-import com.unrealtrainmod.track.SingleCrossoverGeometry;
+import com.unrealtrainmod.track.AssemblyPlacementGeometry;
 import com.unrealtrainmod.track.TrackGeometryDefinition;
-import com.unrealtrainmod.track.TrackPlacementGeometry;
-import com.unrealtrainmod.track.geometry.BezierTrackGeometry;
-import com.unrealtrainmod.track.geometry.StraightTrackGeometry;
 import com.unrealtrainmod.track.geometry.TrackGeometry;
 import com.unrealtrainmod.track.geometry.TrackPoint;
 import com.unrealtrainmod.track.geometry.TrackVector;
@@ -92,61 +88,7 @@ public final class TrackAssemblyInstance {
                 throw new IllegalArgumentException("Assembly path does not match definition geometry");
             }
         }
-        if (definition == TrackAssemblyDefinition.CUSTOM) {
-            var a = geometry.ports().get("A").position();
-            for (var parts : geometry.paths().values()) {
-                if (parts.size() != 1 || !(parts.getFirst() instanceof BezierTrackGeometry)) {
-                    throw new IllegalArgumentException("Custom turnout requires two single Bezier paths");
-                }
-                var part = parts.getFirst();
-                var t = part.sample(0).tangent();
-                double angle = Math.toRadians(geometry.ports().get("A").outwardYaw());
-                if (part.getLength() > TrackPlacementGeometry.MAX_LENGTH
-                        || Math.abs(part.sample(0).position().y() - a.y()) > 1e-6
-                        || Math.abs(part.sample(part.getLength()).position().y() - a.y()) > 1e-6
-                        || Math.sin(angle) * t.x() - Math.cos(angle) * t.z() < 1 - 1e-6) {
-                    throw new IllegalArgumentException("Custom turnout paths must share a flat entrance tangent");
-                }
-            }
-        }
-        if (definition == TrackAssemblyDefinition.DIAMOND_CROSSING) {
-            var expected = DiamondCrossingGeometry.create(List.of("A", "B", "C", "D").stream()
-                    .map(name -> geometry.ports().get(name).position()).toList(), gauge);
-            for (var entry : geometry.paths().entrySet()) {
-                var route = definition.routes().get(entry.getKey());
-                var parts = entry.getValue();
-                if (parts.size() != 1 || !(parts.getFirst() instanceof StraightTrackGeometry)
-                        || !parts.getFirst().sample(0).position().equals(geometry.ports().get(route.entrance()).position())
-                        || !parts.getFirst().sample(parts.getFirst().getLength()).position().equals(geometry.ports().get(route.exit()).position())) {
-                    throw new IllegalArgumentException("Crossing requires two independent straight paths");
-                }
-            }
-            for (String name : definition.portNames()) {
-                double delta = ((ports.get(name).outwardYaw() - expected.ports().get(name).outwardYaw()) % 360 + 540) % 360 - 180;
-                if (Math.abs(delta) > 1e-6) throw new IllegalArgumentException("Invalid crossing port direction");
-            }
-        }
-        if (definition == TrackAssemblyDefinition.SINGLE_CROSSOVER) {
-            var expected = SingleCrossoverGeometry.create(List.of("A", "B", "C", "D").stream()
-                    .map(name -> geometry.ports().get(name).position()).toList(), gauge);
-            for (String name : List.of("first_straight", "second_straight", "crossover")) {
-                var route = definition.routes().get(name);
-                var parts = geometry.paths().get(name);
-                boolean straight = name.endsWith("straight");
-                boolean expectedType = parts.size() == 1 && (straight
-                        ? parts.getFirst() instanceof StraightTrackGeometry
-                        : parts.getFirst() instanceof BezierTrackGeometry);
-                if (!expectedType
-                        || !parts.getFirst().sample(0).position().equals(geometry.ports().get(route.entrance()).position())
-                        || !parts.getFirst().sample(parts.getFirst().getLength()).position().equals(geometry.ports().get(route.exit()).position())) {
-                    throw new IllegalArgumentException("Crossover requires two straight lines and one S path");
-                }
-            }
-            for (String name : definition.portNames()) {
-                double delta = ((ports.get(name).outwardYaw() - expected.ports().get(name).outwardYaw()) % 360 + 540) % 360 - 180;
-                if (Math.abs(delta) > 1e-6) throw new IllegalArgumentException("Invalid crossover port direction");
-            }
-        }
+        AssemblyPlacementGeometry.validate(definition, geometry);
         bounds = createBounds();
     }
 
@@ -324,27 +266,13 @@ public final class TrackAssemblyInstance {
         return create(tag, ports, paths, JunctionState.load(tag.getCompound("Controls")));
     }
 
-    /** Version 5 conversion is used only by world storage, never by network decoding. */
-    public static TrackAssemblyInstance loadLegacy(CompoundTag tag) {
-        validateHeader(tag);
-        var definition = TrackAssemblyDefinition.valueOf(tag.getString("Definition"));
-        double yaw = tag.getDouble("Yaw");
-        var ports = Map.of("A", new TrackPort(readUuid(tag, "A"), yaw + 180),
-                "B", new TrackPort(readUuid(tag, "B"), yaw), "C", new TrackPort(readUuid(tag, "C"), definition.exitYaw(yaw)));
-        var paths = Map.of("straight", new TrackPath(List.of(new TrackConnection(readUuid(tag, "Straight"), true))),
-                "diverging", new TrackPath(List.of(new TrackConnection(readUuid(tag, "Diverging"), true))));
-        var position = switch (tag.getString("State")) {
-            case "STRAIGHT" -> SwitchPosition.NORMAL;
-            case "DIVERGING" -> SwitchPosition.REVERSE;
-            default -> throw new IllegalArgumentException("Invalid legacy turnout state");
-        };
-        return create(tag, ports, paths, new JunctionState(Map.of("main", position)));
-    }
-
     private static TrackAssemblyInstance create(CompoundTag tag, Map<String, TrackPort> ports,
                                                  Map<String, TrackPath> paths, JunctionState state) {
         if (tag.contains("ModelId") && !tag.contains("ModelId", Tag.TAG_STRING)) {
             throw new IllegalArgumentException("Invalid turnout model ID");
+        }
+        if (tag.getString("Definition").equals("LEFT") || tag.getString("Definition").equals("RIGHT")) {
+            throw new IllegalArgumentException("Left/right template turnouts are no longer supported");
         }
         var definition = TrackAssemblyDefinition.valueOf(tag.getString("Definition"));
         var origin = new TrackVector(tag.getDouble("X"), tag.getDouble("Y"), tag.getDouble("Z"));
@@ -352,8 +280,7 @@ public final class TrackAssemblyInstance {
         double gauge = tag.getDouble("Gauge");
         var value = new TrackAssemblyInstance(readUuid(tag, "Id"), definition, ports, paths, origin, yaw, gauge,
                 state, tag.getLong("Revision"), tag.hasUUID("Occupant") ? tag.getUUID("Occupant") : null,
-                tag.contains("Geometry", Tag.TAG_COMPOUND) ? readGeometry(tag.getCompound("Geometry"), ports, paths, gauge)
-                        : definition.geometry(origin, yaw, gauge),
+                readGeometry(tag.getCompound("Geometry"), ports, paths, gauge),
                 tag.contains("ModelId", Tag.TAG_STRING) ? net.minecraft.resources.ResourceLocation.parse(tag.getString("ModelId")).toString() : null);
         if (tag.contains("TrailingPass")) {
             if (!tag.contains("TrailingPass", Tag.TAG_COMPOUND)) throw new IllegalArgumentException("Invalid trailing passage");

@@ -175,21 +175,19 @@ public final class TrackConstructionManager {
         }
     }
 
-    private static TrackVector outwardHorizontal(TrackGraph graph, TrackPlacementEndpoint endpoint) {
+    /** Infer only a unique continuation direction; shared nodes never select an arbitrary neighbor. */
+    static TrackVector outwardHorizontal(TrackGraph graph, TrackPlacementEndpoint endpoint) {
         if (endpoint.nodeId() == null) return null;
-        var assembly = graph.assemblyAtPort(endpoint.nodeId());
-        if (assembly != null) {
-            double yaw = Math.toRadians(assembly.portAt(endpoint.nodeId()).outwardYaw());
-            return new TrackVector(-Math.sin(yaw), 0, Math.cos(yaw));
+        TrackVector result = null;
+        for (var connection : graph.connections(endpoint.nodeId())) {
+            var geometry = graph.segment(connection.segmentId()).geometry();
+            var tangent = geometry.sample(connection.fromStart() ? 0 : geometry.getLength()).tangent();
+            double scale = (connection.fromStart() ? -1 : 1) / Math.hypot(tangent.x(), tangent.z());
+            var candidate = new TrackVector(tangent.x() * scale, 0, tangent.z() * scale);
+            if (result != null && result.x() * candidate.x() + result.z() * candidate.z() < 1 - 1e-12) return null;
+            result = candidate;
         }
-        var connections = graph.connections(endpoint.nodeId());
-        if (connections.size() != 1) return null;
-        var segment = graph.segment(connections.getFirst().segmentId());
-        if (graph.assemblyForSegment(segment.id()) != null) return null;
-        boolean start = segment.startNodeId().equals(endpoint.nodeId());
-        var tangent = segment.geometry().sample(start ? 0 : segment.geometry().getLength()).tangent();
-        double scale = (start ? -1 : 1) / Math.hypot(tangent.x(), tangent.z());
-        return new TrackVector(tangent.x() * scale, 0, tangent.z() * scale);
+        return result;
     }
 
     private static void updateInferredHorizontal(Session session) {
@@ -210,7 +208,7 @@ public final class TrackConstructionManager {
     }
 
     private static boolean flatPort(TrackGraph graph, TrackPlacementEndpoint endpoint) {
-        return endpoint != null && endpoint.nodeId() != null && graph.assemblyAtPort(endpoint.nodeId()) != null;
+        return endpoint != null && endpoint.nodeId() != null && !graph.assembliesAtPort(endpoint.nodeId()).isEmpty();
     }
 
     private static double defaultVerticalLength(Session session) {
@@ -227,8 +225,10 @@ public final class TrackConstructionManager {
 
     private static TrackVerticalCurveParameters inferVertical(TrackGraph graph, TrackPlacementEndpoint endpoint, double length) {
         if (endpoint == null || endpoint.nodeId() == null) return null;
-        var assembly = graph.assemblyAtPort(endpoint.nodeId());
-        if (assembly != null) return new TrackVerticalCurveParameters(0, length, assembly.portAt(endpoint.nodeId()).outwardYaw());
+        if (!graph.assembliesAtPort(endpoint.nodeId()).isEmpty()) {
+            var outward = outwardHorizontal(graph, endpoint);
+            return new TrackVerticalCurveParameters(0, length, outward == null ? 0 : TrackVerticalCurveParameters.yaw(outward));
+        }
         var connections = graph.connections(endpoint.nodeId());
         if (connections.size() != 1) return null;
         var segment = graph.segment(connections.get(0).segmentId());
@@ -334,7 +334,7 @@ public final class TrackConstructionManager {
         Feedback feedback = session.end == null ? Feedback.START : validate(graph, session);
         publish(player, session, feedback);
         PacketDistributor.sendToPlayer(player, new OpenTrackCurvePayload(player.serverLevel().dimension().location(),
-                session.revision, session.editorId, OpenTrackCurvePayload.ConstructionKind.TRACK, start ? 0 : 1, false, curve == null, initial,
+                session.revision, session.editorId, OpenTrackCurvePayload.ConstructionKind.TRACK, start ? 0 : 1, curve == null, initial,
                 (start ? session.startVertical : session.endVertical) == null, flatPort(graph, selected), editorVertical(session, start)));
     }
 

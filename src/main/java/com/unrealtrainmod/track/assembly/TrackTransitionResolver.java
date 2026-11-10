@@ -42,15 +42,21 @@ public final class TrackTransitionResolver {
         var a = graph.assemblyForSegment(incoming.segmentId());
         var b = graph.assemblyForSegment(outgoing.segmentId());
         if (a == null && b == null) return true;
-        if (a != null && b != null) return a.id().equals(b.id()) && isSequenceEnabled(a, List.of(incoming, outgoing), context);
-        var assembly = a == null ? b : a;
+        if (a != null && b != null && a.id().equals(b.id())) {
+            return isSequenceEnabled(a, List.of(incoming, outgoing), context);
+        }
+        return (a == null || permitsEndpoint(a, incoming, false, context))
+                && (b == null || permitsEndpoint(b, outgoing, true, context));
+    }
+
+    private static boolean permitsEndpoint(TrackAssemblyInstance assembly, TrackConnection step, boolean entering,
+                                            TrackTraversalContext context) {
         for (var entry : assembly.paths().entrySet()) {
             var path = entry.getValue();
             for (boolean reverse : List.of(false, true)) {
                 if (!context.allows(assembly, entry.getKey(), reverse)) continue;
                 var direction = reverse ? path.reversedSteps() : path.steps();
-                if (a == null && direction.getFirst().equals(outgoing)) return true;
-                if (b == null && direction.getLast().equals(incoming)) return true;
+                if ((entering ? direction.getFirst() : direction.getLast()).equals(step)) return true;
             }
         }
         return false;

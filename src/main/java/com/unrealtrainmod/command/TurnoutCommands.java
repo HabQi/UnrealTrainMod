@@ -10,7 +10,6 @@ import com.mojang.brigadier.builder.RequiredArgumentBuilder;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import com.mojang.brigadier.exceptions.SimpleCommandExceptionType;
 import com.unrealtrainmod.track.TrackGraph;
-import com.unrealtrainmod.track.assembly.TrackAssemblyDefinition;
 import com.unrealtrainmod.track.assembly.TrackAssemblyInstance;
 import com.unrealtrainmod.track.assembly.SwitchPosition;
 import com.unrealtrainmod.track.assembly.TrackTransitionResolver;
@@ -28,8 +27,6 @@ import net.minecraft.network.chat.ClickEvent;
 import net.minecraft.network.chat.Component;
 import net.neoforged.neoforge.event.RegisterCommandsEvent;
 
-import static com.mojang.brigadier.arguments.DoubleArgumentType.doubleArg;
-import static com.mojang.brigadier.arguments.DoubleArgumentType.getDouble;
 import static com.mojang.brigadier.arguments.StringArgumentType.getString;
 import static net.minecraft.commands.Commands.argument;
 import static net.minecraft.commands.Commands.literal;
@@ -39,18 +36,6 @@ public final class TurnoutCommands {
     private TurnoutCommands() {}
 
     public static void register(RegisterCommandsEvent event) {
-        var create = literal("create");
-        for (var definition : List.of(TrackAssemblyDefinition.LEFT, TrackAssemblyDefinition.RIGHT)) {
-            create.then(literal(definition.name().toLowerCase(Locale.ROOT))
-                    .then(argument("originNodeId", UuidArgument.uuid()).suggests((c, b) -> SharedSuggestionProvider.suggest(
-                            graph(c).nodes().stream().filter(n -> graph(c).assemblyAtPort(n.id()) == null
-                                    && graph(c).connections(n.id()).size() <= 1).map(n -> n.id().toString()), b))
-                            .then(argument("yaw", doubleArg()).executes(c -> execute(c, g -> {
-                                var value = g.createTurnout(UuidArgument.getUuid(c, "originNodeId"), definition, getDouble(c, "yaw"));
-                                describe(c, g, value);
-                                return 1;
-                            })))));
-        }
         var set = assemblyArgument();
         for (String name : List.of("straight", "diverging")) {
             var position = name.equals("straight") ? SwitchPosition.NORMAL : SwitchPosition.REVERSE;
@@ -79,7 +64,7 @@ public final class TurnoutCommands {
                     describe(c, g, g.assembly(id));
                     return 1;
                 })))));
-        var turnout = literal("turnout").then(create).then(literal("set").then(set))
+        var turnout = literal("turnout").then(literal("set").then(set))
                 .then(literal("info").then(assemblyArgument().executes(c -> execute(c, g -> {
                     TrainManager.get(c.getSource().getLevel()).refreshTurnoutOccupancy();
                     describe(c, g, g.assembly(UuidArgument.getUuid(c, "assemblyId"))); return 1;
@@ -174,9 +159,7 @@ public final class TurnoutCommands {
                             + "position." + entry.getValue().name().toLowerCase(Locale.ROOT)).getString())
                     .collect(Collectors.joining(", ")));
         }
-        return Component.translatable(PREFIX + (value.definition() == TrackAssemblyDefinition.CUSTOM
-                ? value.state().controls().get("main") == SwitchPosition.NORMAL ? "line_one" : "line_two"
-                : value.state().controls().get("main") == SwitchPosition.NORMAL ? "straight" : "diverging"));
+        return Component.translatable(PREFIX + (value.state().controls().get("main") == SwitchPosition.NORMAL ? "line_one" : "line_two"));
     }
 
     private static String number(double value) { return String.format(Locale.ROOT, "%.4f", value); }

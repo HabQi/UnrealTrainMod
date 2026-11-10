@@ -19,10 +19,7 @@ import com.unrealtrainmod.track.TrackGraphException;
 import com.unrealtrainmod.track.TrackPlacementEndpoint;
 import com.unrealtrainmod.track.TrackPlacementGeometry;
 import com.unrealtrainmod.track.TrackVerticalCurveParameters;
-import com.unrealtrainmod.track.TurnoutPlacementGeometry;
-import com.unrealtrainmod.track.DiamondCrossingGeometry;
-import com.unrealtrainmod.track.SingleCrossoverGeometry;
-import com.unrealtrainmod.track.assembly.TrackAssemblyDefinition;
+import com.unrealtrainmod.track.AssemblyPlacementGeometry;
 import com.unrealtrainmod.track.assembly.TrackAssemblyInstance;
 import com.unrealtrainmod.track.assembly.SwitchPosition;
 import com.unrealtrainmod.track.block.TrackBlockManager;
@@ -34,6 +31,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
+import java.util.stream.Collectors;
 import java.util.UUID;
 import net.minecraft.ChatFormatting;
 import net.minecraft.core.Direction;
@@ -98,19 +97,11 @@ public final class TurnoutConstructionManager {
                     || !TrackConstructionManager.canEditPoint(player, selected)) {
                 publish(player, s, Feedback.INVALID_POINT); return;
             }
-            UUID external = null;
             if (selected.nodeId() != null) {
-                var connections = graph.connections(selected.nodeId());
-                if (graph.assemblyAtPort(selected.nodeId()) != null || connections.size() > 1) {
-                    publish(player, s, Feedback.INVALID_NODE); return;
-                }
-                if (!connections.isEmpty()) {
-                    external = connections.getFirst().segmentId();
-                    if (Math.abs(externalTangent(graph, selected).y()) > 1e-6) {
-                        publish(player, s, Feedback.NON_HORIZONTAL); return;
-                    }
-                }
+                if (graph.isAssemblyInternalNode(selected.nodeId())) { publish(player, s, Feedback.INVALID_NODE); return; }
+                if (!horizontalConnections(graph, selected)) { publish(player, s, Feedback.NON_HORIZONTAL); return; }
             }
+            Set<UUID> external = connections(graph, selected);
             boolean newDraft = s == null || s.kind != kind;
             if (newDraft) {
                 s = new Session(player, kind);
@@ -151,12 +142,17 @@ public final class TurnoutConstructionManager {
         }
     }
 
-    /** Points outward from a selected node along its existing external line. */
-    private static TrackVector externalTangent(TrackGraph graph, TrackPlacementEndpoint endpoint) {
-        var segment = graph.segment(graph.connections(endpoint.nodeId()).getFirst().segmentId());
-        boolean start = segment.startNodeId().equals(endpoint.nodeId());
-        var t = segment.geometry().sample(start ? 0 : segment.geometry().getLength()).tangent();
-        return new TrackVector(start ? t.x() : -t.x(), start ? t.y() : -t.y(), start ? t.z() : -t.z());
+    private static Set<UUID> connections(TrackGraph graph, TrackPlacementEndpoint point) {
+        return point.nodeId() == null ? Set.of() : graph.connections(point.nodeId()).stream()
+                .map(value -> value.segmentId()).collect(Collectors.toSet());
+    }
+
+    private static boolean horizontalConnections(TrackGraph graph, TrackPlacementEndpoint point) {
+        for (var connection : graph.connections(point.nodeId())) {
+            var geometry = graph.segment(connection.segmentId()).geometry();
+            if (Math.abs(geometry.sample(connection.fromStart() ? 0 : geometry.getLength()).tangent().y()) > 1e-6) return false;
+        }
+        return true;
     }
 
     private static Feedback refresh(TrackGraph graph, Session s) {
@@ -165,54 +161,38 @@ public final class TurnoutConstructionManager {
                 var point = s.points.get(i);
                 if (!TrackConstructionManager.validPosition(s.level, point.position())) return Feedback.INVALID_POINT;
                 if (point.nodeId() == null) continue;
-                var node = graph.node(point.nodeId()); var connections = graph.connections(node.id());
-                UUID external = s.external.get(i);
+                var node = graph.node(point.nodeId());
                 if (!node.position().equals(point.position()) || node.gauge() != s.gauge
-                        || graph.assemblyAtPort(node.id()) != null || connections.size() != (external == null ? 0 : 1)
-                        || (external != null && !external.equals(connections.getFirst().segmentId()))) return Feedback.INVALID_NODE;
-                if (external != null && Math.abs(externalTangent(graph, point).y()) > 1e-6) return Feedback.NON_HORIZONTAL;
+                        || graph.isAssemblyInternalNode(node.id()) || !connections(graph, point).equals(s.external.get(i))) {
+                    return Feedback.INVALID_NODE;
+                }
+                if (!horizontalConnections(graph, point)) return Feedback.NON_HORIZONTAL;
             }
             return null;
         } catch (TrackGraphException exception) { return Feedback.INVALID_NODE; }
     }
 
     private static void updateDefaults(TrackGraph graph, Session s) {
-        s.defaults.clear(); s.locked.clear();
-        var a = s.points.getFirst().position();
-        var b = s.points.size() > 1 ? s.points.get(1).position() : null;
-        var c = s.points.size() > 2 ? s.points.get(2).position() : null;
         for (int i = 0; i < s.points.size(); i++) {
+            if (s.edited.get(i)) continue;
             var point = s.points.get(i);
-            boolean locked = s.external.get(i) != null;
-            var automatic = i == 0 ? TurnoutPlacementGeometry.defaults(a, b, c, s.yaw)
-                    : locked ? TrackPlacementGeometry.defaults(point.position(), a, s.yaw)
-                    : TurnoutPlacementGeometry.endDefaults(a, point.position(), effective(s, 0));
+            int partner = AssemblyPlacementGeometry.partner(s.kind, i);
+            var other = partner < s.points.size() ? s.points.get(partner).position() : null;
+            var automatic = TrackPlacementGeometry.defaults(point.position(), other, s.yaw);
+            var outward = TrackConstructionManager.outwardHorizontal(graph, point);
             var saved = point.nodeId() == null ? null : graph.node(point.nodeId()).curve();
-            double angle = i == 0 && saved != null ? saved.angle() : automatic.angle();
-            if (locked) {
-                var t = externalTangent(graph, point); double sign = i == 0 ? -1 : 1;
-                angle = Math.toDegrees(Math.atan2(-sign * t.x(), sign * t.z()));
-            } else if (i == 0 && saved != null && b != null) {
-                double radians = Math.toRadians(angle);
-                if (-Math.sin(radians) * (b.x() - a.x()) + Math.cos(radians) * (b.z() - a.z()) < 0) angle += 180;
+            if (saved != null) {
+                var toward = outward != null ? outward : other == null ? null
+                        : new TrackVector(other.x() - point.position().x(), 0, other.z() - point.position().z());
+                s.curves.set(i, toward == null ? saved : TrackPlacementGeometry.facing(saved, toward));
+            } else {
+                s.curves.set(i, outward == null ? null : new TrackCurveParameters(
+                        Math.toDegrees(Math.atan2(-outward.x(), outward.z())), automatic.length()));
             }
-            s.defaults.add(new TrackCurveParameters(angle, automatic.length())); s.locked.add(locked);
         }
-    }
-
-    private static List<TrackCurveParameters> effective(Session s) {
-        var curves = new ArrayList<TrackCurveParameters>();
-        for (int i = 0; i < s.points.size(); i++) {
-            curves.add(effective(s, i));
-        }
-        return curves;
-    }
-
-    private static TrackCurveParameters effective(Session s, int i) {
-        var raw = s.curves.get(i); var automatic = s.defaults.get(i);
-        if (i > 0 && raw == null && !s.locked.get(i)) return null;
-        double angle = raw == null || s.locked.get(i) || (i == 0 && !s.edited.get(i)) ? automatic.angle() : raw.angle();
-        return new TrackCurveParameters(angle, raw == null ? automatic.length() : raw.length());
+        s.defaults.clear();
+        s.defaults.addAll(AssemblyPlacementGeometry.defaults(s.kind,
+                s.points.stream().map(TrackPlacementEndpoint::position).toList(), s.curves, s.yaw));
     }
 
     private static Feedback validate(ServerPlayer player, Session s) {
@@ -220,37 +200,19 @@ public final class TurnoutConstructionManager {
             var blocks = TrackBlockManager.get(player.serverLevel()); var graph = blocks.graph();
             Feedback stale = refresh(graph, s);
             if (stale != null) return s.validation = stale;
-            if (s.kind == TrackConstructionType.DIAMOND_CROSSING) {
-                DiamondCrossingGeometry.create(s.points.stream().map(TrackPlacementEndpoint::position).toList(), s.gauge);
-                if (s.points.size() == 4) {
-                    var prepared = graph.prepareDiamondCrossing(s.points, s.gauge, null);
-                    blocks.validatePlacement(prepared.segments());
-                    return s.validation = Feedback.READY;
-                }
-                return s.validation = Feedback.CROSSING_POINT;
-            }
-            if (s.kind == TrackConstructionType.SINGLE_CROSSOVER) {
-                SingleCrossoverGeometry.create(s.points.stream().map(TrackPlacementEndpoint::position).toList(), s.gauge);
-                if (s.points.size() == 4) {
-                    var prepared = graph.prepareSingleCrossover(s.points, s.gauge, null);
-                    blocks.validatePlacement(prepared.segments());
-                    return s.validation = Feedback.READY;
-                }
-                return s.validation = Feedback.CROSSOVER_POINT;
-            }
             updateDefaults(graph, s);
-            if (s.points.size() > 1) {
-                var curves = effective(s);
-                TurnoutPlacementGeometry.create(s.points.get(0).position(), s.points.get(1).position(),
-                        s.points.size() > 2 ? s.points.get(2).position() : null, s.gauge, curves.get(0), curves.get(1),
-                        s.points.size() > 2 ? curves.get(2) : null, s.locked.get(1),
-                        s.points.size() > 2 && s.locked.get(2));
-            }
-            if (s.points.size() == 3) {
-                var prepared = graph.prepareTurnout(s.points, s.gauge, effective(s), s.edited, null);
+            if (s.points.size() == s.kind.pointCount()) {
+                var prepared = graph.prepareAssembly(s.kind, s.points, s.gauge, s.curves, s.edited, s.yaw, null);
                 blocks.validatePlacement(prepared.segments());
+                return s.validation = Feedback.READY;
             }
-            return s.validation = s.points.size() == 3 ? Feedback.READY : s.points.size() == 2 ? Feedback.TURNOUT_B : Feedback.TURNOUT_A;
+            AssemblyPlacementGeometry.create(s.kind, s.points.stream().map(TrackPlacementEndpoint::position).toList(),
+                    s.gauge, s.curves, s.yaw);
+            return s.validation = switch (s.kind) {
+                case DIAMOND_CROSSING -> Feedback.CROSSING_POINT;
+                case SINGLE_CROSSOVER -> Feedback.CROSSOVER_POINT;
+                default -> s.points.size() == 2 ? Feedback.TURNOUT_B : Feedback.TURNOUT_A;
+            };
         } catch (TrackGraphException exception) { return s.validation = failure(exception); }
         catch (IllegalArgumentException exception) { return s.validation = Feedback.INVALID_GEOMETRY; }
         catch (IllegalStateException exception) { LOGGER.error("Cannot validate turnout", exception); return s.validation = Feedback.STORAGE; }
@@ -261,11 +223,6 @@ public final class TurnoutConstructionManager {
         if (player.isShiftKeyDown()) { cancel(player); return; }
         if (s == null || !s.matches(player)) { clear(player, Feedback.NO_DRAFT); return; }
         if (!player.getMainHandItem().is(UnrealTrainMod.TRACK_WRENCH.get())) { publish(player, s, Feedback.INVALID_ITEM); return; }
-        if (s.kind == TrackConstructionType.DIAMOND_CROSSING || s.kind == TrackConstructionType.SINGLE_CROSSOVER) {
-            player.displayClientMessage(Component.translatable("item.unrealtrainmod." + builderKey(s.kind) + ".straight_only")
-                    .withStyle(ChatFormatting.GRAY), true);
-            return;
-        }
         validate(player, s);
         if (s.validation == Feedback.INVALID_NODE || s.validation == Feedback.INVALID_POINT
                 || s.validation == Feedback.NON_HORIZONTAL || s.validation == Feedback.STORAGE) {
@@ -281,17 +238,17 @@ public final class TurnoutConstructionManager {
         if (!TrackConstructionManager.canEditPoint(player, s.points.get(selected))) { publish(player, s, Feedback.INVALID_POINT); return; }
         s.editorId = UUID.randomUUID(); s.editPoint = selected;
         publish(player, s, s.validation);
-        var initial = effective(s, selected);
+        var initial = s.defaults.get(selected);
         PacketDistributor.sendToPlayer(player, new OpenTrackCurvePayload(s.dimension(), s.revision, s.editorId,
-                ConstructionKind.TURNOUT, selected, s.locked.get(selected), s.curves.get(selected) == null,
-                initial == null ? s.defaults.get(selected) : initial, true, true, new TrackVerticalCurveParameters(0, 1, 0)));
+                ConstructionKind.TURNOUT, selected, s.curves.get(selected) == null,
+                initial, true, true, new TrackVerticalCurveParameters(0, 1, 0)));
     }
 
     public static void setCurve(ServerPlayer player, SetTrackCurvePayload payload) {
         var s = SESSIONS.get(player.getUUID()); Feedback error = null;
         if (!player.isAlive() || !player.hasPermissions(2)) error = Feedback.NO_PERMISSION;
         else if (!player.getMainHandItem().is(UnrealTrainMod.TRACK_WRENCH.get())) error = Feedback.INVALID_ITEM;
-        else if (s == null || s.kind != TrackConstructionType.SIMPLE_TURNOUT || !s.matches(player) || !s.dimension().equals(payload.dimension())
+        else if (s == null || !s.matches(player) || !s.dimension().equals(payload.dimension())
                 || !s.revision.equals(payload.revision()) || !payload.editorId().equals(s.editorId)
                 || payload.endpoint() != s.editPoint || payload.endpoint() < 0 || payload.endpoint() >= s.points.size()) error = Feedback.STALE_EDIT;
         if (error == null) {
@@ -305,8 +262,6 @@ public final class TurnoutConstructionManager {
         if (error == null) {
             try {
                 curve = new TrackCurveParameters(payload.angle(), payload.length());
-                if (s.locked.get(s.editPoint) && !payload.automatic()
-                        && Math.abs(normalize(curve.angle() - s.defaults.get(s.editPoint).angle())) > 1e-6) error = Feedback.INVALID_PARAMETERS;
             } catch (IllegalArgumentException exception) { error = Feedback.INVALID_PARAMETERS; }
         }
         if (error != null) {
@@ -333,11 +288,7 @@ public final class TurnoutConstructionManager {
         }
         try {
             var graph = TrackBlockManager.get(player.serverLevel()).graph();
-            var assembly = switch (s.kind) {
-                case DIAMOND_CROSSING -> graph.createDiamondCrossing(s.points, s.gauge, model.toString());
-                case SINGLE_CROSSOVER -> graph.createSingleCrossover(s.points, s.gauge, model.toString());
-                default -> graph.createTurnout(s.points, s.gauge, effective(s), s.edited, model.toString());
-            };
+            var assembly = graph.createAssembly(s.kind, s.points, s.gauge, s.curves, s.edited, s.yaw, model.toString());
             clear(player, Feedback.CREATED);
             player.sendSystemMessage(Component.translatable("item.unrealtrainmod." + builderKey(s.kind) + ".created",
                     assembly.id().toString()));
@@ -407,9 +358,7 @@ public final class TurnoutConstructionManager {
                     ? SwitchPosition.REVERSE : SwitchPosition.NORMAL;
             graph.setAssemblyState(assembly.id(), current.withControl("main", next));
             player.displayClientMessage(Component.translatable("item.unrealtrainmod.turnout_builder.switched",
-                    Component.translatable("commands.unrealtrainmod.turnout." + (assembly.definition() == TrackAssemblyDefinition.CUSTOM
-                            ? next == SwitchPosition.NORMAL ? "line_one" : "line_two"
-                            : next == SwitchPosition.NORMAL ? "straight" : "diverging")))
+                    Component.translatable("commands.unrealtrainmod.turnout." + (next == SwitchPosition.NORMAL ? "line_one" : "line_two")))
                     .withStyle(ChatFormatting.GREEN), true);
         } catch (IllegalStateException exception) { message(player, Feedback.STORAGE, ""); }
     }
@@ -423,21 +372,14 @@ public final class TurnoutConstructionManager {
         };
     }
 
-    private static double normalize(double yaw) { return ((yaw % 360) + 540) % 360 - 180; }
     private static void message(ServerPlayer player, Feedback feedback, String detail) {
         player.displayClientMessage(Component.translatable(feedback.translationKey(), detail).withStyle(ChatFormatting.RED), true);
     }
     private static void publish(ServerPlayer player, Session s, Feedback feedback) {
-        boolean ordinary = s != null && s.kind == TrackConstructionType.SIMPLE_TURNOUT;
-        var curves = ordinary ? new ArrayList<>(s.curves) : new ArrayList<TrackCurveParameters>();
-        if (ordinary && !curves.isEmpty() && curves.get(0) != null && s.defaults.size() == curves.size()) {
-            curves.set(0, effective(s).get(0));
-        }
         PacketDistributor.sendToPlayer(player, new TurnoutConstructionPayload(player.serverLevel().dimension().location(),
                 s == null ? new UUID(0, 0) : s.revision, s == null ? TrackConstructionType.SIMPLE_TURNOUT : s.kind,
                 s == null ? List.of() : List.copyOf(s.points), s == null ? 1.435 : s.gauge,
-                curves, ordinary ? List.copyOf(s.defaults) : List.of(),
-                ordinary ? List.copyOf(s.locked) : List.of(), feedback, s == null ? Feedback.START : s.validation));
+                s == null ? List.of() : new ArrayList<>(s.curves), s == null ? 0 : s.yaw, feedback, s == null ? Feedback.START : s.validation));
     }
     private static void clear(ServerPlayer player, Feedback feedback) {
         if (SESSIONS.remove(player.getUUID()) != null || feedback != Feedback.CANCELLED) publish(player, null, feedback);
@@ -465,8 +407,8 @@ public final class TurnoutConstructionManager {
         final double yaw;
         final List<TrackPlacementEndpoint> points = new ArrayList<>();
         final List<TrackCurveParameters> curves = new ArrayList<>(), defaults = new ArrayList<>();
-        final List<Boolean> edited = new ArrayList<>(), locked = new ArrayList<>();
-        final List<UUID> external = new ArrayList<>();
+        final List<Boolean> edited = new ArrayList<>();
+        final List<Set<UUID>> external = new ArrayList<>();
         double gauge = 1.435;
         UUID revision = UUID.randomUUID(), editorId;
         int editPoint;
