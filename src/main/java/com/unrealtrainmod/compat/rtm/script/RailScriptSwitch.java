@@ -29,7 +29,7 @@ public final class RailScriptSwitch {
 
     RailScriptSwitch(RailTurnoutView view) {
         var main = new RailScriptMap(view.main(), true);
-        var branch = new RailScriptMap(view.branch(), view.ownsBranchEnd());
+        var branch = new RailScriptMap(view.branch(), true);
         maps = new RailScriptMap[]{main, branch};
         var mainEnd = main.geometry().sample(main.getLength());
         var branchEnd = branch.geometry().sample(branch.getLength()).position();

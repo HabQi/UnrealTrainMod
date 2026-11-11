@@ -4,6 +4,12 @@
  */
 package com.unrealtrainmod.client.track;
 
+import com.unrealtrainmod.client.compat.iris.IrisCompat;
+import com.unrealtrainmod.registry.ModDataComponents;
+import com.unrealtrainmod.track.assembly.TrackAssemblyInstance;
+import com.unrealtrainmod.track.assembly.TrackAssemblyDefinition;
+import com.unrealtrainmod.track.AssemblyPlacementGeometry;
+import com.unrealtrainmod.track.model.NativeTurnoutCatalog;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.ByteBufferBuilder;
 import com.mojang.blaze3d.vertex.PoseStack;
@@ -25,9 +31,41 @@ import net.neoforged.neoforge.client.event.RenderLevelStageEvent;
 
 /** Immediate preview, including the exact union footprint of both internal paths. */
 public final class TurnoutConstructionRenderer {
+    private static final NativeTurnoutPreview MODEL = new NativeTurnoutPreview(false);
+    private static TrackAssemblyDefinition.Geometry modelGeometry;
+    private static TrackAssemblyInstance modelAssembly;
     private TurnoutConstructionRenderer() {}
+
+    public static void clearModel() {
+        MODEL.clear(); modelGeometry = null; modelAssembly = null;
+    }
+
+    public static void renderShadow(RenderLevelStageEvent event) { renderModel(event, true); }
+
+    private static void renderModel(RenderLevelStageEvent event, boolean shadow) {
+        var state = ClientTurnoutConstruction.INSTANCE;
+        var player = Minecraft.getInstance().player;
+        if (!state.isActive() || player == null || !NativeTurnoutCatalog.contains(
+                player.getMainHandItem().get(ModDataComponents.SELECTED_RAIL_MODEL.get()))
+                || state.geometry() == null || state.draft().points().size() != state.draft().kind().pointCount()
+                || state.previewFeedback() == Feedback.INVALID_GEOMETRY) {
+            if (!shadow) clearModel();
+            return;
+        }
+        if (modelGeometry != state.geometry()) {
+            if (shadow) return;
+            modelAssembly = NativeTurnoutPreview.assembly(
+                    AssemblyPlacementGeometry.definition(state.draft().kind()),
+                    state.geometry(), state.draft().points().getFirst().position(), state.draft().gauge());
+            modelGeometry = state.geometry();
+        }
+        MODEL.prepare(modelAssembly);
+        MODEL.drawWorld(event);
+    }
     public static void render(RenderLevelStageEvent event) {
-        if (event.getStage() != RenderLevelStageEvent.Stage.AFTER_SOLID_BLOCKS) return;
+        if (event.getStage() != RenderLevelStageEvent.Stage.AFTER_SOLID_BLOCKS
+                || IrisCompat.shadowPass()) return;
+        renderModel(event, false);
         var state = ClientTurnoutConstruction.INSTANCE;
         var draft = state.draft(); var geometry = state.geometry();
         if (!state.isActive()) return;

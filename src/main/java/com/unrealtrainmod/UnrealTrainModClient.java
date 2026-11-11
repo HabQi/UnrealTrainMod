@@ -107,6 +107,7 @@ public class UnrealTrainModClient {
         com.unrealtrainmod.client.compat.iris.IrisPbrBridge.initialize();
         event.registerReloadListener(ClientModelManager.INSTANCE);
         event.registerReloadListener(ClientRailModelManager.INSTANCE);
+        event.registerReloadListener(com.unrealtrainmod.client.track.NativeTurnoutModels.INSTANCE);
         event.registerReloadListener(ClientButtonTextureManager.INSTANCE);
         event.registerReloadListener(com.unrealtrainmod.client.wiring.WiringModelManager.INSTANCE);
         event.registerReloadListener(ClientThumbnailManager.INSTANCE);

@@ -181,6 +181,7 @@ public final class IrisCompat {
                     new Matrix4f((Matrix4f) modelView.invoke()), new Matrix4f((Matrix4f) projection.invoke()),
                     0, minecraft.getTimer(), minecraft.gameRenderer.getMainCamera(), (Frustum) frustum.invoke());
             TrackWorldRenderer.renderShadow(event);
+            com.unrealtrainmod.client.track.TurnoutConstructionRenderer.renderShadow(event);
             com.unrealtrainmod.client.wiring.WiringClient.renderShadow(event);
         } catch (RuntimeException | Error exception) {
             throw exception;

@@ -4,6 +4,10 @@
  */
 package com.unrealtrainmod.client;
 
+import com.unrealtrainmod.client.track.RailSelection;
+import com.unrealtrainmod.client.track.NativeTurnoutModels;
+import com.unrealtrainmod.client.track.NativeTurnoutPreview;
+import com.unrealtrainmod.track.model.NativeTurnoutCatalog;
 import com.mojang.blaze3d.platform.NativeImage;
 import com.mojang.blaze3d.platform.GlStateManager;
 import com.mojang.blaze3d.systems.RenderSystem;
@@ -27,6 +31,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.Comparator;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -56,7 +61,7 @@ public final class ClientThumbnailManager extends SimplePreparableReloadListener
     private static final float VEHICLE_GUI_PIXELS_PER_BLOCK = 8;
     private static final float RAIL_GUI_PIXELS_PER_BLOCK = 27.6f;
     // Bump when framing, lighting, import appearance or alpha processing changes.
-    private static final String RECIPE = "9:" + PreviewRenderer.THUMBNAIL_WIDTH + "x" + PreviewRenderer.THUMBNAIL_HEIGHT
+    private static final String RECIPE = "10:" + PreviewRenderer.THUMBNAIL_WIDTH + "x" + PreviewRenderer.THUMBNAIL_HEIGHT
             + ":capture-ppb=" + PreviewRenderer.THUMBNAIL_PIXELS_PER_BLOCK
             + ":vehicle-gui-ppb=" + VEHICLE_GUI_PIXELS_PER_BLOCK + ":rail-gui-ppb=" + RAIL_GUI_PIXELS_PER_BLOCK
             + ":distance=" + PreviewRenderer.THUMBNAIL_DISTANCE
@@ -72,6 +77,7 @@ public final class ClientThumbnailManager extends SimplePreparableReloadListener
     private final Set<Key> failed = new HashSet<>();
     private final TrainPreviewRenderer vehicles = new TrainPreviewRenderer();
     private final RailPreviewRenderer rails = new RailPreviewRenderer();
+    private final NativeTurnoutPreview nativeTurnouts = new NativeTurnoutPreview(true);
     private final Object diskLock = new Object();
     private final ExecutorService disk = Executors.newSingleThreadExecutor(task -> {
         var thread = new Thread(task, "UTM thumbnail cache");
@@ -94,6 +100,10 @@ public final class ClientThumbnailManager extends SimplePreparableReloadListener
                 ? button : request(new Key(Kind.VEHICLE, definition.id()));
     }
 
+    public ListEntryImage railSelectionImage(RailSelection selection) {
+        return selection.rail() == null ? request(new Key(Kind.RAIL, selection.id())) : railImage(selection.rail());
+    }
+
     public ListEntryImage railImage(RailDefinition definition) {
         return definition.source().format() == RailDefinition.Format.IR_OBJ
                 ? request(new Key(Kind.RAIL, definition.id()))
@@ -113,6 +123,7 @@ public final class ClientThumbnailManager extends SimplePreparableReloadListener
 
     private static boolean available(Key key) {
         if (key.kind() == Kind.VEHICLE) return ClientModelManager.INSTANCE.model(key.id()) != null;
+        if (NativeTurnoutCatalog.contains(key.id())) return true;
         var model = ClientRailModelManager.INSTANCE.model(key.id());
         return model != null && model.bounds() != null;
     }
@@ -128,6 +139,7 @@ public final class ClientThumbnailManager extends SimplePreparableReloadListener
         var entry = entries.get(key);
         try {
             var pixels = key.kind() == Kind.VEHICLE ? vehicles.capture(ClientModelManager.INSTANCE.model(key.id()))
+                    : NativeTurnoutCatalog.contains(key.id()) ? nativeTurnouts.capture()
                     : rails.capture(ClientRailModelManager.INSTANCE.model(key.id()));
             if (!ready || generation != current) {
                 pixels.close();
@@ -242,8 +254,17 @@ public final class ClientThumbnailManager extends SimplePreparableReloadListener
         try {
             if (prepared.generation() != generation) return;
             releaseResources();
-            entries = prepared.entries();
-            for (var key : prepared.images().keySet()) {
+            var preparedEntries = new HashMap<>(prepared.entries());
+            var nativeModel = NativeTurnoutModels.INSTANCE.model();
+            String nativeDigest = ResourceIds.hash(RECIPE + ":native-turnout-1:" + (nativeModel == null ? "missing" : nativeModel.fingerprint()));
+            var nativeKey = new Key(Kind.RAIL, NativeTurnoutCatalog.DEFAULT);
+            var nativeEntry = new Entry(ResourceLocation.fromNamespaceAndPath(UnrealTrainMod.MODID, "thumbnail/" + nativeDigest),
+                    directory.resolve(nativeDigest + ".png"));
+            preparedEntries.put(nativeKey, nativeEntry);
+            var nativeImage = read(nativeEntry.file(), sampleScale(Kind.RAIL));
+            if (nativeImage != null) pending.put(nativeKey, nativeImage);
+            entries = Map.copyOf(preparedEntries);
+            for (var key : new ArrayList<>(pending.keySet())) {
                 var pixels = pending.remove(key);
                 try {
                     textures.put(key, upload(key, entries.get(key).texture(), pixels));
@@ -347,7 +368,7 @@ public final class ClientThumbnailManager extends SimplePreparableReloadListener
         failed.clear();
         entries = Map.of();
         try { vehicles.close(); }
-        finally { rails.close(); }
+        finally { try { rails.close(); } finally { nativeTurnouts.close(); } }
     }
 
     public void close() {

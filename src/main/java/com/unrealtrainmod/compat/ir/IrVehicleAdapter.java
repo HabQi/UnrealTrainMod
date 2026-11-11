@@ -107,7 +107,7 @@ final class IrVehicleAdapter {
         double floorY = readFloorY(rawParts, scale, bounds, name);
         var spec = readMotionSpec(json, bounds, scale);
         var source = new ModelSource(model, Map.of(), Map.of("default", MaterialRenderMode.AUTO),
-                false, false, ModelSource.Format.IR_OBJ, scale);
+                false, GsonHelper.getAsBoolean(json, "doCulling", true), ModelSource.Format.IR_OBJ, scale);
         var parts = new ArrayList<VehicleDefinition.Instance>();
         groups.forEach((role, builder) -> {
             double z = switch (role) {

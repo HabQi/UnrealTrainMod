@@ -108,7 +108,6 @@ public final class WiringModelManager extends SimplePreparableReloadListener<Wir
         WiringClient.clearRuntimes();
         WiringRenderCache.clear();
         com.unrealtrainmod.wiring.WiringScriptPolicy.clear();
-        com.unrealtrainmod.client.blueprint.BlueprintClient.clear();
         var manager = Minecraft.getInstance().getTextureManager(); textures.forEach(manager::release);
         textures.clear(); models.clear();
     }

@@ -16,6 +16,8 @@ import java.util.List;
 /** Shared by local editing, authoritative preview validation and the atomic graph commit. */
 public final class TrackPlacementGeometry {
     public static final double MAX_LENGTH = 256;
+    /** Default rail surface height above the construction tool's clicked surface. */
+    public static final double DEFAULT_RAIL_SURFACE_OFFSET = 0.3;
 
     private TrackPlacementGeometry() {}
 

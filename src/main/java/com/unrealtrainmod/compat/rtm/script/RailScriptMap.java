@@ -33,17 +33,13 @@ public final class RailScriptMap {
     }
 
     private final TrackGeometry geometry;
-    private final boolean ownsEnd;
     private final int cachedSplit;
     private final TrackPose[] samples;
 
-    RailScriptMap(TrackGeometry geometry) { this(geometry, true, false); }
+    RailScriptMap(TrackGeometry geometry) { this(geometry, false); }
 
-    RailScriptMap(TrackGeometry geometry, boolean ownsEnd) { this(geometry, ownsEnd, true); }
-
-    private RailScriptMap(TrackGeometry geometry, boolean ownsEnd, boolean animated) {
+    RailScriptMap(TrackGeometry geometry, boolean animated) {
         this.geometry = geometry;
-        this.ownsEnd = ownsEnd;
         cachedSplit = Math.max(1, (int)Math.floor(geometry.getLength() * 2));
         samples = animated ? new TrackPose[cachedSplit + 1] : null;
         if (animated) for (int i = 0; i <= cachedSplit; i++) samples[i] = geometry.sample(geometry.getLength() * i / cachedSplit);
@@ -52,9 +48,6 @@ public final class RailScriptMap {
     public double getLength() { return geometry.getLength(); }
     public Position getStartRP() { return new Position(sample(cachedSplit, 0)); }
     public Position getEndRP() { return new Position(sample(cachedSplit, cachedSplit)); }
-
-    /** Only the D-end rendering view excludes its shared crossover midpoint. */
-    public boolean ownsSample(int split, double index) { return ownsEnd || split == 0 || index < split; }
 
     TrackPose sample(int split, double index) {
         if (split < 0 || !Double.isFinite(index)) throw new IllegalArgumentException("Invalid rail sampling parameters");

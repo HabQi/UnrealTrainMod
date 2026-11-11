@@ -2,19 +2,15 @@
 package com.unrealtrainmod.item;
 
 import com.unrealtrainmod.blueprint.BlueprintDefinition;
-import com.unrealtrainmod.blueprint.BlueprintManager;
 import com.unrealtrainmod.registry.ModDataComponents;
 import java.util.List;
 import net.minecraft.network.chat.Component;
-import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionHand;
-import net.minecraft.world.InteractionResult;
 import net.minecraft.world.InteractionResultHolder;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.TooltipFlag;
-import net.minecraft.world.item.context.UseOnContext;
 import net.minecraft.world.level.Level;
 
 public final class BlueprintItem extends Item {
@@ -22,15 +18,8 @@ public final class BlueprintItem extends Item {
     public static BlueprintDefinition definition(ItemStack stack) {
         return stack.getOrDefault(ModDataComponents.BLUEPRINT.get(), BlueprintDefinition.empty());
     }
-    @Override public InteractionResult useOn(UseOnContext context) {
-        if (context.getHand() != InteractionHand.MAIN_HAND) return InteractionResult.PASS;
-        if (context.getPlayer() instanceof ServerPlayer player) {
-            if (player.isShiftKeyDown()) BlueprintManager.cancel(player); else BlueprintManager.pick(player, context);
-        }
-        return InteractionResult.sidedSuccess(context.getLevel().isClientSide);
-    }
     @Override public InteractionResultHolder<ItemStack> use(Level level, Player player, InteractionHand hand) {
-        if (hand == InteractionHand.MAIN_HAND && player.isShiftKeyDown() && player instanceof ServerPlayer server) BlueprintManager.cancel(server);
+        if (hand != InteractionHand.MAIN_HAND || player.isShiftKeyDown()) return InteractionResultHolder.pass(player.getItemInHand(hand));
         return InteractionResultHolder.sidedSuccess(player.getItemInHand(hand), level.isClientSide);
     }
     @Override public void appendHoverText(ItemStack stack, TooltipContext context, List<Component> lines, TooltipFlag flags) {

@@ -4,9 +4,9 @@
  */
 package com.unrealtrainmod.track.construction;
 
+import com.unrealtrainmod.track.model.NativeTurnoutCatalog;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 import com.unrealtrainmod.track.model.RailCatalog;
 import com.unrealtrainmod.UnrealTrainMod;
 import com.unrealtrainmod.registry.ModDataComponents;
@@ -111,7 +111,7 @@ public final class TrackConstructionManager {
             return;
         }
         var hit = context.getClickLocation();
-        TrackVector target = new TrackVector(hit.x, hit.y + 0.3, hit.z);
+        TrackVector target = new TrackVector(hit.x, hit.y + TrackPlacementGeometry.DEFAULT_RAIL_SURFACE_OFFSET, hit.z);
         double reach = player.blockInteractionRange();
         if (!player.canInteractWithBlock(context.getClickedPos(), 0)
                 || player.getEyePosition().distanceToSqr(hit) > reach * reach
@@ -494,6 +494,9 @@ public final class TrackConstructionManager {
             return;
         }
         var modelId = player.getMainHandItem().get(ModDataComponents.SELECTED_RAIL_MODEL.get());
+        if (NativeTurnoutCatalog.contains(modelId)) {
+            publish(player, session, Feedback.MODEL_UNSUPPORTED); return;
+        }
         if (modelId == null || RailCatalog.find(modelId) == null) {
             publish(player, session, modelId == null ? Feedback.SELECT_MODEL : Feedback.MISSING_MODEL);
             return;

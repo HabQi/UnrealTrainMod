@@ -4,6 +4,7 @@
  */
 package com.unrealtrainmod.track.construction;
 
+import com.unrealtrainmod.track.model.NativeTurnoutCatalog;
 import com.unrealtrainmod.UnrealTrainMod;
 import com.unrealtrainmod.item.TurnoutBuilderItem;
 import com.unrealtrainmod.network.payload.OpenTrackCurvePayload;
@@ -24,7 +25,6 @@ import com.unrealtrainmod.track.assembly.TrackAssemblyInstance;
 import com.unrealtrainmod.track.assembly.SwitchPosition;
 import com.unrealtrainmod.track.block.TrackBlockManager;
 import com.unrealtrainmod.track.geometry.TrackVector;
-import com.unrealtrainmod.track.model.RailCatalog;
 import com.unrealtrainmod.train.TrainManager;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -92,7 +92,8 @@ public final class TurnoutConstructionManager {
         }
         try {
             var graph = TrackBlockManager.get(player.serverLevel()).graph();
-            var selected = TrackConstructionManager.snap(graph, new TrackVector(hit.x, hit.y + 0.3, hit.z));
+            var selected = TrackConstructionManager.snap(graph,
+                    new TrackVector(hit.x, hit.y + TrackPlacementGeometry.DEFAULT_RAIL_SURFACE_OFFSET, hit.z));
             if (!TrackConstructionManager.validPosition(player.serverLevel(), selected.position())
                     || !TrackConstructionManager.canEditPoint(player, selected)) {
                 publish(player, s, Feedback.INVALID_POINT); return;
@@ -283,8 +284,11 @@ public final class TurnoutConstructionManager {
         Feedback feedback = validate(player, s);
         if (feedback != Feedback.READY) { publish(player, s, feedback); return; }
         var model = player.getMainHandItem().get(ModDataComponents.SELECTED_RAIL_MODEL.get());
-        if (model == null || RailCatalog.find(model) == null) {
+        if (model == null || !NativeTurnoutCatalog.known(model)) {
             publish(player, s, model == null ? Feedback.SELECT_MODEL : Feedback.MISSING_MODEL); return;
+        }
+        if (!NativeTurnoutCatalog.supports(model, s.kind)) {
+            publish(player, s, Feedback.MODEL_UNSUPPORTED); return;
         }
         try {
             var graph = TrackBlockManager.get(player.serverLevel()).graph();

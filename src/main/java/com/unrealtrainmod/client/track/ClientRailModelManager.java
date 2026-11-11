@@ -6,7 +6,6 @@ package com.unrealtrainmod.client.track;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 import com.unrealtrainmod.compat.rtm.script.RailScriptRuntime;
 import com.unrealtrainmod.compat.rtm.script.RtmScriptCache;
 import com.unrealtrainmod.resource.PackageAsset;
@@ -77,6 +76,11 @@ public final class ClientRailModelManager extends SimplePreparableReloadListener
 
     SharedRailPart sharedPart(IndexedMesh mesh) {
         return sharedParts.computeIfAbsent(mesh, SharedRailPart::new);
+    }
+
+    void releaseSharedParts() {
+        sharedParts.values().forEach(SharedRailPart::close);
+        sharedParts.clear();
     }
 
     private ClientRailModelManager() {}
@@ -266,8 +270,7 @@ public final class ClientRailModelManager extends SimplePreparableReloadListener
     public void close() {
         com.unrealtrainmod.client.compat.iris.IrisGeometryCache.clear();
         TrackWorldRenderer.resetSlowBuilds();
-        sharedParts.values().forEach(SharedRailPart::close);
-        sharedParts.clear();
+        releaseSharedParts();
         var manager = Minecraft.getInstance().getTextureManager();
         for (ResourceLocation id : textures) manager.release(id);
         textures.clear();

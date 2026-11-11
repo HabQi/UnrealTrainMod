@@ -4,6 +4,8 @@
  */
 package com.unrealtrainmod.compat.rtm.script;
 
+import com.unrealtrainmod.client.track.TrackPartSnapshot;
+
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.unrealtrainmod.track.geometry.TrackGeometry;
 import com.unrealtrainmod.track.geometry.TrackVector;
@@ -31,8 +33,8 @@ final class RailScriptDrawContext extends ScriptMatrixContext {
     private final RailTrackMeshBuilder.Filter filter;
     private final RailMeshAccumulator output;
     private List<Consumer<RailScriptDrawContext>> staticCommands;
-    private List<RailDrawSnapshot.Part> dynamicParts;
-    private RailDrawSnapshot previousDynamic;
+    private List<TrackPartSnapshot.Part> dynamicParts;
+    private TrackPartSnapshot previousDynamic;
 
     RailScriptDrawContext(TrackGeometry geometry, BlockPos start, int chunkX, int chunkZ,
                           double scale, double period, boolean preview, RailTrackMeshBuilder.Filter filter) {
@@ -54,8 +56,8 @@ final class RailScriptDrawContext extends ScriptMatrixContext {
     double modelScale() { return scale; }
 
     void captureStatic(List<Consumer<RailScriptDrawContext>> commands) { staticCommands = commands; }
-    void captureDynamic(RailDrawSnapshot previous) { dynamicParts = new ArrayList<>(); previousDynamic = previous; }
-    RailDrawSnapshot snapshot() { return new RailDrawSnapshot(dynamicParts); }
+    void captureDynamic(TrackPartSnapshot previous) { dynamicParts = new ArrayList<>(); previousDynamic = previous; }
+    TrackPartSnapshot snapshot() { return new TrackPartSnapshot(dynamicParts); }
 
     private void replay(Matrix4f matrix, Runnable command) {
         push();
@@ -127,6 +129,7 @@ final class RailScriptDrawContext extends ScriptMatrixContext {
             record(context -> ((RailScriptDrawContext)context).draw(sources));
             return;
         }
+        // Decide after display-list replay has applied its transforms, before either snapshot records the draw.
         if (staticCommands != null) {
             var matrix = new Matrix4f(pose.last().pose());
             if (!matrix.isFinite()) throw new IllegalArgumentException("Non-finite rail script transform");
@@ -140,7 +143,7 @@ final class RailScriptDrawContext extends ScriptMatrixContext {
                 var previous = previousDynamic != null && index < previousDynamic.parts().size()
                         ? previousDynamic.parts().get(index) : null;
                 dynamicParts.add(previous != null && previous.source() == source && previous.transform().equals(transform)
-                        ? previous : new RailDrawSnapshot.Part(source, transform));
+                        ? previous : new TrackPartSnapshot.Part(source, transform));
             }
             return;
         }
@@ -156,7 +159,6 @@ final class RailScriptDrawContext extends ScriptMatrixContext {
                    List<RailTrackMeshBuilder.Source> sources) {
         double height = anchor.posY - RailScriptMap.HEIGHT_OFFSET;
         for (int index = first; index <= last; index++) {
-            if (!map.ownsSample(split, index)) continue;
             var frame = map.sample(split, index);
             var p = frame.position();
             var t = frame.tangent();

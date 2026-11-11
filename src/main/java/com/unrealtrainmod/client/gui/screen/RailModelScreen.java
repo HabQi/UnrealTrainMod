@@ -4,8 +4,7 @@
  */
 package com.unrealtrainmod.client.gui.screen;
 
-import com.unrealtrainmod.track.model.RailDefinition;
-import com.unrealtrainmod.track.model.RailCatalog;
+import com.unrealtrainmod.client.track.RailSelection;
 import com.unrealtrainmod.UnrealTrainMod;
 import com.unrealtrainmod.client.ClientThumbnailManager;
 import com.unrealtrainmod.client.gui.base.BaseTrainScreen;
@@ -34,8 +33,9 @@ public final class RailModelScreen extends BaseTrainScreen {
     private final ItemStack originalStack;
     private final ResourceKey<Level> dimension;
     private final PreviewCamera camera = new PreviewCamera();
-    private RailDefinition selected;
-    private TrainListWidget<RailDefinition> list;
+    private final java.util.List<RailSelection> models = RailSelection.all();
+    private RailSelection selected;
+    private TrainListWidget<RailSelection> list;
     private EditBox search;
     private RailPreviewWidget preview;
     private TrainIconButton apply;
@@ -50,8 +50,8 @@ public final class RailModelScreen extends BaseTrainScreen {
         this.slot = slot;
         this.dimension = dimension;
         originalStack = stack;
-        selected = RailCatalog.find(RailPlacerItem.selectedModel(stack));
-        if (selected == null && !RailCatalog.all().isEmpty()) selected = RailCatalog.all().getFirst();
+        selected = RailSelection.find(RailPlacerItem.selectedModel(stack));
+        if (selected == null) selected = models.getFirst();
     }
 
     @Override
@@ -59,11 +59,9 @@ public final class RailModelScreen extends BaseTrainScreen {
         int listWidth = Math.min(200, Math.max(90, (panelWidth - 30) * 2 / 5))
                 + TrainListWidget.SCROLLBAR_GUTTER;
         if (search == null) {
-            list = new TrainListWidget<>(minecraft, listWidth, 100, RailCatalog.all(),
-                    model -> model.config().archive(),
-                    model -> Component.literal(model.railName()),
-                    model -> model.tags().isBlank() ? model.id().toString() : model.tags() + " · " + model.id(),
-                    ClientThumbnailManager.INSTANCE::railImage, this::selectModel,
+            list = new TrainListWidget<>(minecraft, listWidth, 100, models,
+                    RailSelection::group, RailSelection::groupName, RailSelection::name,
+                    RailSelection::detail, ClientThumbnailManager.INSTANCE::railSelectionImage, this::selectModel,
                     Component.translatable("gui.unrealtrainmod.rail_models.empty"), false);
             list.select(selected);
             list.filter("");
@@ -99,7 +97,7 @@ public final class RailModelScreen extends BaseTrainScreen {
         updateWidgets();
     }
 
-    private void selectModel(RailDefinition model) {
+    private void selectModel(RailSelection model) {
         selected = model;
         preview.setModel(model.id());
         status = null;
@@ -147,16 +145,16 @@ public final class RailModelScreen extends BaseTrainScreen {
         if (list == null) return;
         int x = preview.getX(), w = preview.getWidth(), y = preview.getBottom() + 6;
         if (selected != null) {
-            graphics.drawString(font, font.plainSubstrByWidth(selected.railName(), w), x, y, GuiTheme.TEXT, false);
+            graphics.drawString(font, font.plainSubstrByWidth(selected.name().getString(), w), x, y, GuiTheme.TEXT, false);
             if (expanded) {
                 y += 14;
-                for (String text : new String[]{selected.packName(), selected.tags(), selected.id().toString()}) {
+                for (String text : new String[]{selected.groupName().getString(), selected.detail(), selected.id().toString()}) {
                     graphics.drawString(font, font.plainSubstrByWidth(text, w), x, y, GuiTheme.MUTED, false);
                     y += 14;
                 }
             }
         }
-        Component message = status == null ? Component.translatable("gui.unrealtrainmod.rail_models.count", RailCatalog.all().size()) : status;
+        Component message = status == null ? Component.translatable("gui.unrealtrainmod.rail_models.count", models.size()) : status;
         graphics.drawString(font, font.plainSubstrByWidth(message.getString(), panelWidth - 20),
                 left + 10, top + panelHeight - 46, GuiTheme.MUTED, false);
     }

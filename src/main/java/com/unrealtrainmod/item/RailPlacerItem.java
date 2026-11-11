@@ -4,6 +4,7 @@
  */
 package com.unrealtrainmod.item;
 
+import com.unrealtrainmod.track.model.NativeTurnoutCatalog;
 import com.unrealtrainmod.track.model.RailCatalog;
 import com.unrealtrainmod.registry.ModDataComponents;
 import com.unrealtrainmod.track.construction.TrackConstructionManager;
@@ -52,7 +53,9 @@ public final class RailPlacerItem extends Item {
         var definition = RailCatalog.find(id);
         lines.add(Component.translatable("item.unrealtrainmod.rail_placer.selected", id == null
                 ? Component.translatable("item.unrealtrainmod.rail_placer.none")
-                : Component.literal(definition == null ? id.toString() : definition.railName())).withStyle(ChatFormatting.AQUA));
+                : NativeTurnoutCatalog.contains(id)
+                    ? Component.translatable("gui.unrealtrainmod.native_turnout.default")
+                    : Component.literal(definition == null ? id.toString() : definition.railName())).withStyle(ChatFormatting.AQUA));
         for (String key : List.of("select", "place", "cancel", "permission")) {
             lines.add(Component.translatable("item.unrealtrainmod.rail_placer." + key).withStyle(ChatFormatting.GRAY));
         }

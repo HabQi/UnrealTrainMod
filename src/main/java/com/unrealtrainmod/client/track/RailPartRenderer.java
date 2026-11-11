@@ -4,6 +4,7 @@
  */
 package com.unrealtrainmod.client.track;
 
+import java.util.Set;
 import com.mojang.blaze3d.vertex.BufferBuilder;
 import com.mojang.blaze3d.vertex.ByteBufferBuilder;
 import com.mojang.blaze3d.vertex.DefaultVertexFormat;
@@ -16,7 +17,6 @@ import com.unrealtrainmod.client.compat.iris.IrisVertices;
 import com.unrealtrainmod.client.compat.iris.IrisGeometryCache;
 import com.unrealtrainmod.client.compat.iris.IrisRenderStats;
 import com.unrealtrainmod.client.StaticModelShader;
-import com.unrealtrainmod.compat.rtm.script.RailDrawSnapshot;
 import java.util.BitSet;
 import com.unrealtrainmod.client.renderer.instancing.InstanceBuffer;
 import com.unrealtrainmod.client.renderer.instancing.InstancedModelShader;
@@ -40,7 +40,7 @@ final class RailPartRenderer implements AutoCloseable {
     /** View-independent preparation; camera matrices, visibility and light remain draw-time inputs. */
     private static final class IrisPart {
         private final PoseStack.Pose pose = new PoseStack().last();
-        private RailDrawSnapshot.Part part;
+        private TrackPartSnapshot.Part part;
         private AABB bounds;
         private long chunk;
         private boolean supported;
@@ -50,7 +50,7 @@ final class RailPartRenderer implements AutoCloseable {
     private final InstanceBuffer fixedInstances = new InstanceBuffer();
     private final InstanceBuffer movingInstances = new InstanceBuffer();
     private List<Draw> uploadedFixed = List.of(), uploadedMoving = List.of();
-    private RailDrawSnapshot classifiedSnapshot;
+    private TrackPartSnapshot classifiedSnapshot;
     private final BitSet movingParts = new BitSet();
     private ByteBufferBuilder fallback;
     private VertexBuffer irisFallback;
@@ -59,7 +59,7 @@ final class RailPartRenderer implements AutoCloseable {
     private final double meshOriginY;
     private final List<IrisPart> irisParts = new ArrayList<>();
     private final Matrix4f irisLocal = new Matrix4f();
-    private RailDrawSnapshot irisSnapshot, irisPrevious;
+    private TrackPartSnapshot irisSnapshot, irisPrevious;
     private float irisFraction = Float.NaN;
     private int irisPartCount;
 
@@ -70,7 +70,7 @@ final class RailPartRenderer implements AutoCloseable {
     }
 
     /** Warm shared native sources before replacing the complete parent appearance. */
-    int prepareSources(RailDrawSnapshot snapshot, int uploads, TrackRenderStats stats) {
+    int prepareSources(TrackPartSnapshot snapshot, int uploads, TrackRenderStats stats) {
         if (StaticModelShader.state() == null) return uploads;
         for (var part : snapshot.parts()) {
             if (uploads == 0) break;
@@ -81,7 +81,7 @@ final class RailPartRenderer implements AutoCloseable {
         return uploads;
     }
 
-    boolean sourcesReady(RailDrawSnapshot snapshot) {
+    boolean sourcesReady(TrackPartSnapshot snapshot) {
         if (StaticModelShader.state() == null) return true;
         for (var part : snapshot.parts()) {
             if (part.source().mesh().indices().length != 0
@@ -90,9 +90,8 @@ final class RailPartRenderer implements AutoCloseable {
         return true;
     }
 
-    int draw(TrackRenderState state, ClientTrackCache.TurnoutEntry entry, RenderLevelStageEvent event,
-             ClientLevel level, double time, int uploads, TrackRenderStats stats) {
-        var snapshot = entry.currentSnapshot;
+    int draw(TrackRenderState state, TrackPartSnapshot snapshot, TrackPartSnapshot before, float fraction,
+             Set<Long> chunks, RenderLevelStageEvent event, ClientLevel level, int uploads, TrackRenderStats stats) {
         if (snapshot == null) return uploads;
         long groupStart = stats == null ? 0 : System.nanoTime();
         long lightStart = stats == null ? 0 : System.nanoTime();
@@ -102,8 +101,7 @@ final class RailPartRenderer implements AutoCloseable {
             stats.lightRefresh(elapsed, lighting.checkedSamples(), lighting.changedSamples());
             groupStart += elapsed;
         }
-        float fraction = entry.snapshotFraction(time);
-        var previous = snapshot.matches(entry.previousSnapshot) ? entry.previousSnapshot : null;
+        var previous = snapshot.matches(before) ? before : null;
         if (!snapshot.matches(classifiedSnapshot)) movingParts.clear();
         classifiedSnapshot = snapshot;
         var camera = event.getCamera().getPosition();
@@ -117,7 +115,7 @@ final class RailPartRenderer implements AutoCloseable {
             snapshot.interpolate(previous, i, fraction, local);
             long chunk = ChunkPos.asLong((int)Math.floor((anchor.x() + local.m30()) / 16),
                     (int)Math.floor((anchor.z() + local.m32()) / 16));
-            if (!entry.chunks.contains(chunk) || !level.hasChunk(ChunkPos.getX(chunk), ChunkPos.getZ(chunk))) continue;
+            if (!chunks.contains(chunk) || !level.hasChunk(ChunkPos.getX(chunk), ChunkPos.getZ(chunk))) continue;
             var source = part.source();
             if (source.mesh().indices().length == 0) continue;
             var shared = ClientRailModelManager.INSTANCE.sharedPart(source.mesh());
@@ -134,7 +132,7 @@ final class RailPartRenderer implements AutoCloseable {
             local.normal(stack.last().normal());
             int light = lighting.sample(level, local.m30(), local.m31(), local.m32(), 0, 1, 0);
             if (previous != null && !part.transform().equals(previous.parts().get(i).transform())) movingParts.set(i);
-            boolean moving = movingParts.get(i);
+            boolean moving = part.moving() || movingParts.get(i);
             draws.add(new Draw(new Key(shared, source.texture(), source.doubleSided(), chunk, moving), stack.last().copy(), light));
             stack.popPose();
         }
@@ -178,13 +176,11 @@ final class RailPartRenderer implements AutoCloseable {
         return uploads;
     }
 
-    int drawIris(ClientTrackCache.TurnoutEntry entry, RenderLevelStageEvent event, ClientLevel level,
-                 double time, TrackDrawQueue queue, int uploads, TrackRenderStats stats) {
-        var snapshot = entry.currentSnapshot;
+    int drawIris(TrackPartSnapshot snapshot, TrackPartSnapshot before, float fraction, Set<Long> chunks,
+                 RenderLevelStageEvent event, ClientLevel level, TrackDrawQueue queue, int uploads, TrackRenderStats stats) {
         if (snapshot == null) return uploads;
         lighting.refresh(level);
-        var previous = snapshot.matches(entry.previousSnapshot) ? entry.previousSnapshot : null;
-        float fraction = entry.snapshotFraction(time);
+        var previous = snapshot.matches(before) ? before : null;
         prepareIris(snapshot, previous, fraction);
         var camera = event.getCamera().getPosition();
         var modelView = new Matrix4f(event.getModelViewMatrix()).translate((float)(anchor.x() - camera.x),
@@ -195,7 +191,7 @@ final class RailPartRenderer implements AutoCloseable {
         for (int i = 0; i < irisPartCount; i++) {
             var prepared = irisParts.get(i);
             long chunk = prepared.chunk;
-            if (!entry.chunks.contains(chunk) || !level.hasChunk(ChunkPos.getX(chunk), ChunkPos.getZ(chunk))) continue;
+            if (!chunks.contains(chunk) || !level.hasChunk(ChunkPos.getX(chunk), ChunkPos.getZ(chunk))) continue;
             var source = prepared.part.source();
             if (source.mesh().indices().length == 0) continue;
             if (!event.getFrustum().isVisible(prepared.bounds)) continue;
@@ -235,7 +231,7 @@ final class RailPartRenderer implements AutoCloseable {
         return uploads;
     }
 
-    private void prepareIris(RailDrawSnapshot snapshot, RailDrawSnapshot previous, float fraction) {
+    private void prepareIris(TrackPartSnapshot snapshot, TrackPartSnapshot previous, float fraction) {
         if (irisSnapshot == snapshot && irisPrevious == previous && irisFraction == fraction) return;
         int count = snapshot.parts().size();
         for (int i = 0; i < count; i++) {

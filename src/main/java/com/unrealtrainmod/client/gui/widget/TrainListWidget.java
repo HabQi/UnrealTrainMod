@@ -35,7 +35,8 @@ public final class TrainListWidget<T> extends ObjectSelectionList<TrainListWidge
             UnrealTrainMod.MODID, "textures/gui/button_none.png");
 
     private final List<T> items;
-    private final Function<T, Path> archive;
+    private final Function<T, String> group;
+    private final Function<T, Component> groupLabel;
     private final Function<T, Component> label;
     private final Function<T, String> detail;
     private final Function<T, ListEntryImage> image;
@@ -48,17 +49,27 @@ public final class TrainListWidget<T> extends ObjectSelectionList<TrainListWidge
                            Function<T, Path> archive, Function<T, Component> label,
                            Function<T, String> detail, Function<T, ListEntryImage> image,
                            Consumer<T> onSelect, Component emptyMessage, boolean vehicleEntries) {
+        this(minecraft, width, height, items, item -> archive.apply(item).toString(),
+                item -> Component.literal(archive.apply(item).getFileName().toString()),
+                label, detail, image, onSelect, emptyMessage, vehicleEntries);
+    }
+
+    public TrainListWidget(Minecraft minecraft, int width, int height, List<T> items,
+                           Function<T, String> groupKey, Function<T, Component> groupLabel, Function<T, Component> label,
+                           Function<T, String> detail, Function<T, ListEntryImage> image, Consumer<T> onSelect,
+                           Component emptyMessage, boolean vehicleEntries) {
         super(minecraft, width, height, 0, 40);
         this.emptyMessage = emptyMessage;
-        var groups = new LinkedHashMap<Path, List<T>>();
-        for (var item : items) groups.computeIfAbsent(archive.apply(item), key -> new ArrayList<>()).add(item);
+        var groups = new LinkedHashMap<String, List<T>>();
+        for (var item : items) groups.computeIfAbsent(groupKey.apply(item), key -> new ArrayList<>()).add(item);
         var ordered = new ArrayList<T>(items.size());
         for (var group : groups.values()) {
             group.sort((first, second) -> compareNames(label.apply(first).getString(), label.apply(second).getString()));
             ordered.addAll(group);
         }
         this.items = List.copyOf(ordered);
-        this.archive = archive;
+        this.group = groupKey;
+        this.groupLabel = groupLabel;
         this.label = label;
         this.detail = detail;
         this.image = image;
@@ -100,16 +111,16 @@ public final class TrainListWidget<T> extends ObjectSelectionList<TrainListWidge
     public void filter(String query) {
         String filter = query.strip().toLowerCase(Locale.ROOT);
         clearEntries();
-        var groups = new LinkedHashMap<Path, List<T>>();
+        var groups = new LinkedHashMap<String, List<T>>();
         for (var item : items) {
-            Path pack = archive.apply(item);
-            String search = label.apply(item).getString() + " " + pack.getFileName() + " " + detail.apply(item);
+            String pack = group.apply(item);
+            String search = label.apply(item).getString() + " " + groupLabel.apply(item).getString() + " " + detail.apply(item);
             if (search.toLowerCase(Locale.ROOT).contains(filter)) {
                 groups.computeIfAbsent(pack, key -> new ArrayList<>()).add(item);
             }
         }
         for (var group : groups.entrySet()) {
-            addEntry(new Row<>(this, null, Component.literal(group.getKey().getFileName().toString())));
+            addEntry(new Row<>(this, null, groupLabel.apply(group.getValue().getFirst())));
             for (var item : group.getValue()) {
                 var row = new Row<>(this, item, null);
                 addEntry(row);

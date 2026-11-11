@@ -4,6 +4,8 @@
  */
 package com.unrealtrainmod.compat.rtm.script;
 
+import com.unrealtrainmod.client.track.TrackPartSnapshot;
+
 import com.unrealtrainmod.resource.PackageAsset;
 import com.unrealtrainmod.client.ClientConfig;
 import java.util.ArrayList;
@@ -92,7 +94,7 @@ public final class RailScriptRuntime implements AutoCloseable {
 
     /** Shares compiled code, never the tile, global variables, lists or failure state. */
     public RailScriptRuntime newTurnout(RailTurnoutView view, float movement) throws IOException {
-        return create(program, railName, label + " [turnout " + view.owner() + "/" + view.end() + "]", sources, view, movement);
+        return create(program, railName, label + " [turnout " + view.owner() + "/" + view.control() + "]", sources, view, movement);
     }
 
     private static RailScriptRuntime create(RtmScriptProgram program, String railName, String label,
@@ -144,9 +146,9 @@ public final class RailScriptRuntime implements AutoCloseable {
                 scale, period, commands);
     }
 
-    private RailDrawSnapshot lastDynamic;
+    private TrackPartSnapshot lastDynamic;
 
-    public RailDrawSnapshot captureAssemblyDynamic(float movement, double scale, double period) {
+    public TrackPartSnapshot captureAssemblyDynamic(float movement, double scale, double period) {
         if (!captureAssembly(movement, scale, period, null)) return null;
         return lastDynamic;
     }

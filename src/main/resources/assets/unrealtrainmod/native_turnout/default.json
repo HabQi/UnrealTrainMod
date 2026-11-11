@@ -1,0 +1,62 @@
+{
+  "parts": {
+    "sleeper": {
+      "model": "unrealtrainmod:models/native_turnout/default_parts.obj",
+      "objects": [
+        "sleeper"
+      ],
+      "offset": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ]
+    },
+    "switch_machine": {
+      "model": "unrealtrainmod:models/native_turnout/default_parts.obj",
+      "objects": [
+        "switch_machine"
+      ],
+      "offset": [
+        1.6,
+        -0.15,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ]
+    },
+    "throw_rod": {
+      "model": "unrealtrainmod:models/native_turnout/default_parts.obj",
+      "objects": [
+        "throw_rod"
+      ],
+      "offset": [
+        0,
+        -0.18,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "normalTranslation": [
+        -0.08,
+        0,
+        0
+      ],
+      "reverseTranslation": [
+        0.08,
+        0,
+        0
+      ]
+    }
+  }
+}

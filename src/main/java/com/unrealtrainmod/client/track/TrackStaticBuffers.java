@@ -254,9 +254,10 @@ final class TrackStaticBuffers implements AutoCloseable {
     TrackStaticBuffers(boolean fullBright) { this.fullBright = fullBright; }
 
     void beginView() {
-        if (iris != IrisCompat.active()) {
+        boolean backend = !fullBright && IrisCompat.active();
+        if (iris != backend) {
             close();
-            iris = IrisCompat.active();
+            iris = backend;
         }
         view++;
         requestedBuilds = false;

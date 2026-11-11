@@ -8,8 +8,10 @@ import com.unrealtrainmod.blueprint.BlueprintPlacementPlan;
 import com.unrealtrainmod.client.renderer.preview.PreviewCamera;
 import com.unrealtrainmod.client.renderer.preview.PreviewRenderer;
 import com.unrealtrainmod.model.ModelBounds;
+import com.unrealtrainmod.track.TrackPlacementGeometry;
 import com.unrealtrainmod.track.geometry.TrackPose;
 import com.unrealtrainmod.track.geometry.TrackVector;
+import com.unrealtrainmod.track.mesh.TrackMeshBuilder;
 import com.unrealtrainmod.wiring.ConnectorData;
 import com.unrealtrainmod.wiring.WireData;
 import java.nio.charset.StandardCharsets;
@@ -51,6 +53,9 @@ final class BlueprintCanvas extends AbstractWidget implements AutoCloseable {
         centerY = 4; pixels = Math.max(8, Math.min(28, width / Math.max(16, editor.draft.tracks().size() * 6d))); camera.reset();
     }
     private UUID id(String value) { return UUID.nameUUIDFromBytes((identity + ":" + value).getBytes(StandardCharsets.UTF_8)); }
+    static double trackY(BlueprintDefinition.Reference ref) {
+        return ref.y() + TrackPlacementGeometry.DEFAULT_RAIL_SURFACE_OFFSET;
+    }
     void rebuild() {
         scene.close(); picks.clear(); diagnostic = Component.empty();
         var definition = editor.draft; var ns = new ArrayList<ConnectorData>(); var ws = new ArrayList<WireData>();
@@ -58,7 +63,7 @@ final class BlueprintCanvas extends AbstractWidget implements AutoCloseable {
         var paths = new ArrayList<BlueprintPaths.Path>();
         for (var ref : definition.tracks()) paths.add(new BlueprintPaths.Path() {
             public double length() { return 32; }
-            public TrackPose sample(double s) { return new TrackPose(new TrackVector(ref.x(), ref.y(), s), new TrackVector(0, 0, 1),
+            public TrackPose sample(double s) { return new TrackPose(new TrackVector(ref.x(), trackY(ref), s), new TrackVector(0, 0, 1),
                     new TrackVector(1, 0, 0), new TrackVector(0, 1, 0), 0, ref.gauge()); }
         });
         try {
@@ -76,7 +81,7 @@ final class BlueprintCanvas extends AbstractWidget implements AutoCloseable {
             for (int station = 0; station < (both ? 2 : 1); station++) {
                 var section = definition.section(editor.variant + station); var map = new HashMap<UUID, ConnectorData>();
                 for (var n : section.nodes()) {
-                    var ref = definition.tracks().get(n.track()); var position = n.position().add(ref.x(), ref.y(), station * 32);
+                    var ref = definition.tracks().get(n.track()); var position = n.position().add(ref.x(), trackY(ref), station * 32);
                     var node = new ConnectorData(id(station + ":" + n.id()), n.model(), position, n.face(), Vec3.ZERO, n.angles(), 0);
                     ns.add(node); map.put(n.id(), node); picks.add(new Pick(n.id(), station > 0, node));
                 }
@@ -91,8 +96,8 @@ final class BlueprintCanvas extends AbstractWidget implements AutoCloseable {
         scene.set(ns, ws);
         double minX = -2, maxX = 2, minY = -1, maxY = 8, minZ = -2, maxZ = both ? 34 : 2;
         var boxes = new ArrayList<net.minecraft.world.phys.AABB>(); ns.forEach(n -> boxes.add(n.bounds()));
-        for (var ref : definition.tracks()) boxes.add(new net.minecraft.world.phys.AABB(ref.x() - ref.gauge(), ref.y() - .3, -1,
-                ref.x() + ref.gauge(), ref.y(), both ? 33 : 1));
+        for (var ref : definition.tracks()) boxes.add(new net.minecraft.world.phys.AABB(ref.x() - ref.gauge(), trackY(ref) - TrackMeshBuilder.RAIL_HEIGHT, -1,
+                ref.x() + ref.gauge(), trackY(ref), both ? 33 : 1));
         for (var wire : ws) boxes.add(wire.bounds(scene.nodes.get(wire.first()), scene.nodes.get(wire.second())));
         for (var b : boxes) {
             minX = Math.min(minX, b.minX); maxX = Math.max(maxX, b.maxX); minY = Math.min(minY, b.minY); maxY = Math.max(maxY, b.maxY);
@@ -117,7 +122,9 @@ final class BlueprintCanvas extends AbstractWidget implements AutoCloseable {
                     var lines = buffers.getBuffer(RenderType.lines());
                     for (int side : new int[]{-1, 1}) {
                         double x = ref.x() + side * ref.gauge() / 2;
-                        LevelRenderer.renderLineBox(pose, lines, x - .035, ref.y() - .12, -1, x + .035, ref.y(), 33, .5f, .65f, .8f, 1);
+                        double halfWidth = TrackMeshBuilder.RAIL_WIDTH / 2, y = trackY(ref);
+                        LevelRenderer.renderLineBox(pose, lines, x - halfWidth, y - TrackMeshBuilder.RAIL_HEIGHT, -1,
+                                x + halfWidth, y, 33, .5f, .65f, .8f, 1);
                     }
                 }
                 buffers.endBatch();
@@ -133,11 +140,12 @@ final class BlueprintCanvas extends AbstractWidget implements AutoCloseable {
             for (int x = fromX; x <= toX; x++) { int px = (int)screenX(x); g.vLine(px, getY(), getBottom(), x == 0 ? 0xAA6C879B : 0x443D5369); }
             for (int y = fromY; y <= toY; y++) { int py = (int)screenY(y); g.hLine(getX(), getRight(), py, y == 0 ? 0xAA6C879B : 0x443D5369); }
             for (int i = 0; i < editor.draft.tracks().size(); i++) {
-                var ref = editor.draft.tracks().get(i); int x = (int)screenX(ref.x()), y = (int)screenY(ref.y());
+                var ref = editor.draft.tracks().get(i); int x = (int)screenX(ref.x()), y = (int)screenY(trackY(ref));
                 int half = (int)(ref.gauge() * pixels / 2);
-                g.fill(x - half - 3, y - 2, x - half + 3, y + 4, 0xFFC5D0DA); g.fill(x + half - 3, y - 2, x + half + 3, y + 4, 0xFFC5D0DA);
-                g.hLine(x - half - 6, x + half + 6, y + 5, 0xFF889DB0);
-                g.drawString(font, "#" + (i + 1) + " G=" + ref.gauge(), x - half, y + 8, i == editor.track ? 0xFFFFDD88 : 0xFF99BBDD);
+                int railHeight = Math.max(2, (int)Math.ceil(TrackMeshBuilder.RAIL_HEIGHT * pixels));
+                g.fill(x - half - 3, y, x - half + 3, y + railHeight, 0xFFC5D0DA); g.fill(x + half - 3, y, x + half + 3, y + railHeight, 0xFFC5D0DA);
+                g.hLine(x - half - 6, x + half + 6, y + railHeight + 1, 0xFF889DB0);
+                g.drawString(font, "#" + (i + 1) + " G=" + ref.gauge(), x - half, y + railHeight + 4, i == editor.track ? 0xFFFFDD88 : 0xFF99BBDD);
             }
             for (var pick : picks) {
                 var point = pick.node.wirePoint(); int x = (int)screenX(point.x), y = (int)screenY(point.y);
@@ -151,7 +159,9 @@ final class BlueprintCanvas extends AbstractWidget implements AutoCloseable {
                 }
             }
         }
-        g.drawString(font, Component.translatable(editor.cross ? "blueprint.cross_hint" : "blueprint.grid_hint"), getX() + 5, getY() + 5, 0xFF99CCDD);
+        var hint = editor.cross ? Component.translatable("blueprint.cross_hint")
+                : Component.translatable("blueprint.grid_hint", TrackPlacementGeometry.DEFAULT_RAIL_SURFACE_OFFSET);
+        g.drawWordWrap(font, hint, getX() + 5, getY() + 5, width - 10, 0xFF99CCDD);
         if (!diagnostic.getString().isEmpty()) g.drawString(font, font.plainSubstrByWidth(diagnostic.getString(), width - 10), getX() + 5, getBottom() - 14, 0xFFFFBB66);
         g.disableScissor();
         g.renderOutline(getX(), getY(), width, height, 0xFF527089);

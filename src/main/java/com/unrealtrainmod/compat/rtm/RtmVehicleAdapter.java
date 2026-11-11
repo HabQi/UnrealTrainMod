@@ -71,7 +71,7 @@ final class RtmVehicleAdapter {
                 return;
             }
             boolean smoothing = GsonHelper.getAsBoolean(json, "smoothing", false);
-            boolean cullFaces = GsonHelper.getAsBoolean(json, "doCulling", false);
+            boolean cullFaces = GsonHelper.getAsBoolean(json, "doCulling", true);
             var actions = readActions(json, name);
             var parts = new ArrayList<VehicleDefinition.Instance>();
             parts.add(readPart(readSource(json.getAsJsonObject("trainModel2"), archive,

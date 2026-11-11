@@ -118,8 +118,9 @@ public final class ClientTurnoutConstruction implements ResourceManagerReloadLis
     public void onUnload(LevelEvent.Unload event) { if (event.getLevel() == world) clear(); }
     public void onLogout(ClientPlayerNetworkEvent.LoggingOut event) { clear(); }
     public void onClone(ClientPlayerNetworkEvent.Clone event) { clear(); }
-    @Override public void onResourceManagerReload(ResourceManager manager) { restorePreview(); }
+    @Override public void onResourceManagerReload(ResourceManager manager) { TurnoutConstructionRenderer.clearModel(); restorePreview(); }
     public void clear() {
+        TurnoutConstructionRenderer.clearModel();
         world = null; draft = null; geometry = null; volume = Map.of(); feedback = null;
         previewCurves = List.of();
     }
