@@ -51,7 +51,7 @@ public final class RailModelScreen extends BaseTrainScreen {
         this.dimension = dimension;
         originalStack = stack;
         selected = RailSelection.find(RailPlacerItem.selectedModel(stack));
-        if (selected == null) selected = models.getFirst();
+        if (selected == null && !models.isEmpty()) selected = models.getFirst();
     }
 
     @Override

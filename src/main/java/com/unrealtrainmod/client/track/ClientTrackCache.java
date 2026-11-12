@@ -4,7 +4,7 @@
  */
 package com.unrealtrainmod.client.track;
 
-import com.unrealtrainmod.track.model.NativeTurnoutCatalog;
+import com.unrealtrainmod.track.assembly.TrackAssemblyType;
 import com.unrealtrainmod.network.TrackSyncEvent;
 import com.unrealtrainmod.network.payload.TrackChunkPayload;
 import com.unrealtrainmod.network.payload.TrackChunkUnloadPayload;
@@ -149,9 +149,8 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
             if (entry.script != null) {
                 var mesh = entry.script.meshes.remove(chunk);
                 if (mesh != null) mesh.close();
-                if (entry.script.parts != null) entry.script.parts.invalidateInstances();
+                if (entry.script.parts != null) entry.script.parts.removeChunk(chunk);
             }
-            if (entry.nativeRender != null) entry.nativeRender.removeChunk(chunk);
 
             if (entry.chunks.isEmpty()) { entry.close(); iterator.remove(); }
         }
@@ -215,7 +214,6 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
                 entry.script.meshes.values().forEach(TrackRenderMesh::close);
                 if (entry.script.parts != null) entry.script.parts.invalidateInstances();
             }
-            if (entry.nativeRender != null) entry.nativeRender.invalidateGpu();
         }
         TrackStaticBuffers.WORLD.close();
         ClientRailModelManager.INSTANCE.releaseSharedParts();
@@ -245,7 +243,7 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
         }
         for (var entry : assemblies.values()) {
             // Ordinary turnout scripts own globals independently of normal rail filtering.
-            if (!NativeTurnoutCatalog.usesNative(entry.data) && entry.script == null
+            if (entry.rendersModel() && entry.script == null
                     && scriptFailures.contains(ClientRailModelManager.INSTANCE.model(entry.data.modelId()))) entry.close();
         }
         scriptFailures.clear();
@@ -286,7 +284,6 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
         final Map<Long, List<TrackRenderMesh>> tongues = new HashMap<>();
         final Map<String, TurnoutAnimation> animations = new LinkedHashMap<>();
         final TurnoutEntry script;
-        NativeTurnoutRenderState nativeRender;
         boolean scriptFailed, scriptActive, missingReported;
         long scriptPrepareFrame = -1;
 
@@ -294,7 +291,7 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
             this.data = data;
             data.state().controls().forEach((control, position) -> animations.put(control,
                     new TurnoutAnimation(position == SwitchPosition.REVERSE ? 1 : 0)));
-            var view = NativeTurnoutCatalog.usesNative(data) ? null : RailTurnoutView.of(data);
+            var view = rendersModel() ? RailTurnoutView.of(data) : null;
             script = view == null ? null : new TurnoutEntry(this, view);
             var segments = new LinkedHashMap<UUID, TrackGeometry>();
             for (var entry : data.paths().entrySet()) {
@@ -309,11 +306,15 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
             geometries = List.copyOf(segments.values());
         }
 
+        // Retired native styles and RTM complex structures keep their saved data without a model renderer.
+        boolean rendersModel() {
+            String id = data.modelId();
+            return id != null && !id.startsWith("unrealtrainmod:native_turnout/")
+                    && (data.definition().type() == TrackAssemblyType.SIMPLE_TURNOUT
+                        || !id.startsWith("unrealtrainmod:rtm/rail/"));
+        }
+
         AABB broadBounds() {
-            if (NativeTurnoutCatalog.usesNative(data)) {
-                var model = NativeTurnoutModels.INSTANCE.model();
-                return model == null ? data.bounds() : data.bounds().inflate(model.padding());
-            }
             var model = ClientRailModelManager.INSTANCE.model(data.modelId());
             return model == null ? data.bounds() : data.bounds().inflate(model.padding() * model.scaleForGauge(data.gauge()));
         }
@@ -326,15 +327,8 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
             this.data = data;
         }
 
-        Map<String, Float> positions(double time) {
-            var positions = new LinkedHashMap<String, Float>();
-            animations.forEach((control, animation) -> positions.put(control, animation.position(time)));
-            return positions;
-        }
-
         boolean moving(double time) {
-            return (scriptActive || NativeTurnoutCatalog.usesNative(data)
-                    || data.definition() == TrackAssemblyDefinition.CUSTOM)
+            return rendersModel() && (scriptActive || data.definition() == TrackAssemblyDefinition.CUSTOM)
                     && animations.values().stream().anyMatch(animation -> animation.moving(time));
         }
 
@@ -364,7 +358,6 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
         @Override public void close() {
             clearFallback();
             if (script != null) script.close();
-            if (nativeRender != null) { nativeRender.close(); nativeRender = null; }
             scriptFailed = scriptActive = missingReported = false;
             scriptPrepareFrame = -1;
         }

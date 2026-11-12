@@ -124,41 +124,6 @@ public final class TrackMeshBuilder {
         return mesh.finish();
     }
 
-    /** One native layout supplies world, shadow and preview geometry. */
-    public static TrackMeshData buildNative(NativeTurnoutLayout layout, TrackVector origin, int chunkX, int chunkZ,
-                                            String control, double movement, boolean modelSleepers) {
-        var mesh = new Builder((double)chunkX * 16, (double)chunkZ * 16);
-        var spans = control == null ? layout.fixed() : layout.leaves().get(control);
-        double opening = 0.12;
-        for (var span : spans) {
-            var middle = span.start().position();
-            var owner = new TrackVector(middle.x() + origin.x(), middle.y() + origin.y(), middle.z() + origin.z());
-            if (!ownsChunk(owner, chunkX, chunkZ)) continue;
-            double open = control == null ? 0 : opening * span.start().gauge() / 1.435
-                    * (span.reverseLeaf() ? 1 - movement : movement);
-            var a = section(span.start(), span.lateral() - span.side() * open * span.startWeight(),
-                    span.halfWidth(), -RAIL_HEIGHT, 0, 0);
-            var b = section(span.end(), span.lateral() - span.side() * open * span.endWeight(),
-                    span.halfWidth(), -RAIL_HEIGHT, 0, 0);
-            mesh.box(translate(a, origin), translate(b, origin), RAIL_COLOR, true, true);
-        }
-        if (control == null && !modelSleepers) for (var sleeper : layout.sleepers()) {
-            var p = sleeper.pose().position();
-            if (!ownsChunk(new TrackVector(p.x() + origin.x(), p.y() + origin.y(), p.z() + origin.z()), chunkX, chunkZ)) continue;
-            mesh.box(translate(section(sleeper.pose(), 0, sleeper.width() / 2, -RAIL_HEIGHT - TIE_HEIGHT, -RAIL_HEIGHT, -TIE_WIDTH / 2), origin),
-                    translate(section(sleeper.pose(), 0, sleeper.width() / 2, -RAIL_HEIGHT - TIE_HEIGHT, -RAIL_HEIGHT, TIE_WIDTH / 2), origin), TIE_COLOR, true, true);
-        }
-        return mesh.finish();
-    }
-
-    private static TrackVector[] translate(TrackVector[] points, TrackVector origin) {
-        for (int i = 0; i < points.length; i++) {
-            var p = points[i];
-            points[i] = new TrackVector(p.x() + origin.x(), p.y() + origin.y(), p.z() + origin.z());
-        }
-        return points;
-    }
-
     private static double lateralDistance(TrackVector point, TrackPose frame) {
         return (point.x() - frame.position().x()) * frame.lateral().x()
                 + (point.z() - frame.position().z()) * frame.lateral().z();

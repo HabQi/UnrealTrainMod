@@ -4,8 +4,6 @@
  */
 package com.unrealtrainmod.client.gui.widget;
 
-import com.unrealtrainmod.client.track.NativeTurnoutPreview;
-import com.unrealtrainmod.track.model.NativeTurnoutCatalog;
 import com.unrealtrainmod.client.gui.theme.GuiTheme;
 import com.unrealtrainmod.client.renderer.preview.PreviewCamera;
 import com.unrealtrainmod.client.track.ClientRailModelManager;
@@ -24,7 +22,6 @@ import org.lwjgl.glfw.GLFW;
 public final class RailPreviewWidget extends AbstractWidget implements AutoCloseable {
     private final PreviewCamera camera;
     private final RailPreviewRenderer renderer = new RailPreviewRenderer();
-    private final NativeTurnoutPreview nativePreview = new NativeTurnoutPreview(true);
     private ResourceLocation modelId;
 
     public RailPreviewWidget(PreviewCamera camera, ResourceLocation modelId) {
@@ -37,7 +34,6 @@ public final class RailPreviewWidget extends AbstractWidget implements AutoClose
 
     public void setModel(ResourceLocation id) {
         renderer.clearMesh();
-        nativePreview.clear();
         modelId = id;
         camera.reset();
     }
@@ -45,12 +41,6 @@ public final class RailPreviewWidget extends AbstractWidget implements AutoClose
     @Override
     protected void renderWidget(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
         GuiTheme.panel(graphics, getX(), getY(), width, height, GuiTheme.PANEL);
-        if (NativeTurnoutCatalog.contains(modelId)) {
-            renderer.clearMesh();
-            nativePreview.render(graphics, getX() + 1, getY() + 1, width - 2, height - 2, camera);
-            if (isFocused()) graphics.renderOutline(getX(), getY(), width, height, GuiTheme.ACCENT);
-            return;
-        }
         var model = ClientRailModelManager.INSTANCE.model(modelId);
         if (model == null || model.bounds() == null) {
             renderer.clearMesh();
@@ -97,5 +87,5 @@ public final class RailPreviewWidget extends AbstractWidget implements AutoClose
         output.add(NarratedElementType.USAGE, Component.translatable("gui.unrealtrainmod.preview.help"));
     }
 
-    @Override public void close() { try { renderer.close(); } finally { nativePreview.close(); } }
+    @Override public void close() { renderer.close(); }
 }

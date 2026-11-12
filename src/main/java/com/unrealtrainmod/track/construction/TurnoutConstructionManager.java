@@ -4,7 +4,7 @@
  */
 package com.unrealtrainmod.track.construction;
 
-import com.unrealtrainmod.track.model.NativeTurnoutCatalog;
+import com.unrealtrainmod.track.model.RailCatalog;
 import com.unrealtrainmod.UnrealTrainMod;
 import com.unrealtrainmod.item.TurnoutBuilderItem;
 import com.unrealtrainmod.network.payload.OpenTrackCurvePayload;
@@ -284,10 +284,10 @@ public final class TurnoutConstructionManager {
         Feedback feedback = validate(player, s);
         if (feedback != Feedback.READY) { publish(player, s, feedback); return; }
         var model = player.getMainHandItem().get(ModDataComponents.SELECTED_RAIL_MODEL.get());
-        if (model == null || !NativeTurnoutCatalog.known(model)) {
+        if (model == null || RailCatalog.find(model) == null) {
             publish(player, s, model == null ? Feedback.SELECT_MODEL : Feedback.MISSING_MODEL); return;
         }
-        if (!NativeTurnoutCatalog.supports(model, s.kind)) {
+        if (!RailCatalog.supportsAssembly(model, s.kind)) {
             publish(player, s, Feedback.MODEL_UNSUPPORTED); return;
         }
         try {

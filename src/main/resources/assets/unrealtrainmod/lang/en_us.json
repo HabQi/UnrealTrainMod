@@ -695,9 +695,6 @@
   ,"wiring.unrealtrainmod.remove_title": "Select a wire to disconnect"
   ,"wiring.unrealtrainmod.remove": "Disconnect"
   ,"gui.unrealtrainmod.font.chinese_unicode": "Unicode font is enabled automatically while Chinese is selected.",
-  "gui.unrealtrainmod.native_turnout.group": "Native turnouts",
-  "gui.unrealtrainmod.native_turnout.default": "Native turnout (simplified)",
-  "gui.unrealtrainmod.native_turnout.description": "Simple turnouts, diamond crossings and single crossovers; not ordinary track",
-  "gui.unrealtrainmod.native_turnout.rtm_scope": "Ordinary track and simple turnouts",
-  "item.unrealtrainmod.track_builder.feedback.model_unsupported": "This model does not support the construction type. RTM rails support ordinary track and simple turnouts; select a native turnout style for complex structures. Native turnout styles cannot build ordinary track."
+  "gui.unrealtrainmod.rail_models.rtm_scope": "Ordinary track and simple turnouts",
+  "item.unrealtrainmod.track_builder.feedback.model_unsupported": "This model does not support this construction type. RTM rails support ordinary track and simple turnouts; choose a package rail that supports this structure."
 }

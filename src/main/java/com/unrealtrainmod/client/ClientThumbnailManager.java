@@ -5,9 +5,6 @@
 package com.unrealtrainmod.client;
 
 import com.unrealtrainmod.client.track.RailSelection;
-import com.unrealtrainmod.client.track.NativeTurnoutModels;
-import com.unrealtrainmod.client.track.NativeTurnoutPreview;
-import com.unrealtrainmod.track.model.NativeTurnoutCatalog;
 import com.mojang.blaze3d.platform.NativeImage;
 import com.mojang.blaze3d.platform.GlStateManager;
 import com.mojang.blaze3d.systems.RenderSystem;
@@ -77,7 +74,6 @@ public final class ClientThumbnailManager extends SimplePreparableReloadListener
     private final Set<Key> failed = new HashSet<>();
     private final TrainPreviewRenderer vehicles = new TrainPreviewRenderer();
     private final RailPreviewRenderer rails = new RailPreviewRenderer();
-    private final NativeTurnoutPreview nativeTurnouts = new NativeTurnoutPreview(true);
     private final Object diskLock = new Object();
     private final ExecutorService disk = Executors.newSingleThreadExecutor(task -> {
         var thread = new Thread(task, "UTM thumbnail cache");
@@ -123,7 +119,6 @@ public final class ClientThumbnailManager extends SimplePreparableReloadListener
 
     private static boolean available(Key key) {
         if (key.kind() == Kind.VEHICLE) return ClientModelManager.INSTANCE.model(key.id()) != null;
-        if (NativeTurnoutCatalog.contains(key.id())) return true;
         var model = ClientRailModelManager.INSTANCE.model(key.id());
         return model != null && model.bounds() != null;
     }
@@ -139,7 +134,6 @@ public final class ClientThumbnailManager extends SimplePreparableReloadListener
         var entry = entries.get(key);
         try {
             var pixels = key.kind() == Kind.VEHICLE ? vehicles.capture(ClientModelManager.INSTANCE.model(key.id()))
-                    : NativeTurnoutCatalog.contains(key.id()) ? nativeTurnouts.capture()
                     : rails.capture(ClientRailModelManager.INSTANCE.model(key.id()));
             if (!ready || generation != current) {
                 pixels.close();
@@ -254,16 +248,7 @@ public final class ClientThumbnailManager extends SimplePreparableReloadListener
         try {
             if (prepared.generation() != generation) return;
             releaseResources();
-            var preparedEntries = new HashMap<>(prepared.entries());
-            var nativeModel = NativeTurnoutModels.INSTANCE.model();
-            String nativeDigest = ResourceIds.hash(RECIPE + ":native-turnout-1:" + (nativeModel == null ? "missing" : nativeModel.fingerprint()));
-            var nativeKey = new Key(Kind.RAIL, NativeTurnoutCatalog.DEFAULT);
-            var nativeEntry = new Entry(ResourceLocation.fromNamespaceAndPath(UnrealTrainMod.MODID, "thumbnail/" + nativeDigest),
-                    directory.resolve(nativeDigest + ".png"));
-            preparedEntries.put(nativeKey, nativeEntry);
-            var nativeImage = read(nativeEntry.file(), sampleScale(Kind.RAIL));
-            if (nativeImage != null) pending.put(nativeKey, nativeImage);
-            entries = Map.copyOf(preparedEntries);
+            entries = prepared.entries();
             for (var key : new ArrayList<>(pending.keySet())) {
                 var pixels = pending.remove(key);
                 try {
@@ -368,7 +353,7 @@ public final class ClientThumbnailManager extends SimplePreparableReloadListener
         failed.clear();
         entries = Map.of();
         try { vehicles.close(); }
-        finally { try { rails.close(); } finally { nativeTurnouts.close(); } }
+        finally { rails.close(); }
     }
 
     public void close() {

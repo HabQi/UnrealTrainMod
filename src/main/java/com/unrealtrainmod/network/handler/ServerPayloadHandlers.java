@@ -4,7 +4,7 @@
  */
 package com.unrealtrainmod.network.handler;
 
-import com.unrealtrainmod.track.model.NativeTurnoutCatalog;
+import com.unrealtrainmod.track.model.RailCatalog;
 import com.unrealtrainmod.vehicle.VehicleCatalog;
 import com.unrealtrainmod.UnrealTrainMod;
 import com.unrealtrainmod.network.payload.SelectRailModelPayload;
@@ -35,7 +35,7 @@ public final class ServerPayloadHandlers {
         } else if (payload.hotbarSlot() < 0 || payload.hotbarSlot() > 8
                 || player.getInventory().selected != payload.hotbarSlot() || !stack.is(UnrealTrainMod.RAIL_PLACER.get())) {
             result = ModelSelectionResultPayload.Result.INVALID_ITEM;
-        } else if (!NativeTurnoutCatalog.known(payload.modelId())) {
+        } else if (RailCatalog.find(payload.modelId()) == null) {
             result = ModelSelectionResultPayload.Result.UNKNOWN_MODEL;
         } else {
             stack.set(ModDataComponents.SELECTED_RAIL_MODEL.get(), payload.modelId());

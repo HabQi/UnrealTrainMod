@@ -4,7 +4,6 @@
  */
 package com.unrealtrainmod.track.construction;
 
-import com.unrealtrainmod.track.model.NativeTurnoutCatalog;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import com.unrealtrainmod.track.model.RailCatalog;
@@ -494,9 +493,6 @@ public final class TrackConstructionManager {
             return;
         }
         var modelId = player.getMainHandItem().get(ModDataComponents.SELECTED_RAIL_MODEL.get());
-        if (NativeTurnoutCatalog.contains(modelId)) {
-            publish(player, session, Feedback.MODEL_UNSUPPORTED); return;
-        }
         if (modelId == null || RailCatalog.find(modelId) == null) {
             publish(player, session, modelId == null ? Feedback.SELECT_MODEL : Feedback.MISSING_MODEL);
             return;

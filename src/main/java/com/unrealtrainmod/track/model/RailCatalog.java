@@ -4,6 +4,7 @@
  */
 package com.unrealtrainmod.track.model;
 
+import com.unrealtrainmod.track.construction.TrackConstructionType;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -21,6 +22,12 @@ public final class RailCatalog {
         var index = snapshot.stream().collect(Collectors.toUnmodifiableMap(RailDefinition::id, model -> model));
         models = snapshot;
         byId = index;
+    }
+
+    public static boolean supportsAssembly(ResourceLocation id, TrackConstructionType kind) {
+        var rail = find(id);
+        return rail != null && (rail.source().format() != RailDefinition.Format.MQO
+                || kind == TrackConstructionType.SIMPLE_TURNOUT);
     }
 
     public static List<RailDefinition> all() { return models; }

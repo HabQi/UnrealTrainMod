@@ -351,7 +351,14 @@ final class TrackStaticBuffers implements AutoCloseable {
     boolean enqueueRanges(TrackStaticMesh mesh, TrackDrawQueue queue, Matrix4f modelView, TrackRenderStats stats) {
         if (!ready(mesh)) return false;
         var parts = sources.get(mesh);
-        for (var part : parts) for (var range : part.ranges) queue.addStaticRange(range, modelView, stats);
+        var source = mesh.origin();
+        for (var part : parts) for (var range : part.ranges) {
+            var page = range.page().origin;
+            // Page vertices are relative to the chunk in X/Z and already world-height in Y.
+            var view = source.x() == page.x() && source.z() == page.z() ? modelView
+                    : new Matrix4f(modelView).translate((float)(page.x() - source.x()), 0, (float)(page.z() - source.z()));
+            queue.addStaticRange(range, view, stats);
+        }
         return true;
     }
 

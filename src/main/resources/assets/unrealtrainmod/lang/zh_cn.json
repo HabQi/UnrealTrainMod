@@ -688,9 +688,6 @@
   ,"wiring.unrealtrainmod.remove_title": "选择要拆除的电线型号"
   ,"wiring.unrealtrainmod.remove": "拆除此段"
   ,"gui.unrealtrainmod.font.chinese_unicode": "选择中文时，游戏全局自动启用 Unicode 字体。",
-  "gui.unrealtrainmod.native_turnout.group": "原生道岔",
-  "gui.unrealtrainmod.native_turnout.default": "原生道岔（简化样式）",
-  "gui.unrealtrainmod.native_turnout.description": "支持普通道岔、菱形交叉、单渡线；不能铺设普通线路",
-  "gui.unrealtrainmod.native_turnout.rtm_scope": "可铺设普通线路、普通道岔",
-  "item.unrealtrainmod.track_builder.feedback.model_unsupported": "当前模型不支持此施工类型：RTM 轨道仅支持普通线路和普通道岔；复杂结构请选择原生道岔样式。原生道岔样式不能铺设普通线路。"
+  "gui.unrealtrainmod.rail_models.rtm_scope": "可铺设普通线路、普通道岔",
+  "item.unrealtrainmod.track_builder.feedback.model_unsupported": "当前模型不支持此施工类型；RTM 轨道仅支持普通线路和普通道岔，请选择支持该结构的资源包轨道。"
 }

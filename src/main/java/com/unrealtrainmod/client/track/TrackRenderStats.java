@@ -89,12 +89,6 @@ final class TrackRenderStats {
     private int irisProgram = -1;
     private long stageNanos, buildNanos, lightNanos, packNanos, vboNanos, groupNanos, drawNanos;
 
-    private long nativeBuilds, nativeHits, nativeFallbacks;
-    private int nativeResident;
-    void nativeLayouts(long builds, long hits, long fallbacks, int resident) {
-        nativeBuilds += builds; nativeHits += hits; nativeFallbacks += fallbacks; nativeResident = resident;
-    }
-
     private TrackRenderStats() {}
 
     /** Returns the shared collector for this frame, or null when statistics are disabled. */
@@ -148,7 +142,6 @@ final class TrackRenderStats {
     }
 
     private void resetWindow(long now) {
-        nativeBuilds = nativeHits = nativeFallbacks = 0; nativeResident = 0;
         windowId++;
         windowGpu = windowMaxGpu = 0L;
         windowGpuSamples = 0;
@@ -294,7 +287,7 @@ final class TrackRenderStats {
         drawNanos += nanos;
     }
 
-    /** Actual ordinary authored-rail draws only; assemblies and native turnouts are not merge candidates. */
+    /** Actual ordinary authored-rail draws only; assemblies are not merge candidates. */
     void railChunkBatch(long chunk, RenderType type) {
         railChunkBatches++;
         railChunkMaterials.add(new ChunkMaterial(chunk, type));
@@ -433,9 +426,6 @@ final class TrackRenderStats {
                 avg(windowRangeBefore - windowRangeAfter + windowMultiDrawRanges - windowMultiDrawCalls, frames),
                 windowLightBytes / frames, avg(windowPageBuilds, frames), avg(windowPageRebuilds, frames),
                 avg(windowResidentPages, frames), windowResidentBytes / frames);
-        LOGGER.info("Native turnouts [{}] layoutsBuilt={} layoutHits={} proceduralFallbacks={} residentLayouts={}",
-                scene, nativeBuilds, nativeHits, nativeFallbacks, nativeResident);
-        nativeBuilds = nativeHits = nativeFallbacks = 0;
         resetWindow(now);
     }
 

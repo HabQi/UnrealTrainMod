@@ -4,7 +4,6 @@
  */
 package com.unrealtrainmod.client.track;
 
-import com.unrealtrainmod.track.model.NativeTurnoutCatalog;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import com.mojang.blaze3d.systems.RenderSystem;
@@ -77,8 +76,7 @@ public final class TrackWorldRenderer {
             if (stats != null) stats.built(nanos);
             if (nanos <= SLOW_BUILD_NANOS) return;
             var definition = RailCatalog.find(modelId == null ? null : ResourceLocation.parse(modelId));
-            String resource = type.startsWith("nativeTurnout") ? NativeTurnoutModels.CONFIG.toString()
-                    : definition == null ? (modelId == null ? "native" : modelId)
+            String resource = definition == null ? (modelId == null ? "native" : modelId)
                     : definition.source().model().toString();
             if (stats != null) stats.slowBuild(nanos, resource);
             if (REPORTED_SLOW_BUILDS.add(new SlowBuild(resource, type))) {
@@ -132,7 +130,6 @@ public final class TrackWorldRenderer {
         if (Double.isNaN(frameTime)) frameTime = cache.time(event.getPartialTick().getGameTimeDeltaPartialTick(level.tickRateManager().runsNormally()));
         double time = frameTime;
         var dynamic = new ArrayList<ClientTrackCache.TurnoutEntry>();
-        var nativeDynamic = new ArrayList<ClientTrackCache.AssemblyEntry>();
         var camera = event.getCamera().getPosition();
         Matrix4f modelView = new Matrix4f();
         try (var irisMetrics = iris ? IrisRenderStats.begin(IrisRenderStats.TRACK, shadow) : null;
@@ -174,36 +171,8 @@ public final class TrackWorldRenderer {
                 }
             }
             for (var entry : cache.assemblies.values()) {
+                if (!entry.rendersModel()) continue;
                 boolean simple = entry.data.definition().type() == TrackAssemblyType.SIMPLE_TURNOUT;
-                boolean nativeStyle = NativeTurnoutCatalog.usesNative(entry.data);
-                if (nativeStyle) {
-                    if (!event.getFrustum().isVisible(entry.broadBounds())) continue;
-                    if (entry.nativeRender == null) {
-                        if (shadow || !budget.available()) continue;
-                        long start = System.nanoTime();
-                        try { entry.nativeRender = new NativeTurnoutRenderState(entry.data); }
-                        finally { budget.finished(start, entry.data.modelId(), entry.data.id(),
-                                (int)Math.floor(entry.data.origin().x() / 16), (int)Math.floor(entry.data.origin().z() / 16), "nativeTurnoutLayout"); }
-                    }
-                    var nativeEntry = entry.nativeRender;
-                    var positions = entry.positions(time);
-                    nativeDynamic.add(entry);
-                    for (long chunk : entry.chunks) {
-                        int x = ChunkPos.getX(chunk), z = ChunkPos.getZ(chunk);
-                        if (!level.hasChunk(x, z)) continue;
-                        if (stats != null) stats.chunk();
-                        var meshes = nativeEntry.chunks.get(chunk);
-                        if (meshes == null) {
-                            if (!budget.available()) continue;
-                            long start = System.nanoTime();
-                            try { meshes = nativeEntry.buildChunk(x, z); nativeEntry.chunks.put(chunk, meshes); }
-                            finally { budget.finished(start, entry.data.modelId(), entry.data.id(), x, z, "nativeTurnoutMesh"); }
-                        }
-                        nativeEntry.updateLeaves(meshes, positions);
-                        uploads = drawAll(stats, queue, event, level, camera, modelView, uploads, meshes);
-                    }
-                    continue;
-                }
                 var model = ClientRailModelManager.INSTANCE.model(entry.data.modelId());
                 boolean scripted = entry.script != null && model != null && model.scripted() && !entry.scriptFailed;
                 boolean inView = event.getFrustum().isVisible(entry.broadBounds());
@@ -302,6 +271,13 @@ public final class TrackWorldRenderer {
                     }
                 }
             }
+            // Iris fixed-part sources join the same budgeted page build as the other static geometry.
+            if (iris) {
+                for (var entry : dynamic) {
+                    uploads = entry.parts.drawIris(entry.currentSnapshot, entry.previousSnapshot, entry.snapshotFraction(time),
+                            entry.chunks, event, level, queue, uploads, stats, budget, shadow);
+                }
+            }
             // Build and upload replacement pages before resolving any GPU range references.
             uploads = TrackStaticBuffers.WORLD.prepare(level, budget, uploads, stats);
             long resolveStart = stats == null ? 0 : System.nanoTime();
@@ -310,19 +286,10 @@ public final class TrackWorldRenderer {
             TrackStaticBuffers.WORLD.collectStats(stats);
             if (!iris) queue.draw(state, event.getProjectionMatrix(), stats);
             // Shared track scope also owns rigid shaders; each renderer releases its instance attributes.
-            for (var entry : dynamic) {
-                uploads = iris ? entry.parts.drawIris(entry.currentSnapshot, entry.previousSnapshot, entry.snapshotFraction(time),
-                        entry.chunks, event, level, queue, uploads, stats)
-                        : entry.parts.draw(state, entry.currentSnapshot, entry.previousSnapshot, entry.snapshotFraction(time),
+            if (!iris) for (var entry : dynamic) {
+                uploads = entry.parts.draw(state, entry.currentSnapshot, entry.previousSnapshot, entry.snapshotFraction(time),
                         entry.chunks, event, level, uploads, stats);
             }
-            for (var entry : nativeDynamic) {
-                var renderer = entry.nativeRender;
-                var snapshot = renderer.snapshot(entry.positions(time));
-                uploads = iris ? renderer.parts.drawIris(snapshot, null, 1, entry.chunks, event, level, queue, uploads, stats)
-                        : renderer.parts.draw(state, snapshot, null, 1, entry.chunks, event, level, uploads, stats);
-            }
-            NativeTurnoutModels.INSTANCE.collectStats(stats);
             if (iris) {
                 IrisRenderStats.prepare(irisPrepareStart);
                 irisScope.beginTrackBatch();
