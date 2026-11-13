@@ -14,7 +14,7 @@ import java.util.List;
 import org.slf4j.LoggerFactory;
 
 /** Reload-local descriptions only; decoded auxiliary pixels never remain in a source. */
-public sealed interface PbrSource permits PbrSource.Files, PbrSource.Atlas, PbrSource.LightMerge {
+public sealed interface PbrSource permits PbrSource.Files, PbrSource.Resources, PbrSource.Atlas, PbrSource.LightMerge {
     enum Channel {
         NORMAL("_n.png"), SPECULAR("_s.png");
         final String suffix;
@@ -26,6 +26,40 @@ public sealed interface PbrSource permits PbrSource.Files, PbrSource.Atlas, PbrS
     NativeImage read(Channel channel, int defaultPixel);
 
     record FileKey(PackageAsset normal, PackageAsset specular, int width, int height) {}
+
+    /** Pack resources remain lazy, just like ZIP auxiliary channels; base pixels have separate ownership. */
+    final class Resources implements PbrSource {
+        private final net.minecraft.server.packs.resources.Resource normal, specular;
+        private final int width, height;
+        private final EnumSet<Channel> failed = EnumSet.noneOf(Channel.class);
+        public Resources(net.minecraft.server.packs.resources.Resource normal,
+                         net.minecraft.server.packs.resources.Resource specular, int width, int height) {
+            this.normal = normal; this.specular = specular; this.width = width; this.height = height;
+        }
+        private net.minecraft.server.packs.resources.Resource resource(Channel channel) {
+            return channel == Channel.NORMAL ? normal : specular;
+        }
+        @Override public boolean has(Channel channel) { return resource(channel) != null; }
+        @Override public NativeImage read(Channel channel, int defaultPixel) {
+            var resource = resource(channel);
+            if (resource == null || failed.contains(channel)) return null;
+            NativeImage image = null;
+            try (var input = resource.open()) {
+                image = NativeImage.read(input);
+                if (image.getWidth() != width || image.getHeight() != height) {
+                    var resized = TextureSizing.resize(image, width, height);
+                    image.close(); image = resized;
+                }
+                PbrStats.decoded();
+                return image;
+            } catch (IOException | RuntimeException exception) {
+                if (image != null) image.close();
+                failed.add(channel); PbrStats.failure();
+                LoggerFactory.getLogger(PbrSource.class).warn("Ignoring resource PBR channel {}: {}", channel, exception.getMessage());
+                return null;
+            } catch (Error error) { if (image != null) image.close(); throw error; }
+        }
+    }
 
     final class Files implements PbrSource {
         private final FileKey key;

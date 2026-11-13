@@ -1,0 +1,4 @@
+newmtl r11
+Kd 1 1 1
+d 1
+map_Kd ../../../textures/native_turnout/r11/r11.png

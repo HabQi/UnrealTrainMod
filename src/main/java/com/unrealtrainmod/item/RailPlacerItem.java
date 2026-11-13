@@ -52,7 +52,9 @@ public final class RailPlacerItem extends Item {
         var definition = RailCatalog.find(id);
         lines.add(Component.translatable("item.unrealtrainmod.rail_placer.selected", id == null
                 ? Component.translatable("item.unrealtrainmod.rail_placer.none")
-                : Component.literal(definition == null ? id.toString() : definition.railName())).withStyle(ChatFormatting.AQUA));
+                : com.unrealtrainmod.track.model.NativeTurnoutCatalog.contains(id)
+                    ? Component.translatable("gui.unrealtrainmod.rail_models.native_turnout")
+                    : Component.literal(definition == null ? id.toString() : definition.railName())).withStyle(ChatFormatting.AQUA));
         for (String key : List.of("select", "place", "cancel", "permission")) {
             lines.add(Component.translatable("item.unrealtrainmod.rail_placer." + key).withStyle(ChatFormatting.GRAY));
         }

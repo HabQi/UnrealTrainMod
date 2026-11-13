@@ -696,5 +696,10 @@
   ,"wiring.unrealtrainmod.remove": "Disconnect"
   ,"gui.unrealtrainmod.font.chinese_unicode": "Unicode font is enabled automatically while Chinese is selected.",
   "gui.unrealtrainmod.rail_models.rtm_scope": "Ordinary track and simple turnouts",
-  "item.unrealtrainmod.track_builder.feedback.model_unsupported": "This model does not support this construction type. RTM rails support ordinary track and simple turnouts; choose a package rail that supports this structure."
+  "item.unrealtrainmod.track_builder.feedback.model_unsupported": "This model does not support this construction type. Native turnout track supports simple turnouts only; RTM rails support ordinary track and simple turnouts.",
+  "gui.unrealtrainmod.rail_models.native_turnout": "Native turnout track",
+  "gui.unrealtrainmod.rail_models.builtin": "Built-in track",
+  "gui.unrealtrainmod.rail_models.native_scope": "Simple turnouts only; r11 parts with native layout and blade animation",
+  "item.unrealtrainmod.track_builder.feedback.native_frog": "The inner rails have no valid crossing for a frog. Adjust the endpoints or curve parameters.",
+  "item.unrealtrainmod.track_builder.feedback.native_space": "There is insufficient space or a conflict between blades, closure rails and the frog. Lengthen the turnout or adjust its angle."
 }

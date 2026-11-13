@@ -689,5 +689,10 @@
   ,"wiring.unrealtrainmod.remove": "拆除此段"
   ,"gui.unrealtrainmod.font.chinese_unicode": "选择中文时，游戏全局自动启用 Unicode 字体。",
   "gui.unrealtrainmod.rail_models.rtm_scope": "可铺设普通线路、普通道岔",
-  "item.unrealtrainmod.track_builder.feedback.model_unsupported": "当前模型不支持此施工类型；RTM 轨道仅支持普通线路和普通道岔，请选择支持该结构的资源包轨道。"
+  "item.unrealtrainmod.track_builder.feedback.model_unsupported": "当前模型不支持此施工类型；原生道岔铁轨仅支持普通道岔，RTM 轨道支持普通线路和普通道岔。",
+  "gui.unrealtrainmod.rail_models.native_turnout": "原生道岔铁轨",
+  "gui.unrealtrainmod.rail_models.builtin": "内置轨道",
+  "gui.unrealtrainmod.rail_models.native_scope": "仅用于普通道岔；r11 部件，原生布局与尖轨动画",
+  "item.unrealtrainmod.track_builder.feedback.native_frog": "两条内侧钢轨没有有效交点，无法布置辙叉；请调整末端位置或曲线参数。",
+  "item.unrealtrainmod.track_builder.feedback.native_space": "尖轨、连接轨或辙叉的空间不足／发生冲突；请加长道岔或调整分叉角度。"
 }

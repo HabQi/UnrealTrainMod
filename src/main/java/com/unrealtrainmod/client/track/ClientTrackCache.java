@@ -151,6 +151,7 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
                 if (mesh != null) mesh.close();
                 if (entry.script.parts != null) entry.script.parts.removeChunk(chunk);
             }
+            if (entry.nativeState != null) entry.nativeState.parts.removeChunk(chunk);
 
             if (entry.chunks.isEmpty()) { entry.close(); iterator.remove(); }
         }
@@ -206,10 +207,12 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
 
     /** Backend switches retain CPU geometry, scripts and animation timelines. */
     public void invalidateGpuBuffers() {
+        NativeTurnoutPreview.invalidateGpu();
         for (var entry : entries.values()) entry.meshes.values().forEach(TrackRenderMesh::close);
         for (var entry : assemblies.values()) {
             entry.meshes.values().forEach(group -> group.forEach(TrackRenderMesh::close));
             entry.tongues.values().forEach(group -> group.forEach(TrackRenderMesh::close));
+            if (entry.nativeState != null) entry.nativeState.invalidateGpu();
             if (entry.script != null) {
                 entry.script.meshes.values().forEach(TrackRenderMesh::close);
                 if (entry.script.parts != null) entry.script.parts.invalidateInstances();
@@ -221,6 +224,7 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
     }
 
     public void invalidateMeshes() {
+        NativeTurnoutPreview.clear();
         for (Entry entry : entries.values()) entry.close();
         for (var entry : assemblies.values()) entry.close();
         scriptFailures.clear();
@@ -251,6 +255,7 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
 
     @Override
     public void close() {
+        NativeTurnoutPreview.clear();
         for (Entry entry : entries.values()) entry.close();
         for (var entry : assemblies.values()) entry.close();
         assemblies.clear(); states.clear(); deletedAssemblies.clear();
@@ -284,6 +289,8 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
         final Map<Long, List<TrackRenderMesh>> tongues = new HashMap<>();
         final Map<String, TurnoutAnimation> animations = new LinkedHashMap<>();
         final TurnoutEntry script;
+        NativeTurnoutRenderState nativeState;
+        boolean nativeFailed;
         boolean scriptFailed, scriptActive, missingReported;
         long scriptPrepareFrame = -1;
 
@@ -291,7 +298,8 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
             this.data = data;
             data.state().controls().forEach((control, position) -> animations.put(control,
                     new TurnoutAnimation(position == SwitchPosition.REVERSE ? 1 : 0)));
-            var view = rendersModel() ? RailTurnoutView.of(data) : null;
+            var view = rendersModel() && !com.unrealtrainmod.track.model.NativeTurnoutCatalog.contains(data.modelId())
+                    ? RailTurnoutView.of(data) : null;
             script = view == null ? null : new TurnoutEntry(this, view);
             var segments = new LinkedHashMap<UUID, TrackGeometry>();
             for (var entry : data.paths().entrySet()) {
@@ -309,6 +317,7 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
         // Retired native styles and RTM complex structures keep their saved data without a model renderer.
         boolean rendersModel() {
             String id = data.modelId();
+            if (com.unrealtrainmod.track.model.NativeTurnoutCatalog.contains(id)) return true;
             return id != null && !id.startsWith("unrealtrainmod:native_turnout/")
                     && (data.definition().type() == TrackAssemblyType.SIMPLE_TURNOUT
                         || !id.startsWith("unrealtrainmod:rtm/rail/"));
@@ -328,7 +337,7 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
         }
 
         boolean moving(double time) {
-            return rendersModel() && (scriptActive || data.definition() == TrackAssemblyDefinition.CUSTOM)
+            return rendersModel() && (nativeState != null || scriptActive || data.definition() == TrackAssemblyDefinition.CUSTOM)
                     && animations.values().stream().anyMatch(animation -> animation.moving(time));
         }
 
@@ -357,6 +366,8 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
 
         @Override public void close() {
             clearFallback();
+            if (nativeState != null) { nativeState.close(); nativeState = null; }
+            nativeFailed = false;
             if (script != null) script.close();
             scriptFailed = scriptActive = missingReported = false;
             scriptPrepareFrame = -1;

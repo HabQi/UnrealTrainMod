@@ -205,6 +205,21 @@ public final class TurnoutConstructionManager {
             if (s.points.size() == s.kind.pointCount()) {
                 var prepared = graph.prepareAssembly(s.kind, s.points, s.gauge, s.curves, s.edited, s.yaw, null);
                 blocks.validatePlacement(prepared.segments());
+                if (com.unrealtrainmod.track.model.NativeTurnoutCatalog.contains(
+                        com.unrealtrainmod.track.model.NativeTurnoutCatalog.constructionModel(player))) {
+                    if (s.kind != TrackConstructionType.SIMPLE_TURNOUT) return s.validation = Feedback.MODEL_UNSUPPORTED;
+                    if (!s.revision.equals(s.nativeRevision)) {
+                        s.nativeRevision = s.revision;
+                        s.nativeFeedback = Feedback.READY;
+                        try {
+                            com.unrealtrainmod.track.mesh.NativeTurnoutLayout.build(prepared.instance().geometry(), s.gauge);
+                        } catch (com.unrealtrainmod.track.mesh.NativeTurnoutLayout.InvalidLayout exception) {
+                            s.nativeFeedback = exception.problem() == com.unrealtrainmod.track.mesh.NativeTurnoutLayout.Problem.FROG
+                                    ? Feedback.NATIVE_FROG : Feedback.NATIVE_SPACE;
+                        }
+                    }
+                    return s.validation = s.nativeFeedback;
+                }
                 return s.validation = Feedback.READY;
             }
             AssemblyPlacementGeometry.create(s.kind, s.points.stream().map(TrackPlacementEndpoint::position).toList(),
@@ -284,7 +299,7 @@ public final class TurnoutConstructionManager {
         Feedback feedback = validate(player, s);
         if (feedback != Feedback.READY) { publish(player, s, feedback); return; }
         var model = player.getMainHandItem().get(ModDataComponents.SELECTED_RAIL_MODEL.get());
-        if (model == null || RailCatalog.find(model) == null) {
+        if (model == null || !RailCatalog.contains(model)) {
             publish(player, s, model == null ? Feedback.SELECT_MODEL : Feedback.MISSING_MODEL); return;
         }
         if (!RailCatalog.supportsAssembly(model, s.kind)) {
@@ -416,6 +431,8 @@ public final class TurnoutConstructionManager {
         UUID revision = UUID.randomUUID(), editorId;
         int editPoint;
         Feedback validation = Feedback.TURNOUT_A;
+        UUID nativeRevision;
+        Feedback nativeFeedback;
         Session(ServerPlayer player, TrackConstructionType kind) {
             this.player = player; this.kind = kind; level = player.serverLevel(); yaw = player.getYRot();
         }

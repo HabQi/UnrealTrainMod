@@ -493,6 +493,10 @@ public final class TrackConstructionManager {
             return;
         }
         var modelId = player.getMainHandItem().get(ModDataComponents.SELECTED_RAIL_MODEL.get());
+        if (com.unrealtrainmod.track.model.NativeTurnoutCatalog.contains(modelId)) {
+            publish(player, session, Feedback.MODEL_UNSUPPORTED);
+            return;
+        }
         if (modelId == null || RailCatalog.find(modelId) == null) {
             publish(player, session, modelId == null ? Feedback.SELECT_MODEL : Feedback.MISSING_MODEL);
             return;

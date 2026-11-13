@@ -69,7 +69,8 @@ public final class ClientRailModelManager extends SimplePreparableReloadListener
             if (script != null) script.close();
         }
     }
-    public record Prepared(Map<ResourceLocation, Model> models, Map<PackageAsset, PreparedTexture> images) {}
+    public record Prepared(Map<ResourceLocation, Model> models, Map<PackageAsset, PreparedTexture> images,
+                           PreparedTexture nativeTexture) {}
     private Map<ResourceLocation, Model> models = Map.of();
     private final Set<ResourceLocation> textures = new HashSet<>();
     private final Map<IndexedMesh, SharedRailPart> sharedParts = new java.util.IdentityHashMap<>();
@@ -111,6 +112,7 @@ public final class ClientRailModelManager extends SimplePreparableReloadListener
         var discovery = new PbrDiscovery();
         var meshes = new HashMap<MeshKey, ModelMesh>();
         var sources = new HashMap<RailDefinition.Source, Model>();
+        PreparedTexture nativeTexture = null;
         try (var cache = new ModelCache("rails")) {
             for (var definition : RailCatalog.all()) {
                 var source = definition.source();
@@ -204,8 +206,16 @@ public final class ClientRailModelManager extends SimplePreparableReloadListener
                 }
             }
             discovery.log("rails");
-            return new Prepared(Map.copyOf(models), images);
+            try {
+                var nativeModel = NativeTurnoutModels.load(resources);
+                nativeTexture = NativeTurnoutModels.texture(resources);
+                models.put(com.unrealtrainmod.track.model.NativeTurnoutCatalog.R11, nativeModel);
+            } catch (IOException | IllegalArgumentException exception) {
+                LOGGER.error("Cannot prepare native r11 turnout: {}", exception.getMessage(), exception);
+            }
+            return new Prepared(Map.copyOf(models), images, nativeTexture);
         } catch (RuntimeException | Error exception) {
+            if (nativeTexture != null) nativeTexture.close();
             images.values().forEach(PreparedTexture::close);
             models.values().forEach(Model::close);
             throw exception;
@@ -245,11 +255,12 @@ public final class ClientRailModelManager extends SimplePreparableReloadListener
         ClientTrackCache.INSTANCE.invalidateMeshes();
         close();
         var manager = Minecraft.getInstance().getTextureManager();
-        var pending = new HashMap<>(prepared.images());
+        var pending = new HashMap<ResourceLocation, PreparedTexture>();
+        prepared.images().forEach((asset, image) -> pending.put(textureId(asset), image));
+        if (prepared.nativeTexture() != null) pending.put(NativeTurnoutModels.TEXTURE, prepared.nativeTexture());
         try {
-            for (var entry : prepared.images().entrySet()) {
-                ResourceLocation id = textureId(entry.getKey());
-                var image = pending.remove(entry.getKey());
+            for (var id : List.copyOf(pending.keySet())) {
+                var image = pending.remove(id);
                 MaterialTexture texture;
                 try { texture = new MaterialTexture(image); }
                 catch (RuntimeException | Error exception) { image.close(); throw exception; }

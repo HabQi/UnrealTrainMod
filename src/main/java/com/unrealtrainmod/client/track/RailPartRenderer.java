@@ -109,6 +109,7 @@ final class RailPartRenderer implements AutoCloseable {
     private final TrackLighting lighting;
     private final TrackVector anchor;
     private final double meshOriginY;
+    private final boolean nativeStyle;
     private final List<IrisPart> irisParts = new ArrayList<>();
     private final Map<Long, IrisFixedGroup> irisFixedGroups = new LinkedHashMap<>();
     private final Matrix4f irisLocal = new Matrix4f();
@@ -117,6 +118,11 @@ final class RailPartRenderer implements AutoCloseable {
     private int irisPartCount;
 
     RailPartRenderer(TrackVector anchor, double meshOriginY) {
+        this(anchor, meshOriginY, false);
+    }
+
+    RailPartRenderer(TrackVector anchor, double meshOriginY, boolean nativeStyle) {
+        this.nativeStyle = nativeStyle;
         this.anchor = anchor;
         this.meshOriginY = meshOriginY;
         lighting = new TrackLighting(anchor);
@@ -259,6 +265,7 @@ final class RailPartRenderer implements AutoCloseable {
                 var posedView = new Matrix4f(modelView).mul(local);
                 queue.addCached(gpu, type, posedView, light);
             } else {
+                if (nativeStyle && stats != null) stats.nativeFallback(prepared.supported ? "iris_cache" : "iris_pose");
                 if (writer == null) writer = new IrisVertices();
                 if (fallback == null) fallback = new ByteBufferBuilder(1 << 16);
                 var builder = new BufferBuilder(fallback, VertexFormat.Mode.TRIANGLES, DefaultVertexFormat.NEW_ENTITY);
@@ -447,6 +454,7 @@ final class RailPartRenderer implements AutoCloseable {
 
     private void buffered(TrackRenderState state, Draw draw, Matrix4f modelView,
                           Vector3f renderOrigin, RenderLevelStageEvent event, TrackRenderStats stats) {
+        if (nativeStyle && stats != null) stats.nativeFallback("native_shader");
         if (fallback == null) fallback = new ByteBufferBuilder(1 << 16);
         var builder = new BufferBuilder(fallback, VertexFormat.Mode.TRIANGLES, DefaultVertexFormat.NEW_ENTITY);
         var mesh = draw.key.mesh.source;

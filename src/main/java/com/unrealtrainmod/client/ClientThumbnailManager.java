@@ -179,6 +179,18 @@ public final class ClientThumbnailManager extends SimplePreparableReloadListener
         var preparedEntries = new LinkedHashMap<Key, Entry>();
         var images = new HashMap<Key, NativeImage>();
         try {
+            try {
+                var key = new Key(Kind.RAIL, com.unrealtrainmod.track.model.NativeTurnoutCatalog.R11);
+                String digest = ResourceIds.hash(RECIPE + "\nnative-turnout\n"
+                        + com.unrealtrainmod.client.track.NativeTurnoutModels.fingerprint(resources));
+                var entry = new Entry(ResourceLocation.fromNamespaceAndPath(UnrealTrainMod.MODID, "thumbnail/" + digest),
+                        directory.resolve(digest + ".png"));
+                preparedEntries.put(key, entry);
+                var image = read(entry.file(), sampleScale(Kind.RAIL));
+                if (image != null) images.put(key, image);
+            } catch (IOException exception) {
+                LOGGER.warn("Cannot prepare native turnout thumbnail: {}", exception.getMessage());
+            }
             for (var config : configs.entrySet()) {
                 var archive = config.getValue().archive();
                 if (!fingerprints.containsKey(archive)) fingerprints.put(archive, fingerprint(archive));

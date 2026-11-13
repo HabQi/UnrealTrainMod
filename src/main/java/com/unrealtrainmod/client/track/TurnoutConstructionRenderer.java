@@ -21,16 +21,18 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.core.BlockPos;
+import net.minecraft.network.chat.Component;
 import net.minecraft.world.phys.Vec3;
 import net.neoforged.neoforge.client.event.RenderLevelStageEvent;
 
-/** Immediate preview, including the exact union footprint of both internal paths. */
+/** Cached native model preview plus the immediate union footprint and construction annotations. */
 public final class TurnoutConstructionRenderer {
     private TurnoutConstructionRenderer() {}
 
     public static void render(RenderLevelStageEvent event) {
         if (event.getStage() != RenderLevelStageEvent.Stage.AFTER_SOLID_BLOCKS
                 || IrisCompat.shadowPass()) return;
+        NativeTurnoutPreview.render(event);
         var state = ClientTurnoutConstruction.INSTANCE;
         var draft = state.draft(); var geometry = state.geometry();
         if (!state.isActive()) return;
@@ -88,6 +90,10 @@ public final class TurnoutConstructionRenderer {
                 var port = geometry == null ? null : geometry.ports().get(name);
                 double direction = port == null ? 0 : ((port.outwardYaw() % 360) + 540) % 360 - 180;
                 String label = port == null ? name : String.format(Locale.ROOT, "%s  %.1f°", name, direction);
+                if (i == 0 && (state.previewFeedback() == Feedback.NATIVE_FROG || state.previewFeedback() == Feedback.NATIVE_SPACE
+                        || state.previewFeedback() == Feedback.MODEL_UNSUPPORTED || state.previewFeedback() == Feedback.MISSING_MODEL)) {
+                    label += " " + Component.translatable(state.previewFeedback().translationKey()).getString();
+                }
                 if (draft.kind() == TrackConstructionType.DIAMOND_CROSSING
                         || draft.kind() == TrackConstructionType.SINGLE_CROSSOVER) {
                     String prefix = draft.kind() == TrackConstructionType.DIAMOND_CROSSING

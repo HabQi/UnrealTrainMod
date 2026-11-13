@@ -95,6 +95,63 @@ public final class TrackWorldRenderer {
     private static final TrackDrawQueue DRAW_QUEUE = new TrackDrawQueue();
 
     static void releaseDrawQueue() { DRAW_QUEUE.close(); }
+    static BuildBudget previewBudget() { return frameBudget; }
+
+    static void renderNativePreview(RenderLevelStageEvent event, NativeTurnoutRenderState preview,
+                                    java.util.Map<Long, TrackStaticMesh> meshes, Set<Long> chunks,
+                                    TrackStaticBuffers buffers, long layoutNanos) {
+        var level = Minecraft.getInstance().level;
+        boolean iris = IrisCompat.active();
+        var stats = TrackRenderStats.begin(level, "preview", "native-r11");
+        long start = stats == null ? 0 : System.nanoTime() - layoutNanos;
+        var budget = frameBudget;
+        budget.stats = stats;
+        if (stats != null && layoutNanos > 0) {
+            stats.nativeLayout(preview.layout.samples(), preview.layout.parts().size());
+            stats.built(layoutNanos);
+        }
+        int uploads = frameUploads;
+        var queue = DRAW_QUEUE;
+        queue.begin(); buffers.beginView();
+        var camera = event.getCamera().getPosition();
+        var modelView = new Matrix4f();
+        try (var scope = iris ? new IrisDrawScope() : null;
+             var state = iris ? null : new TrackRenderState(stats)) {
+            RenderSystem.setShaderColor(1, 1, 1, 1);
+            for (long chunk : chunks) {
+                if (!level.hasChunk(ChunkPos.getX(chunk), ChunkPos.getZ(chunk))) continue;
+                var mesh = meshes.get(chunk);
+                if (mesh == null) {
+                    if (!budget.available()) continue;
+                    long buildStart = System.nanoTime();
+                    try { mesh = preview.build(chunk); meshes.put(chunk, mesh); }
+                    finally {
+                        budget.pageFinished(buildStart);
+                        if (stats != null) stats.built(System.nanoTime() - buildStart);
+                    }
+                }
+                if (!mesh.isEmpty() && event.getFrustum().isVisible(mesh.bounds())) {
+                    buffers.request(mesh, TrackRenderStats.STRUCTURE_ASSEMBLY);
+                    var origin = mesh.origin();
+                    modelView.set(event.getModelViewMatrix()).translate((float)(origin.x() - camera.x),
+                            (float)-camera.y, (float)(origin.z() - camera.z));
+                    queue.addStatic(mesh, new Matrix4f(modelView), TrackRenderStats.STRUCTURE_ASSEMBLY);
+                    if (stats != null) { stats.candidate(); stats.visible(); }
+                }
+            }
+            if (iris) uploads = preview.parts.drawIris(preview.snapshot, null, 1, chunks, event, level,
+                    queue, uploads, stats, budget, false);
+            uploads = buffers.prepare(level, budget, uploads, stats);
+            queue.resolve(buffers, stats);
+            buffers.collectStats(stats);
+            if (iris) scope.beginTrackBatch();
+            queue.draw(state, event.getProjectionMatrix(), stats);
+            if (!iris) uploads = preview.parts.draw(state, preview.snapshot, null, 1, chunks, event, level, uploads, stats);
+        } finally {
+            queue.clear(); frameUploads = uploads;
+            if (stats != null) { stats.stage(System.nanoTime() - start); stats.endFrame(); stats.logIfDue(); }
+        }
+    }
 
     public static void beginFrame() {
         frame++;
@@ -130,6 +187,7 @@ public final class TrackWorldRenderer {
         if (Double.isNaN(frameTime)) frameTime = cache.time(event.getPartialTick().getGameTimeDeltaPartialTick(level.tickRateManager().runsNormally()));
         double time = frameTime;
         var dynamic = new ArrayList<ClientTrackCache.TurnoutEntry>();
+        var nativeDynamic = new ArrayList<ClientTrackCache.AssemblyEntry>();
         var camera = event.getCamera().getPosition();
         Matrix4f modelView = new Matrix4f();
         try (var irisMetrics = iris ? IrisRenderStats.begin(IrisRenderStats.TRACK, shadow) : null;
@@ -174,6 +232,43 @@ public final class TrackWorldRenderer {
                 if (!entry.rendersModel()) continue;
                 boolean simple = entry.data.definition().type() == TrackAssemblyType.SIMPLE_TURNOUT;
                 var model = ClientRailModelManager.INSTANCE.model(entry.data.modelId());
+                if (com.unrealtrainmod.track.model.NativeTurnoutCatalog.contains(entry.data.modelId()) && !entry.nativeFailed) {
+                    if (!event.getFrustum().isVisible(entry.broadBounds())) continue;
+                    if (entry.nativeState == null) {
+                        if (!budget.available()) continue;
+                        long start = System.nanoTime();
+                        try {
+                            if (model == null) throw new IllegalArgumentException("native model unavailable");
+                            var layout = com.unrealtrainmod.track.mesh.NativeTurnoutLayout.build(entry.data.geometry(), entry.data.gauge());
+                            entry.nativeState = new NativeTurnoutRenderState(layout, model);
+                            if (stats != null) stats.nativeLayout(layout.samples(), layout.parts().size());
+                        } catch (IllegalArgumentException exception) {
+                            entry.nativeFailed = true;
+                            LOGGER.warn("Native turnout {} uses simplified fallback: {}", entry.data.id(), exception.getMessage());
+                        } finally { budget.finished(start, entry.data.modelId(), entry.data.id(), 0, 0, "nativeLayout"); }
+                    }
+                    if (entry.nativeState != null) {
+                        var nativeState = entry.nativeState;
+                        nativeState.movement(entry.animations.get("main").position(time));
+                        nativeDynamic.add(entry);
+                        for (long chunk : entry.chunks) {
+                            if (!level.hasChunk(ChunkPos.getX(chunk), ChunkPos.getZ(chunk))) continue;
+                            var group = entry.meshes.get(chunk);
+                            if (group == null) {
+                                if (!budget.available()) continue;
+                                long start = System.nanoTime();
+                                try {
+                                    group = List.of(nativeState.build(chunk));
+                                    entry.meshes.put(chunk, group);
+                                } finally { budget.finished(start, entry.data.modelId(), entry.data.id(),
+                                        ChunkPos.getX(chunk), ChunkPos.getZ(chunk), "nativeFixedMesh"); }
+                            }
+                            uploads = drawAll(stats, queue, event, level, camera, modelView, uploads, group);
+                        }
+                        continue;
+                    }
+                }
+                if (entry.nativeFailed && stats != null) stats.nativeFallback("layout_or_resource");
                 boolean scripted = entry.script != null && model != null && model.scripted() && !entry.scriptFailed;
                 boolean inView = event.getFrustum().isVisible(entry.broadBounds());
                 if (scripted && !entry.prepared() && !shadow && inView
@@ -273,6 +368,11 @@ public final class TrackWorldRenderer {
             }
             // Iris fixed-part sources join the same budgeted page build as the other static geometry.
             if (iris) {
+                for (var entry : nativeDynamic) {
+                    var nativeState = entry.nativeState;
+                    uploads = nativeState.parts.drawIris(nativeState.snapshot, null, 1, entry.chunks,
+                            event, level, queue, uploads, stats, budget, shadow);
+                }
                 for (var entry : dynamic) {
                     uploads = entry.parts.drawIris(entry.currentSnapshot, entry.previousSnapshot, entry.snapshotFraction(time),
                             entry.chunks, event, level, queue, uploads, stats, budget, shadow);
@@ -285,6 +385,11 @@ public final class TrackWorldRenderer {
             if (stats != null) stats.grouped(System.nanoTime() - resolveStart);
             TrackStaticBuffers.WORLD.collectStats(stats);
             if (!iris) queue.draw(state, event.getProjectionMatrix(), stats);
+            if (!iris) for (var entry : nativeDynamic) {
+                var nativeState = entry.nativeState;
+                uploads = nativeState.parts.draw(state, nativeState.snapshot, null, 1, entry.chunks,
+                        event, level, uploads, stats);
+            }
             // Shared track scope also owns rigid shaders; each renderer releases its instance attributes.
             if (!iris) for (var entry : dynamic) {
                 uploads = entry.parts.draw(state, entry.currentSnapshot, entry.previousSnapshot, entry.snapshotFraction(time),

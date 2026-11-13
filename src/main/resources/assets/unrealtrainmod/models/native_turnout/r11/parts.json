@@ -1,0 +1,160 @@
+{
+  "sourceSha256": "5642c3c8164bf106aadff16b44a8c540a327626ea901ccad9cbb8efc6a27cdbb",
+  "parts": [
+    {
+      "name": "sleeper",
+      "file": "sleeper.obj",
+      "faces": 1139
+    },
+    {
+      "name": "sleeper_point01",
+      "file": "sleeper_point01.obj",
+      "faces": 2204
+    },
+    {
+      "name": "sleeper_point02L",
+      "file": "sleeper_point02l.obj",
+      "faces": 1348
+    },
+    {
+      "name": "sleeper_point02R",
+      "file": "sleeper_point02r.obj",
+      "faces": 1348
+    },
+    {
+      "name": "sleeper_point03L",
+      "file": "sleeper_point03l.obj",
+      "faces": 1720
+    },
+    {
+      "name": "sleeper_point03R",
+      "file": "sleeper_point03r.obj",
+      "faces": 1720
+    },
+    {
+      "name": "railL",
+      "file": "raill.obj",
+      "faces": 64
+    },
+    {
+      "name": "sideL",
+      "file": "sidel.obj",
+      "faces": 30
+    },
+    {
+      "name": "railR",
+      "file": "railr.obj",
+      "faces": 64
+    },
+    {
+      "name": "sideR",
+      "file": "sider.obj",
+      "faces": 30
+    },
+    {
+      "name": "R0",
+      "file": "r0.obj",
+      "faces": 111
+    },
+    {
+      "name": "L0",
+      "file": "l0.obj",
+      "faces": 111
+    },
+    {
+      "name": "R1",
+      "file": "r1.obj",
+      "faces": 111
+    },
+    {
+      "name": "L1",
+      "file": "l1.obj",
+      "faces": 111
+    },
+    {
+      "name": "wingLf",
+      "file": "winglf.obj",
+      "faces": 502
+    },
+    {
+      "name": "wingRf",
+      "file": "wingrf.obj",
+      "faces": 502
+    },
+    {
+      "name": "wingLr",
+      "file": "winglr.obj",
+      "faces": 62
+    },
+    {
+      "name": "wingRr",
+      "file": "wingrr.obj",
+      "faces": 62
+    },
+    {
+      "name": "noseL2_5",
+      "file": "nosel2_5.obj",
+      "faces": 94
+    },
+    {
+      "name": "noseR2_5",
+      "file": "noser2_5.obj",
+      "faces": 94
+    },
+    {
+      "name": "noseL5",
+      "file": "nosel5.obj",
+      "faces": 94
+    },
+    {
+      "name": "noseR5",
+      "file": "noser5.obj",
+      "faces": 94
+    },
+    {
+      "name": "noseL10",
+      "file": "nosel10.obj",
+      "faces": 94
+    },
+    {
+      "name": "noseR10",
+      "file": "noser10.obj",
+      "faces": 94
+    },
+    {
+      "name": "noseL20",
+      "file": "nosel20.obj",
+      "faces": 94
+    },
+    {
+      "name": "noseR20",
+      "file": "noser20.obj",
+      "faces": 94
+    },
+    {
+      "name": "ballast01",
+      "file": "ballast01.obj",
+      "faces": 288
+    },
+    {
+      "name": "ballast02",
+      "file": "ballast02.obj",
+      "faces": 288
+    },
+    {
+      "name": "ballast03",
+      "file": "ballast03.obj",
+      "faces": 288
+    },
+    {
+      "name": "ballast04",
+      "file": "ballast04.obj",
+      "faces": 288
+    },
+    {
+      "name": "redpoint",
+      "file": "redpoint.obj",
+      "faces": 16
+    }
+  ]
+}

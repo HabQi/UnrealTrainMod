@@ -134,9 +134,9 @@ public final class TrackCommands {
             if (segment.modelId() == null) {
                 context.getSource().sendSuccess(() -> Component.translatable(PREFIX + "model_native"), false);
             } else {
-                var model = RailCatalog.find(ResourceLocation.parse(segment.modelId()));
+                boolean available = RailCatalog.contains(ResourceLocation.parse(segment.modelId()));
                 context.getSource().sendSuccess(() -> Component.translatable(PREFIX + "model_info", segment.modelId(),
-                        Component.translatable(PREFIX + (model == null ? "model_missing" : "model_present"))), false);
+                        Component.translatable(PREFIX + (available ? "model_present" : "model_missing"))), false);
             }
             if (TrackGeometryDefinition.horizontal(segment.geometry()) instanceof BezierTrackGeometry bezier) {
                 context.getSource().sendSuccess(() -> Component.translatable(PREFIX + "controls", bezier.control1().x(),

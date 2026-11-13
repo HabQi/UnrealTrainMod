@@ -35,7 +35,7 @@ public final class ServerPayloadHandlers {
         } else if (payload.hotbarSlot() < 0 || payload.hotbarSlot() > 8
                 || player.getInventory().selected != payload.hotbarSlot() || !stack.is(UnrealTrainMod.RAIL_PLACER.get())) {
             result = ModelSelectionResultPayload.Result.INVALID_ITEM;
-        } else if (RailCatalog.find(payload.modelId()) == null) {
+        } else if (!RailCatalog.contains(payload.modelId())) {
             result = ModelSelectionResultPayload.Result.UNKNOWN_MODEL;
         } else {
             stack.set(ModDataComponents.SELECTED_RAIL_MODEL.get(), payload.modelId());

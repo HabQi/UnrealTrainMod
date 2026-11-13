@@ -32,6 +32,7 @@ final class TrackRenderStats {
     private static final long IDLE_RESET_NANOS = 1_000_000_000L;
     private static final TrackRenderStats INSTANCE = new TrackRenderStats();
     private static final TrackRenderStats SHADOW = new TrackRenderStats();
+    private static final TrackRenderStats PREVIEW = new TrackRenderStats();
 
     /** Geometry source: native quads or an authored rail model. */
     static final int NATIVE = 0;
@@ -69,6 +70,8 @@ final class TrackRenderStats {
     private long windowRenderTypeSetups, windowShaderBinds, windowProgramSwitches;
     private long windowBudgetSkipped, windowSlowBuilds, windowMaxSlowBuild;
     private String windowSlowResource = "n/a";
+    private long nativeLayouts, nativeSamples, nativeParts;
+    private final java.util.Map<String, Long> nativeFallbacks = new java.util.LinkedHashMap<>();
 
     private long windowRangeBefore, windowRangeAfter, windowMultiDrawCalls, windowMultiDrawRanges;
     private long windowLightBytes, windowPageBuilds, windowPageRebuilds, windowResidentPages, windowResidentBytes;
@@ -96,9 +99,10 @@ final class TrackRenderStats {
         if (!ClientConfig.LOG_TRACK_RENDER_STATS.getAsBoolean()) {
             INSTANCE.closeGpuTimer();
             SHADOW.closeGpuTimer();
+            PREVIEW.closeGpuTimer();
             return null;
         }
-        return (scene.equals("shadow") ? SHADOW : INSTANCE).start(level, scene, path);
+        return (scene.equals("shadow") ? SHADOW : scene.equals("preview") ? PREVIEW : INSTANCE).start(level, scene, path);
     }
 
     private static int slot(int source, int structure) {
@@ -116,6 +120,10 @@ final class TrackRenderStats {
         SHADOW.level = null;
         SHADOW.lastFrame = now;
         SHADOW.resetWindow(now);
+        PREVIEW.closeGpuTimer();
+        PREVIEW.level = null;
+        PREVIEW.lastFrame = now;
+        PREVIEW.resetWindow(now);
     }
 
     private TrackRenderStats start(ClientLevel level, String scene, String path) {
@@ -142,6 +150,8 @@ final class TrackRenderStats {
     }
 
     private void resetWindow(long now) {
+        nativeLayouts = nativeSamples = nativeParts = 0;
+        nativeFallbacks.clear();
         windowId++;
         windowGpu = windowMaxGpu = 0L;
         windowGpuSamples = 0;
@@ -199,6 +209,8 @@ final class TrackRenderStats {
         animatedTurnouts = count; jsCalls += calls; jsNanos += nanos;
     }
     void dynamicParts(int count) { dynamicParts += count; }
+    void nativeLayout(int samples, int parts) { nativeLayouts++; nativeSamples += samples; nativeParts += parts; }
+    void nativeFallback(String reason) { nativeFallbacks.merge(reason, 1L, Long::sum); }
     void instanceUpload(long bytes) { instanceBytes += bytes; }
     void activeUpload(long bytes) { activeBytes += bytes; }
     int sharedPartVertices(SharedRailPart part) { return sharedParts.add(part) ? part.source.colors().length : 0; }
@@ -426,6 +438,10 @@ final class TrackRenderStats {
                 avg(windowRangeBefore - windowRangeAfter + windowMultiDrawRanges - windowMultiDrawCalls, frames),
                 windowLightBytes / frames, avg(windowPageBuilds, frames), avg(windowPageRebuilds, frames),
                 avg(windowResidentPages, frames), windowResidentBytes / frames);
+        if (nativeLayouts > 0 || !nativeFallbacks.isEmpty()) {
+            LOGGER.info("Native r11 [{}] layoutBuilds={} centerlineSamples={} placedParts={} fallbackEvents={}",
+                    scene, nativeLayouts, nativeSamples, nativeParts, nativeFallbacks);
+        }
         resetWindow(now);
     }
 

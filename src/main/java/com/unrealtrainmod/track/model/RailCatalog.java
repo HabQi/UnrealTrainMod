@@ -25,11 +25,13 @@ public final class RailCatalog {
     }
 
     public static boolean supportsAssembly(ResourceLocation id, TrackConstructionType kind) {
+        if (NativeTurnoutCatalog.contains(id)) return kind == TrackConstructionType.SIMPLE_TURNOUT;
         var rail = find(id);
         return rail != null && (rail.source().format() != RailDefinition.Format.MQO
                 || kind == TrackConstructionType.SIMPLE_TURNOUT);
     }
 
     public static List<RailDefinition> all() { return models; }
+    public static boolean contains(ResourceLocation id) { return NativeTurnoutCatalog.contains(id) || find(id) != null; }
     public static RailDefinition find(ResourceLocation id) { return id == null ? null : byId.get(id); }
 }

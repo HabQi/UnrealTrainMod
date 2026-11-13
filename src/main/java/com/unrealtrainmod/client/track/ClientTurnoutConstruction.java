@@ -40,6 +40,7 @@ public final class ClientTurnoutConstruction implements ResourceManagerReloadLis
     private TrackAssemblyDefinition.Geometry geometry;
     private Map<BlockPos, Integer> volume = Map.of();
     private Feedback feedback;
+    private Feedback nativeProblem;
     private List<TrackCurveParameters> previewCurves = List.of();
     private ClientTurnoutConstruction() {}
 
@@ -120,11 +121,14 @@ public final class ClientTurnoutConstruction implements ResourceManagerReloadLis
     public void onClone(ClientPlayerNetworkEvent.Clone event) { clear(); }
     @Override public void onResourceManagerReload(ResourceManager manager) { restorePreview(); }
     public void clear() {
+        NativeTurnoutPreview.clear();
+        nativeProblem = null;
         world = null; draft = null; geometry = null; volume = Map.of(); feedback = null;
         previewCurves = List.of();
     }
     TurnoutConstructionPayload draft() { return draft; }
     TrackAssemblyDefinition.Geometry geometry() { return geometry; }
     Map<BlockPos, Integer> volume() { return volume; }
-    public Feedback previewFeedback() { return feedback; }
+    void nativeProblem(Feedback problem) { nativeProblem = problem; }
+    public Feedback previewFeedback() { return nativeProblem == null ? feedback : nativeProblem; }
 }
