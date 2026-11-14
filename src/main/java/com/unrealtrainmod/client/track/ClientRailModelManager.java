@@ -79,6 +79,11 @@ public final class ClientRailModelManager extends SimplePreparableReloadListener
         return sharedParts.computeIfAbsent(mesh, SharedRailPart::new);
     }
 
+    void releaseSharedPart(IndexedMesh mesh) {
+        var part = sharedParts.remove(mesh);
+        if (part != null) part.close();
+    }
+
     void releaseSharedParts() {
         sharedParts.values().forEach(SharedRailPart::close);
         sharedParts.clear();
@@ -282,6 +287,7 @@ public final class ClientRailModelManager extends SimplePreparableReloadListener
         com.unrealtrainmod.client.compat.iris.IrisGeometryCache.clear();
         TrackWorldRenderer.resetSlowBuilds();
         releaseSharedParts();
+        NativeTurnoutModels.clearDerivedSources();
         var manager = Minecraft.getInstance().getTextureManager();
         for (ResourceLocation id : textures) manager.release(id);
         textures.clear();

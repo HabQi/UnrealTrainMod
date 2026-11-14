@@ -10,16 +10,14 @@ import java.util.Map;
 final class NativeTurnoutRenderState implements AutoCloseable {
     final NativeTurnoutLayout layout;
     final RailPartRenderer parts;
-    private final Map<String, List<Source>> sources;
+    private final Map<NativeTurnoutLayout.Part, List<Source>> sources;
     TrackPartSnapshot snapshot;
     private float movement = Float.NaN;
+    private boolean closed;
 
     NativeTurnoutRenderState(NativeTurnoutLayout layout, ClientRailModelManager.Model model) {
         this.layout = layout;
-        sources = NativeTurnoutModels.sources(model.parts());
-        for (var part : layout.parts()) if (!sources.containsKey(part.name())) {
-            throw new IllegalArgumentException("Missing native r11 part: " + part.name());
-        }
+        sources = NativeTurnoutMeshes.prepare(layout, NativeTurnoutModels.sources(model.parts()));
         parts = new RailPartRenderer(layout.origin(), Math.floor(layout.origin().y() / 16) * 16, true);
     }
 
@@ -34,5 +32,8 @@ final class NativeTurnoutRenderState implements AutoCloseable {
     }
 
     void invalidateGpu() { parts.invalidateInstances(); }
-    @Override public void close() { parts.close(); snapshot = null; }
+    @Override public void close() {
+        if (closed) return;
+        closed = true; parts.close(); snapshot = null; NativeTurnoutMeshes.release(sources);
+    }
 }

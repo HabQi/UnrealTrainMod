@@ -258,6 +258,7 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
         NativeTurnoutPreview.clear();
         for (Entry entry : entries.values()) entry.close();
         for (var entry : assemblies.values()) entry.close();
+        NativeTurnoutModels.clearDerivedSources();
         assemblies.clear(); states.clear(); deletedAssemblies.clear();
         scriptFailures.clear();
         entries.clear();
