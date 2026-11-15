@@ -39,22 +39,27 @@ import org.joml.Vector3f;
 /** Rail-only rigid command submission. Shared source meshes belong to the rail model manager. */
 final class RailPartRenderer implements AutoCloseable {
     private record Key(SharedRailPart mesh, ResourceLocation texture, boolean doubleSided, long chunk, boolean moving) {}
-    private record Draw(Key key, PoseStack.Pose pose, int light) {}
+    private record Draw(Key key, PoseStack.Pose pose, int light, PreparedPart prepared, long version) {}
+    /** Upload history holds values, never a mutable prepared pose. */
+    private record InstanceStamp(Key key, PreparedPart prepared, long version, int light) {}
     /** View-independent preparation; camera matrices, visibility and light remain draw-time inputs. */
-    private static final class IrisPart {
+    private static final class PreparedPart {
         private final PoseStack.Pose pose = new PoseStack().last();
         private TrackPartSnapshot.Part part;
         private AABB bounds;
         private long chunk;
         private boolean supported;
         private boolean batched;
+        private SharedRailPart shared;
+        private Key key;
+        private long version;
 
-        void clear() { part = null; bounds = null; }
+        void clear() { part = null; bounds = null; shared = null; key = null; }
     }
     private record IrisFixedMember(Source source, Matrix4f pose) {}
     /** One immutable CPU source per loaded chunk; world pages own the corresponding GPU storage. */
     private static final class IrisFixedGroup implements AutoCloseable {
-        final List<IrisPart> members = new ArrayList<>();
+        final List<PreparedPart> members = new ArrayList<>();
         List<IrisFixedMember> captured = List.of();
         RailTrackGpuMesh mesh;
 
@@ -101,7 +106,10 @@ final class RailPartRenderer implements AutoCloseable {
     }
     private final InstanceBuffer fixedInstances = new InstanceBuffer();
     private final InstanceBuffer movingInstances = new InstanceBuffer();
-    private List<Draw> uploadedFixed = List.of(), uploadedMoving = List.of();
+    private List<InstanceStamp> uploadedFixed = List.of(), uploadedMoving = List.of();
+    private final List<Draw> draws = new ArrayList<>(), fixedDraws = new ArrayList<>(), movingDraws = new ArrayList<>();
+    private final Map<Key, List<Draw>> grouped = new LinkedHashMap<>();
+    private final List<List<Draw>> activeGroups = new ArrayList<>();
     private TrackPartSnapshot classifiedSnapshot;
     private final BitSet movingParts = new BitSet();
     private ByteBufferBuilder fallback;
@@ -110,12 +118,12 @@ final class RailPartRenderer implements AutoCloseable {
     private final TrackVector anchor;
     private final double meshOriginY;
     private final boolean nativeStyle;
-    private final List<IrisPart> irisParts = new ArrayList<>();
+    private final List<PreparedPart> preparedParts = new ArrayList<>();
     private final Map<Long, IrisFixedGroup> irisFixedGroups = new LinkedHashMap<>();
-    private final Matrix4f irisLocal = new Matrix4f();
-    private TrackPartSnapshot irisSnapshot, irisPrevious;
-    private float irisFraction = Float.NaN;
-    private int irisPartCount;
+    private final Matrix4f preparedLocal = new Matrix4f();
+    private TrackPartSnapshot preparedSnapshot, preparedPrevious;
+    private float preparedFraction = Float.NaN;
+    private int preparedPartCount;
 
     RailPartRenderer(TrackVector anchor, double meshOriginY) {
         this(anchor, meshOriginY, false);
@@ -165,19 +173,16 @@ final class RailPartRenderer implements AutoCloseable {
         var camera = event.getCamera().getPosition();
         var modelView = new Matrix4f(event.getModelViewMatrix()).translate((float)(anchor.x() - camera.x),
                 (float)(anchor.y() - camera.y), (float)(anchor.z() - camera.z));
-        var draws = new ArrayList<Draw>();
-        var local = new Matrix4f();
-        var stack = new PoseStack();
-        for (int i = 0; i < snapshot.parts().size(); i++) {
-            var part = snapshot.parts().get(i);
-            snapshot.interpolate(previous, i, fraction, local);
-            long chunk = ChunkPos.asLong((int)Math.floor((anchor.x() + local.m30()) / 16),
-                    (int)Math.floor((anchor.z() + local.m32()) / 16));
+        prepareParts(snapshot, previous, fraction);
+        draws.clear(); activeGroups.clear();
+        for (var group : grouped.values()) group.clear();
+        for (int i = 0; i < preparedPartCount; i++) {
+            var prepared = preparedParts.get(i);
+            long chunk = prepared.chunk;
             if (!chunks.contains(chunk) || !level.hasChunk(ChunkPos.getX(chunk), ChunkPos.getZ(chunk))) continue;
-            var source = part.source();
-            if (source.mesh().indices().length == 0) continue;
-            var shared = ClientRailModelManager.INSTANCE.sharedPart(source.mesh());
-            if (!event.getFrustum().isVisible(shared.transformedBounds(local, anchor.x(), anchor.y(), anchor.z()))) continue;
+            if (prepared.part.source().mesh().indices().length == 0) continue;
+            var shared = prepared.shared;
+            if (!event.getFrustum().isVisible(prepared.bounds)) continue;
             if (StaticModelShader.state() != null && shared.gpu == null) {
                 if (uploads == 0) continue;
                 long uploadStart = stats == null ? 0 : System.nanoTime();
@@ -185,35 +190,33 @@ final class RailPartRenderer implements AutoCloseable {
                 if (stats != null) groupStart += System.nanoTime() - uploadStart;
                 uploads--;
             }
-            stack.pushPose();
-            stack.last().pose().set(local);
-            local.normal(stack.last().normal());
+            var local = prepared.pose.pose();
             int light = lighting.sample(level, local.m30(), local.m31(), local.m32(), 0, 1, 0);
-            boolean moving = part.moving() || movingParts.get(i);
-            draws.add(new Draw(new Key(shared, source.texture(), source.doubleSided(), chunk, moving), stack.last().copy(), light));
-            stack.popPose();
+            var draw = new Draw(prepared.key, prepared.pose, light, prepared, prepared.version);
+            draws.add(draw);
+            var group = grouped.computeIfAbsent(draw.key, ignored -> new ArrayList<>());
+            if (group.isEmpty()) activeGroups.add(group);
+            group.add(draw);
         }
         if (stats != null) stats.dynamicParts(draws.size());
         if (draws.isEmpty()) {
             if (stats != null) stats.grouped(System.nanoTime() - groupStart);
             return uploads;
         }
-        var grouped = new LinkedHashMap<Key, List<Draw>>();
-        for (var draw : draws) grouped.computeIfAbsent(draw.key, ignored -> new ArrayList<>()).add(draw);
-        var groups = grouped.values();
+        var groups = activeGroups;
         boolean instanced = StaticModelShader.state() != null && InstancedModelShader.usable();
         if (stats != null) stats.grouped(System.nanoTime() - groupStart);
-        var fixed = new ArrayList<Draw>();
-        var moving = new ArrayList<Draw>();
+        var fixed = fixedDraws; var moving = movingDraws;
+        fixed.clear(); moving.clear();
         if (instanced) {
             for (var group : groups) (group.getFirst().key.moving ? moving : fixed).addAll(group);
             if (!sameInstances(fixed, uploadedFixed)) {
                 stream(fixedInstances, fixed, stats);
-                uploadedFixed = List.copyOf(fixed);
+                uploadedFixed = captureInstances(fixed);
             }
             if (!sameInstances(moving, uploadedMoving)) {
                 stream(movingInstances, moving, stats);
-                uploadedMoving = List.copyOf(moving);
+                uploadedMoving = captureInstances(moving);
             }
         }
         long start = stats == null ? 0 : System.nanoTime();
@@ -239,15 +242,15 @@ final class RailPartRenderer implements AutoCloseable {
         if (snapshot == null) return uploads;
         var previous = snapshot.matches(before) ? before : null;
         classify(snapshot, previous);
-        prepareIris(snapshot, previous, fraction);
+        prepareParts(snapshot, previous, fraction);
         var camera = event.getCamera().getPosition();
         var modelView = new Matrix4f(event.getModelViewMatrix()).translate((float)(anchor.x() - camera.x),
                 (float)(anchor.y() - camera.y), (float)(anchor.z() - camera.z));
         IrisVertices writer = null;
         boolean lightPrepared = false;
         int drawn = batchIrisFixed(chunks, event, level, queue, budget, shadow, stats);
-        for (int i = 0; i < irisPartCount; i++) {
-            var prepared = irisParts.get(i);
+        for (int i = 0; i < preparedPartCount; i++) {
+            var prepared = preparedParts.get(i);
             if (prepared.batched) continue;
             long chunk = prepared.chunk;
             if (!chunks.contains(chunk) || !level.hasChunk(ChunkPos.getX(chunk), ChunkPos.getZ(chunk))) continue;
@@ -308,8 +311,8 @@ final class RailPartRenderer implements AutoCloseable {
     private int batchIrisFixed(Set<Long> chunks, RenderLevelStageEvent event, ClientLevel level, TrackDrawQueue queue,
                                TrackWorldRenderer.BuildBudget budget, boolean shadow, TrackRenderStats stats) {
         for (var group : irisFixedGroups.values()) group.members.clear();
-        for (int i = 0; i < irisPartCount; i++) {
-            var part = irisParts.get(i);
+        for (int i = 0; i < preparedPartCount; i++) {
+            var part = preparedParts.get(i);
             part.batched = false;
             if (part.part.source().mesh().indices().length == 0 || !part.supported
                     || part.part.moving() || movingParts.get(i) || !chunks.contains(part.chunk)
@@ -356,45 +359,60 @@ final class RailPartRenderer implements AutoCloseable {
         return drawn;
     }
 
-    private void prepareIris(TrackPartSnapshot snapshot, TrackPartSnapshot previous, float fraction) {
-        if (irisSnapshot == snapshot && irisPrevious == previous && irisFraction == fraction) return;
+    private void prepareParts(TrackPartSnapshot snapshot, TrackPartSnapshot previous, float fraction) {
+        if (preparedSnapshot == snapshot && preparedPrevious == previous && preparedFraction == fraction) return;
+        if (!snapshot.matches(preparedSnapshot)) grouped.clear();
         int count = snapshot.parts().size();
         for (int i = 0; i < count; i++) {
-            if (i == irisParts.size()) irisParts.add(new IrisPart());
-            var prepared = irisParts.get(i);
+            if (i == preparedParts.size()) preparedParts.add(new PreparedPart());
+            var prepared = preparedParts.get(i);
             var part = snapshot.parts().get(i);
             if (part.source().mesh().indices().length == 0) {
                 prepared.clear();
                 prepared.part = part;
                 continue;
             }
-            snapshot.interpolate(previous, i, fraction, irisLocal);
+            snapshot.interpolate(previous, i, fraction, preparedLocal);
             if (prepared.part == null || prepared.part.source() != part.source()
-                    || !prepared.pose.pose().equals(irisLocal)) {
-                prepared.pose.pose().set(irisLocal);
-                irisLocal.normal(prepared.pose.normal());
-                var shared = ClientRailModelManager.INSTANCE.sharedPart(part.source().mesh());
-                prepared.bounds = shared.transformedBounds(irisLocal, anchor.x(), anchor.y(), anchor.z());
-                prepared.chunk = ChunkPos.asLong((int)Math.floor((anchor.x() + irisLocal.m30()) / 16),
-                        (int)Math.floor((anchor.z() + irisLocal.m32()) / 16));
-                prepared.supported = IrisGeometryCache.supportsPose(irisLocal);
+                    || !prepared.pose.pose().equals(preparedLocal)) {
+                prepared.pose.pose().set(preparedLocal);
+                preparedLocal.normal(prepared.pose.normal());
+                if (prepared.part == null || prepared.part.source() != part.source())
+                    prepared.shared = ClientRailModelManager.INSTANCE.sharedPart(part.source().mesh());
+                prepared.bounds = prepared.shared.transformedBounds(preparedLocal, anchor.x(), anchor.y(), anchor.z());
+                prepared.version++;
+                prepared.chunk = ChunkPos.asLong((int)Math.floor((anchor.x() + preparedLocal.m30()) / 16),
+                        (int)Math.floor((anchor.z() + preparedLocal.m32()) / 16));
+                prepared.supported = IrisGeometryCache.supportsPose(preparedLocal);
+            }
+            boolean moving = part.moving() || movingParts.get(i);
+            var key = prepared.key;
+            if (key == null || key.mesh != prepared.shared || key.chunk != prepared.chunk || key.moving != moving
+                    || !key.texture.equals(part.source().texture()) || key.doubleSided != part.source().doubleSided()) {
+                prepared.key = new Key(prepared.shared, part.source().texture(), part.source().doubleSided(), prepared.chunk, moving);
             }
             prepared.part = part;
         }
-        for (int i = count; i < irisPartCount; i++) irisParts.get(i).clear();
-        irisPartCount = count;
-        irisSnapshot = snapshot;
-        irisPrevious = previous;
-        irisFraction = fraction;
+        for (int i = count; i < preparedPartCount; i++) preparedParts.get(i).clear();
+        preparedPartCount = count;
+        preparedSnapshot = snapshot;
+        preparedPrevious = previous;
+        preparedFraction = fraction;
     }
 
-    private static boolean sameInstances(List<Draw> current, List<Draw> previous) {
+    private static boolean sameInstances(List<Draw> current, List<InstanceStamp> previous) {
         if (current.size() != previous.size()) return false;
         for (int i = 0; i < current.size(); i++) {
             var a = current.get(i); var b = previous.get(i);
-            if (!a.key.equals(b.key) || a.light != b.light || !a.pose.pose().equals(b.pose.pose())) return false;
+            if (!a.key.equals(b.key) || a.prepared != b.prepared || a.version != b.version || a.light != b.light) return false;
         }
         return true;
+    }
+
+    private static List<InstanceStamp> captureInstances(List<Draw> draws) {
+        var result = new ArrayList<InstanceStamp>(draws.size());
+        for (var draw : draws) result.add(new InstanceStamp(draw.key, draw.prepared, draw.version, draw.light));
+        return List.copyOf(result);
     }
 
     private static void stream(InstanceBuffer buffer, List<Draw> draws, TrackRenderStats stats) {
@@ -487,13 +505,14 @@ final class RailPartRenderer implements AutoCloseable {
     }
 
     private void clearInstances() {
-        for (int i = 0; i < irisPartCount; i++) irisParts.get(i).clear();
-        irisPartCount = 0;
-        irisSnapshot = irisPrevious = null;
-        irisFraction = Float.NaN;
+        for (int i = 0; i < preparedPartCount; i++) preparedParts.get(i).clear();
+        preparedPartCount = 0;
+        preparedSnapshot = preparedPrevious = null;
+        preparedFraction = Float.NaN;
         if (irisFallback != null) { irisFallback.close(); irisFallback = null; }
         fixedInstances.close(); movingInstances.close();
         uploadedFixed = uploadedMoving = List.of();
+        draws.clear(); fixedDraws.clear(); movingDraws.clear(); activeGroups.clear(); grouped.clear();
     }
 
     void removeChunk(long chunk) {

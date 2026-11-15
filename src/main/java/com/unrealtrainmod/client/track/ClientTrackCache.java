@@ -151,7 +151,7 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
                 if (mesh != null) mesh.close();
                 if (entry.script.parts != null) entry.script.parts.removeChunk(chunk);
             }
-            if (entry.nativeState != null) entry.nativeState.parts.removeChunk(chunk);
+            if (entry.nativeState != null) entry.nativeState.removeChunk(chunk);
 
             if (entry.chunks.isEmpty()) { entry.close(); iterator.remove(); }
         }

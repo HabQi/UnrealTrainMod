@@ -139,14 +139,15 @@ public final class TrackWorldRenderer {
                     if (stats != null) { stats.candidate(); stats.visible(); }
                 }
             }
-            if (iris) uploads = preview.parts.drawIris(preview.snapshot, null, 1, chunks, event, level,
+            boolean endpoint = prepareNativeEndpoint(preview, chunks, event, level, queue, budget, false, stats);
+            if (iris && !endpoint) uploads = preview.parts.drawIris(preview.snapshot, null, 1, chunks, event, level,
                     queue, uploads, stats, budget, false);
             uploads = buffers.prepare(level, budget, uploads, stats);
             queue.resolve(buffers, stats);
             buffers.collectStats(stats);
             if (iris) scope.beginTrackBatch();
             queue.draw(state, event.getProjectionMatrix(), stats);
-            if (!iris) uploads = preview.parts.draw(state, preview.snapshot, null, 1, chunks, event, level, uploads, stats);
+            if (!iris && !endpoint) uploads = preview.parts.draw(state, preview.snapshot, null, 1, chunks, event, level, uploads, stats);
         } finally {
             queue.clear(); frameUploads = uploads;
             if (stats != null) { stats.stage(System.nanoTime() - start); stats.endFrame(); stats.logIfDue(); }
@@ -250,7 +251,7 @@ public final class TrackWorldRenderer {
                     if (entry.nativeState != null) {
                         var nativeState = entry.nativeState;
                         nativeState.movement(entry.animations.get("main").position(time));
-                        nativeDynamic.add(entry);
+                        if (!prepareNativeEndpoint(nativeState, entry.chunks, event, level, queue, budget, shadow, stats)) nativeDynamic.add(entry);
                         for (long chunk : entry.chunks) {
                             if (!level.hasChunk(ChunkPos.getX(chunk), ChunkPos.getZ(chunk))) continue;
                             var group = entry.meshes.get(chunk);
@@ -471,6 +472,26 @@ public final class TrackWorldRenderer {
             ready &= TrackStaticBuffers.WORLD.ready(mesh);
         }
         return ready;
+    }
+
+    private static boolean prepareNativeEndpoint(NativeTurnoutRenderState nativeState, Set<Long> chunks,
+                                                  RenderLevelStageEvent event, ClientLevel level, TrackDrawQueue queue,
+                                                  BuildBudget budget, boolean shadow, TrackRenderStats stats) {
+        if (!nativeState.prepareEndpoint(frame, chunks, level, budget, shadow, stats)) return false;
+        var camera = event.getCamera().getPosition();
+        for (var entry : nativeState.endpointMeshes().entrySet()) {
+            long chunk = entry.getKey();
+            if (!chunks.contains(chunk) || !level.hasChunk(ChunkPos.getX(chunk), ChunkPos.getZ(chunk))) continue;
+            var mesh = entry.getValue().mesh();
+            if (stats != null) stats.candidate();
+            if (mesh.isEmpty() || !event.getFrustum().isVisible(mesh.bounds())) continue;
+            var origin = mesh.origin();
+            var view = new Matrix4f(event.getModelViewMatrix()).translate((float)(origin.x()-camera.x),
+                    (float)-camera.y, (float)(origin.z()-camera.z));
+            queue.addStatic(mesh, view, TrackRenderStats.STRUCTURE_ASSEMBLY);
+            if (stats != null) stats.visible();
+        }
+        return true;
     }
 
     private static int drawAll(TrackRenderStats stats, TrackDrawQueue queue, RenderLevelStageEvent event,

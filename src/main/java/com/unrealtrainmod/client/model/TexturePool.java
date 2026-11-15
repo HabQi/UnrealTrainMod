@@ -42,6 +42,8 @@ final class TexturePool implements AutoCloseable {
     private final Set<ResourceLocation> flareTextures = new HashSet<>();
     private ResourceLocation defaultFlare;
 
+    boolean isFullyOpaque(PackageAsset asset) throws IOException { return load(asset).alpha().isFullyOpaque(); }
+
     Entry load(PackageAsset asset) throws IOException {
         var cached = assets.get(asset);
         if (cached != null) return cached;

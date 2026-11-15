@@ -166,6 +166,8 @@
   "unrealtrainmod.configuration.category.performance": "Graphics and Performance",
   "unrealtrainmod.configuration.category.gpuCache": "GPU Caches",
   "unrealtrainmod.configuration.category.general": "General",
+  "unrealtrainmod.configuration.eliminateContactFaces": "Vehicle Contact Face Elimination",
+  "unrealtrainmod.configuration.eliminateContactFaces.tooltip": "Enabled by default. Removes opposite coplanar contact regions between fully opaque axis-aligned rectangles within each IR vehicle object during loading. Applies to native and Iris vehicles and previews, preserving part motion and original texture interpolation. Intentional opposite-facing thin sheets may be removed; disable and reload to restore them. Requires F3+T or a restart.",
   "unrealtrainmod.configuration.translucentRenderMode": "Translucent Rendering Mode",
   "unrealtrainmod.configuration.translucentRenderMode.tooltip": "Default Performance groups static batches by material, avoiding per-frame sorting and dynamic uploads, but overlapping translucent surfaces may blend incorrectly. Sorted draws triangles from far to near, adding CPU work and native index or Iris vertex uploads; it does not guarantee global ordering across vehicles. Applies to native and Iris vehicles and previews on the next relevant draw without a resource reload. Light overlays remain separate.",
   "unrealtrainmod.configuration.translucentRenderMode.PERFORMANCE": "Performance",

@@ -52,7 +52,7 @@ final class NativeTurnoutPreview {
                     failed = true; construction.nativeProblem(Feedback.MISSING_MODEL); return;
                 }
                 var layout = NativeTurnoutLayout.build(geometry, draft.gauge());
-                state = new NativeTurnoutRenderState(layout, model);
+                state = new NativeTurnoutRenderState(layout, model, buffers);
                 state.movement(0);
                 for (var part : layout.parts()) chunks.add(NativeTurnoutMeshes.chunk(part.position()));
             } catch (NativeTurnoutLayout.InvalidLayout exception) {

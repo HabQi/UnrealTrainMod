@@ -18,8 +18,8 @@ public record TrackPartSnapshot(List<Part> parts) {
         private final Source source;
         private final boolean moving;
         private final Matrix4f transform;
-        private final Vector3f position, scale;
-        private final Quaternionf rotation;
+        private record Interpolation(Vector3f position, Vector3f scale, Quaternionf rotation) {}
+        private Interpolation interpolation;
 
         public Part(Source source, Matrix4f matrix) { this(source, matrix, false); }
 
@@ -28,14 +28,20 @@ public record TrackPartSnapshot(List<Part> parts) {
             if (!matrix.isFinite()) throw new IllegalArgumentException("Non-finite track part transform");
             this.source = source;
             transform = new Matrix4f(matrix);
-            position = matrix.getTranslation(new Vector3f());
-            scale = matrix.getScale(new Vector3f());
+        }
+
+        private Interpolation interpolation() {
+            if (interpolation != null) return interpolation;
+            var position = transform.getTranslation(new Vector3f());
+            var scale = transform.getScale(new Vector3f());
             // Preserve a reflected part when decomposing its matrix for interpolation.
-            if (matrix.determinant3x3() < 0) scale.x = -scale.x;
-            rotation = new Quaternionf();
+            if (transform.determinant3x3() < 0) scale.x = -scale.x;
+            var rotation = new Quaternionf();
             if (scale.x != 0 && scale.y != 0 && scale.z != 0) {
-                new Matrix4f(matrix).scale(1 / scale.x, 1 / scale.y, 1 / scale.z).getNormalizedRotation(rotation);
+                new Matrix4f(transform).scale(1 / scale.x, 1 / scale.y, 1 / scale.z).getNormalizedRotation(rotation);
             }
+            interpolation = new Interpolation(position, scale, rotation);
+            return interpolation;
         }
         public Source source() { return source; }
         public boolean moving() { return moving; }
@@ -56,9 +62,10 @@ public record TrackPartSnapshot(List<Part> parts) {
         var before = previous.parts.get(index);
         if (fraction <= 0) return result.set(before.transform);
         if (before.transform.equals(current.transform)) return result.set(current.transform);
-        var position = new Vector3f(before.position).lerp(current.position, fraction);
-        var scale = new Vector3f(before.scale).lerp(current.scale, fraction);
-        var rotation = new Quaternionf(before.rotation).slerp(current.rotation, fraction);
+        var a = before.interpolation(); var b = current.interpolation();
+        var position = new Vector3f(a.position()).lerp(b.position(), fraction);
+        var scale = new Vector3f(a.scale()).lerp(b.scale(), fraction);
+        var rotation = new Quaternionf(a.rotation()).slerp(b.rotation(), fraction);
         return result.translationRotateScale(position, rotation, scale);
     }
 }

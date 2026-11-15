@@ -16,11 +16,13 @@ import java.util.Map;
 import java.util.LinkedHashMap;
 import net.minecraft.world.level.ChunkPos;
 import org.joml.Matrix3f;
+import org.joml.Matrix4f;
 import org.joml.Vector3f;
 
 /** Rigid source expansion occurs once for static pages, never by sampling a path per vertex. */
 final class NativeTurnoutMeshes {
     private NativeTurnoutMeshes() {}
+    record PreparedPart(NativeTurnoutLayout.Part part, List<Source> sources) {}
 
     static Map<NativeTurnoutLayout.Part, List<Source>> prepare(NativeTurnoutLayout layout, Map<String, List<Source>> originals) {
         var result = new LinkedHashMap<NativeTurnoutLayout.Part, List<Source>>();
@@ -43,44 +45,72 @@ final class NativeTurnoutMeshes {
         for (var parts : sources.values()) for (var source : parts) NativeTurnoutModels.release(source);
     }
 
+    static Map<Long, List<PreparedPart>> fixedParts(NativeTurnoutLayout layout, Map<NativeTurnoutLayout.Part, List<Source>> sources) {
+        var result = new LinkedHashMap<Long, List<PreparedPart>>();
+        for (var part : layout.parts()) if (!part.moving()) result.computeIfAbsent(chunk(part.position()), ignored -> new ArrayList<>())
+                .add(new PreparedPart(part, sources.get(part)));
+        result.replaceAll((chunk, parts) -> List.copyOf(parts));
+        return Map.copyOf(result);
+    }
+
+    private static TrackVector origin(NativeTurnoutLayout layout, Long chunk) {
+        return chunk == null ? layout.origin() : new TrackVector(ChunkPos.getX(chunk)*16.0,
+                Math.floor(layout.origin().y()/16)*16, ChunkPos.getZ(chunk)*16.0);
+    }
     static RailTrackMeshData build(NativeTurnoutLayout layout, Map<NativeTurnoutLayout.Part, List<Source>> sources,
                                    Long chunk, boolean includeMoving, float movement) {
-        var origin = chunk == null ? layout.origin() : new TrackVector(ChunkPos.getX(chunk) * 16.0,
-                Math.floor(layout.origin().y() / 16) * 16, ChunkPos.getZ(chunk) * 16.0);
-        var output = new RailMeshAccumulator(origin);
+        var selected = new ArrayList<PreparedPart>();
+        for (var part : layout.parts()) if ((includeMoving || !part.moving()) && (chunk == null || chunk(part.position()) == chunk.longValue()))
+            selected.add(new PreparedPart(part, sources.get(part)));
+        return build(layout, selected, chunk, movement);
+    }
+    static RailTrackMeshData build(NativeTurnoutLayout layout, List<PreparedPart> parts, Long chunk, float movement) {
+        var origin = origin(layout, chunk); var output = new RailMeshAccumulator(origin);
         var position = new Vector3f(); var normal = new Vector3f();
-        for (var part : layout.parts()) {
-            if (!includeMoving && part.moving()) continue;
-            if (chunk != null && chunk(part.position()) != chunk.longValue()) continue;
-            var transform = part.transform(origin, layout.scale(), movement);
-            var normals = transform.normal(new Matrix3f());
-            var partSources = sources.get(part);
-            for (var source : partSources) {
+        for (var prepared : parts) {
+            var part = prepared.part(); var transform = part.transform(origin, layout.scale(), movement);
+            for (var source : prepared.sources()) {
                 var mesh = part.railBend() == null && !part.moving() && part.visibleLength() > 0
-                        ? trim(source.mesh(), (float)(-part.visibleLength() / 2 - 0.0005),
-                                (float)(part.visibleLength() / 2 + 0.0005)) : source.mesh();
-                if (part.bedCut() != null) mesh = NativeTurnoutBedClip.clip(mesh, part.bedCut());
-                var preparedMesh = mesh;
-                output.append(source.texture(), source.doubleSided(), preparedMesh, (vertex, values) -> {
-                    int v = vertex * 8;
-                    float[] data = preparedMesh.vertices();
-                    transform.transformPosition(position.set(data[v], data[v + 1], data[v + 2]));
-                    normals.transform(normal.set(data[v + 5], data[v + 6], data[v + 7]));
-                    if (normal.lengthSquared() > 0) normal.normalize();
-                    values.add(position.x); values.add(position.y); values.add(position.z);
-                    values.add(data[v + 3]); values.add(data[v + 4]);
-                    values.add(normal.x); values.add(normal.y); values.add(normal.z);
-                });
+                        ? trim(source.mesh(), (float)(-part.visibleLength()/2-0.0005), (float)(part.visibleLength()/2+0.0005)) : source.mesh();
+                append(output, source, mesh, transform, position, normal);
             }
         }
         return output.finish();
     }
+    static RailTrackMeshData endpoint(NativeTurnoutLayout layout, long chunk, List<TrackPartSnapshot.Part> parts) {
+        var origin = origin(layout, chunk); var output = new RailMeshAccumulator(origin);
+        var position = new Vector3f(); var normal = new Vector3f();
+        for (var part : parts) {
+            var transform = new Matrix4f().translation((float)(layout.origin().x()-origin.x()),
+                    (float)(layout.origin().y()-origin.y()), (float)(layout.origin().z()-origin.z())).mul(part.transform());
+            append(output, part.source(), part.source().mesh(), transform, position, normal);
+        }
+        return output.finish();
+    }
+    private static void append(RailMeshAccumulator output, Source source, IndexedMesh mesh, Matrix4f transform,
+                               Vector3f position, Vector3f normal) {
+        var normals = transform.normal(new Matrix3f());
+        output.append(source.texture(), source.doubleSided(), mesh, (vertex, values) -> {
+            int v = vertex*8; var data = mesh.vertices();
+            transform.transformPosition(position.set(data[v], data[v+1], data[v+2]));
+            normals.transform(normal.set(data[v+5], data[v+6], data[v+7]));
+            if (normal.lengthSquared() > 0) normal.normalize();
+            values.add(position.x); values.add(position.y); values.add(position.z);
+            values.add(data[v+3]); values.add(data[v+4]); values.add(normal.x); values.add(normal.y); values.add(normal.z);
+        });
+    }
 
-    static TrackPartSnapshot moving(NativeTurnoutLayout layout, Map<NativeTurnoutLayout.Part, List<Source>> sources, float movement) {
+    static List<PreparedPart> movingParts(NativeTurnoutLayout layout, Map<NativeTurnoutLayout.Part, List<Source>> sources) {
+        var result = new ArrayList<PreparedPart>();
+        for (var part : layout.parts()) if (part.moving()) result.add(new PreparedPart(part, sources.get(part)));
+        return List.copyOf(result);
+    }
+
+    static TrackPartSnapshot moving(NativeTurnoutLayout layout, List<PreparedPart> parts, float movement) {
         var result = new ArrayList<TrackPartSnapshot.Part>();
-        for (var part : layout.parts()) if (part.moving()) {
-            var matrix = part.transform(layout.origin(), layout.scale(), movement);
-            for (var source : sources.get(part)) result.add(new TrackPartSnapshot.Part(source, matrix, true));
+        for (var part : parts) {
+            var matrix = part.part().transform(layout.origin(), layout.scale(), movement);
+            for (var source : part.sources()) result.add(new TrackPartSnapshot.Part(source, matrix, true));
         }
         return new TrackPartSnapshot(result);
     }
@@ -124,38 +154,6 @@ final class NativeTurnoutMeshes {
 
     /** Called only by source preparation or static page baking; never by animation submission. */
     static IndexedMesh trim(IndexedMesh mesh, float start, float end) {
-        var vertices = new FloatArrayList(); var colors = new IntArrayList(); var indices = new IntArrayList();
-        for (int triangle = 0; triangle < mesh.indices().length; triangle += 3) {
-            var polygon = new ArrayList<Corner>(3);
-            for (int corner = 0; corner < 3; corner++) {
-                int index = mesh.indices()[triangle + corner];
-                polygon.add(new Corner(java.util.Arrays.copyOfRange(mesh.vertices(), index * 8, index * 8 + 8), mesh.colors()[index]));
-            }
-            var clipped = clip(clip(polygon, start, true), end, false);
-            int first = colors.size();
-            for (var corner : clipped) {
-                for (float value : corner.values()) vertices.add(value);
-                colors.add(corner.color());
-            }
-            for (int i = 1; i + 1 < clipped.size(); i++) { indices.add(first); indices.add(first + i); indices.add(first + i + 1); }
-        }
-        return new IndexedMesh(vertices.toFloatArray(), colors.toIntArray(), indices.toIntArray());
-    }
-    private static List<Corner> clip(List<Corner> input, float plane, boolean keepAbove) {
-        var output = new ArrayList<Corner>();
-        if (input.isEmpty()) return output;
-        var previous = input.getLast(); boolean previousInside = keepAbove ? previous.values()[2] >= plane : previous.values()[2] <= plane;
-        for (var current : input) {
-            boolean inside = keepAbove ? current.values()[2] >= plane : current.values()[2] <= plane;
-            if (inside != previousInside) {
-                float fraction = (plane - previous.values()[2]) / (current.values()[2] - previous.values()[2]);
-                var corner = interpolate(previous, current, fraction);
-                corner.values()[2] = plane;
-                output.add(corner);
-            }
-            if (inside) output.add(current);
-            previous = current; previousInside = inside;
-        }
-        return output;
+        return NativeRailSlices.split(mesh, List.of(start, end)).getFirst();
     }
 }

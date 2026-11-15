@@ -17,6 +17,7 @@ import com.unrealtrainmod.client.renderer.preview.TrainPreviewRenderer;
 import com.unrealtrainmod.client.track.ClientRailModelManager;
 import com.unrealtrainmod.client.track.RailPreviewRenderer;
 import com.unrealtrainmod.model.ModelSource;
+import com.unrealtrainmod.model.ContactFaceEliminator;
 import com.unrealtrainmod.resource.PackageAsset;
 import com.unrealtrainmod.resource.ResourceIds;
 import com.unrealtrainmod.track.model.RailCatalog;
@@ -167,8 +168,12 @@ public final class ClientThumbnailManager extends SimplePreparableReloadListener
             current = ++generation;
         }
         var configs = new LinkedHashMap<Key, PackageAsset>();
+        var irVehicles = new HashSet<Key>();
+        boolean eliminateContactFaces = ClientConfig.ELIMINATE_CONTACT_FACES.get();
         for (var definition : VehicleCatalog.all()) {
-            configs.put(new Key(Kind.VEHICLE, definition.id()), definition.config());
+            var key = new Key(Kind.VEHICLE, definition.id());
+            configs.put(key, definition.config());
+            if (definition.ir() != null) irVehicles.add(key);
         }
         for (var definition : RailCatalog.all()) {
             if (definition.source().format() == RailDefinition.Format.IR_OBJ) {
@@ -197,7 +202,12 @@ public final class ClientThumbnailManager extends SimplePreparableReloadListener
                 String fingerprint = fingerprints.get(archive);
                 if (fingerprint == null) continue;
                 int sampleScale = sampleScale(config.getKey().kind());
-                String digest = ResourceIds.hash(RECIPE + ":sample-scale=" + sampleScale + "\n"
+                String recipe = RECIPE;
+                if (irVehicles.contains(config.getKey())) {
+                    recipe += ":contact-v" + ContactFaceEliminator.VERSION + ":" + eliminateContactFaces;
+                    if (eliminateContactFaces) recipe += ":" + ClientConfig.MAX_PACKAGE_TEXTURE_SIZE.get();
+                }
+                String digest = ResourceIds.hash(recipe + ":sample-scale=" + sampleScale + "\n"
                         + config.getKey().kind() + "\n" + config.getKey().id() + "\n"
                         + config.getValue().entry() + "\n" + fingerprint);
                 var entry = new Entry(ResourceLocation.fromNamespaceAndPath(UnrealTrainMod.MODID, "thumbnail/" + digest),

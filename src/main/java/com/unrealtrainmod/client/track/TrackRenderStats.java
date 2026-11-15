@@ -71,6 +71,7 @@ final class TrackRenderStats {
     private long windowBudgetSkipped, windowSlowBuilds, windowMaxSlowBuild;
     private String windowSlowResource = "n/a";
     private long nativeLayouts, nativeSamples, nativeParts;
+    private long endpointBuilds, endpointHits, endpointBytes, windowEndpointBytes;
     private final java.util.Map<String, Long> nativeFallbacks = new java.util.LinkedHashMap<>();
 
     private long windowRangeBefore, windowRangeAfter, windowMultiDrawCalls, windowMultiDrawRanges;
@@ -151,6 +152,7 @@ final class TrackRenderStats {
 
     private void resetWindow(long now) {
         nativeLayouts = nativeSamples = nativeParts = 0;
+        endpointBuilds = endpointHits = windowEndpointBytes = 0;
         nativeFallbacks.clear();
         windowId++;
         windowGpu = windowMaxGpu = 0L;
@@ -179,6 +181,7 @@ final class TrackRenderStats {
     }
 
     private void resetFrame() {
+        endpointBytes = 0;
         irisProgram = -1;
         rangeBefore = rangeAfter = multiDrawCalls = multiDrawRanges = pageBuilds = pageRebuilds = residentPages = 0;
         lightBytes = residentBytes = 0;
@@ -209,6 +212,9 @@ final class TrackRenderStats {
         animatedTurnouts = count; jsCalls += calls; jsNanos += nanos;
     }
     void dynamicParts(int count) { dynamicParts += count; }
+    void nativeEndpointBuilt() { endpointBuilds++; }
+    void nativeEndpointCache(long bytes, boolean hit) { endpointBytes += bytes; if (hit) endpointHits++; }
+
     void nativeLayout(int samples, int parts) { nativeLayouts++; nativeSamples += samples; nativeParts += parts; }
     void nativeFallback(String reason) { nativeFallbacks.merge(reason, 1L, Long::sum); }
     void instanceUpload(long bytes) { instanceBytes += bytes; }
@@ -325,6 +331,7 @@ final class TrackRenderStats {
     }
 
     void endFrame() {
+        windowEndpointBytes += endpointBytes;
         int drawCount = 0;
         for (int value : draws) drawCount += value;
         gpuTimer.endFrame(drawCount > 0 && builds == 0 && uploads == 0,
@@ -438,9 +445,9 @@ final class TrackRenderStats {
                 avg(windowRangeBefore - windowRangeAfter + windowMultiDrawRanges - windowMultiDrawCalls, frames),
                 windowLightBytes / frames, avg(windowPageBuilds, frames), avg(windowPageRebuilds, frames),
                 avg(windowResidentPages, frames), windowResidentBytes / frames);
-        if (nativeLayouts > 0 || !nativeFallbacks.isEmpty()) {
-            LOGGER.info("Native r11 [{}] layoutBuilds={} centerlineSamples={} placedParts={} fallbackEvents={}",
-                    scene, nativeLayouts, nativeSamples, nativeParts, nativeFallbacks);
+        if (nativeLayouts > 0 || endpointBuilds > 0 || endpointHits > 0 || !nativeFallbacks.isEmpty()) {
+            LOGGER.info("Native r11 [{}] layoutBuilds={} centerlineSamples={} placedParts={} endpointBuilds={} endpointHits={} endpointCpuBytes={} fallbackEvents={}",
+                    scene, nativeLayouts, nativeSamples, nativeParts, endpointBuilds, endpointHits, windowEndpointBytes/frames, nativeFallbacks);
         }
         resetWindow(now);
     }

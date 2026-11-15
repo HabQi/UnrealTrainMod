@@ -127,7 +127,7 @@ public final class NativeTurnoutModels {
         if (RenderSystem.isOnRenderThread()) release.run(); else RenderSystem.recordRenderCall(release::run);
     }
     static synchronized void clearDerivedSources() {
-        DERIVED.clear(); OWNED.clear();
+        DERIVED.clear(); OWNED.clear(); NativeTurnoutCurves.clearProfiles();
     }
 
     static Map<String, List<Source>> sources(List<ClientRailModelManager.Part> parts) {
@@ -153,7 +153,7 @@ public final class NativeTurnoutModels {
     public static String fingerprint(ResourceManager resources) throws IOException {
         try {
             var hash = MessageDigest.getInstance("SHA-256");
-            hash.update("native-r11-layout-6".getBytes(StandardCharsets.UTF_8));
+            hash.update("native-r11-layout-12".getBytes(StandardCharsets.UTF_8));
             var paths = new ArrayList<String>(List.of(ROOT + "parts.json", ROOT + "r11.mtl", TEXTURE.getPath()));
             for (String file : files(resources)) paths.add(ROOT + "parts/" + file);
             for (String path : paths) try (var input = resources.getResourceOrThrow(id(path)).open()) {

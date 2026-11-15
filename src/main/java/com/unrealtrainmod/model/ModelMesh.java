@@ -120,7 +120,7 @@ public record ModelMesh(List<Part> parts, int triangleCount, int fanFallbackCoun
     }
 
     /** Ear clipping on the dominant plane handles concave polygons as well as triangles and quads. */
-    private static int[] triangulate(ModelData.Face face, List<ModelData.Position> positions, float[] normal) throws IOException {
+    static int[] triangulate(ModelData.Face face, List<ModelData.Position> positions, float[] normal) throws IOException {
         int count = face.indices().length;
         if (count == 3) return new int[]{0, 1, 2};
         int axis = Math.abs(normal[0]) > Math.abs(normal[1]) ? 0 : 1;

@@ -16,6 +16,8 @@ final class TextureAlpha {
     private final int constantMask;
     private final int[] partial, opaque;
 
+    boolean isFullyOpaque() { return constantMask == OPAQUE; }
+
     private TextureAlpha(int mask) {
         width = height = stride = 0;
         constantMask = mask;

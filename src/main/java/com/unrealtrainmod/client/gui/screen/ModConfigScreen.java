@@ -53,6 +53,7 @@ public final class ModConfigScreen extends OptionsSubScreen {
         PERFORMANCE("performance",
                 ClientConfig.MAX_PACKAGE_TEXTURE_SIZE,
                 ClientConfig.PBR_QUALITY,
+                ClientConfig.ELIMINATE_CONTACT_FACES,
                 ClientConfig.TRANSLUCENT_RENDER_MODE),
         GPU_CACHE("gpuCache",
                 ClientConfig.BASE_TEXTURE_CACHE_MIB,

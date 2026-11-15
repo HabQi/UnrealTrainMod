@@ -166,6 +166,8 @@
   "unrealtrainmod.configuration.category.performance": "画质与性能",
   "unrealtrainmod.configuration.category.gpuCache": "显存缓存",
   "unrealtrainmod.configuration.category.general": "常规",
+  "unrealtrainmod.configuration.eliminateContactFaces": "车辆接触面消除",
+  "unrealtrainmod.configuration.eliminateContactFaces.tooltip": "默认开启。在加载时消除同一 IR 车辆部件内完全不透明、轴对齐矩形之间的反向共面接触区域，适用于原生与 Iris 车辆及预览。保留部件运动与原始贴图插值；刻意制作的反向薄片可能被消除，可关闭后重载恢复。修改后需 F3+T 或重启。",
   "unrealtrainmod.configuration.translucentRenderMode": "透明渲染模式",
   "unrealtrainmod.configuration.translucentRenderMode.tooltip": "默认性能优先：按材质绘制静态批次，避免逐帧排序及动态上传，但重叠车窗等透明面可能混合不正确。透明排序：按三角形由远到近绘制，增加 CPU 计算及原生索引／Iris 顶点上传开销；不保证不同车辆间的全局透明顺序。适用于原生与 Iris 车辆、预览，下一次相关绘制生效，无需资源重载；车灯覆盖层始终独立绘制。",
   "unrealtrainmod.configuration.translucentRenderMode.PERFORMANCE": "性能优先",

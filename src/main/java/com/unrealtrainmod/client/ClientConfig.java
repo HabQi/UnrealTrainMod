@@ -40,6 +40,14 @@ public final class ClientConfig {
             .translation("unrealtrainmod.configuration.pbrQuality")
             .defineEnum("pbrQuality", PbrQuality.LOW);
 
+    public static final ModConfigSpec.BooleanValue ELIMINATE_CONTACT_FACES = BUILDER
+            .comment("Eliminate opposite coplanar opaque rectangular contact faces within each IR vehicle object. Default true.",
+                    "Preserves part transforms and original texture interpolation; applies to native and Iris rendering.",
+                    "Intentional opposite-facing thin sheets may be removed. Disable and reload to restore the original mesh.",
+                    "Requires F3+T or a restart.")
+            .translation("unrealtrainmod.configuration.eliminateContactFaces")
+            .define("eliminateContactFaces", true);
+
     public static final ModConfigSpec.IntValue BASE_TEXTURE_CACHE_MIB = BUILDER
             .comment("Soft GPU budget in MiB for package base textures and Iris alpha-derived textures. Allocated on first use.",
                     "CPU pixels remain available for alpha masks and re-upload. Does not include vanilla textures, GUI icons or PBR.")

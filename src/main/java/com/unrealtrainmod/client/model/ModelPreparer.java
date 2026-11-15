@@ -7,6 +7,7 @@ package com.unrealtrainmod.client.model;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.unrealtrainmod.client.ClientConfig;
 import com.unrealtrainmod.model.ModelSource;
 import com.unrealtrainmod.vehicle.VehicleAction;
 import com.unrealtrainmod.vehicle.VehicleActions;
@@ -122,7 +123,8 @@ public final class ModelPreparer {
     }
 
     private static ClassifiedSource classifySource(ModelSource source, TexturePool textures, ModelCache cache) throws IOException {
-        var imported = ModelImporter.load(source, cache);
+        var imported = ModelImporter.load(source, cache, ClientConfig.ELIMINATE_CONTACT_FACES.get(),
+                ClientConfig.MAX_PACKAGE_TEXTURE_SIZE.get(), textures::isFullyOpaque);
         var mesh = imported.mesh();
         var parts = new ArrayList<ModelPart>();
         var summaries = new LinkedHashMap<String, MaterialSummary>();
