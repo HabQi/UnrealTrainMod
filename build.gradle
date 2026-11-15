@@ -38,7 +38,7 @@ base {
 
 tasks.named('jar', Jar).configure {
     into('META-INF') {
-        from('LICENSE', 'NOTICE', 'TEMPLATE_LICENSE.txt')
+        from('LICENSE', 'NOTICE', 'ASSET_LICENSE.txt', 'TEMPLATE_LICENSE.txt')
     }
     destinationDirectory = file('D:/我的世界/1.12.2RTM/.minecraft/versions/1.21.1-NeoForge_21.1.264/mods')
 }

@@ -2,11 +2,12 @@ UnrealTrainMod
 
 Copyright (c) 2026 HabQi (https://github.com/HabQi)
 Project: https://github.com/HabQi/UnrealTrainMod
-SPDX-License-Identifier: GPL-3.0-only
+Code: SPDX-License-Identifier: GPL-3.0-only
+Art assets: SPDX-License-Identifier: CC-BY-NC-ND-4.0
 
-UnrealTrainMod is free software: you can redistribute it and/or modify it
-under the terms of the GNU General Public License as published by the
-Free Software Foundation, version 3 only.
+The code of UnrealTrainMod is free software: you can redistribute it
+and/or modify it under the terms of the GNU General Public License as
+published by the Free Software Foundation, version 3 only.
 
 UnrealTrainMod is distributed in the hope that it will be useful,
 but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -16,10 +17,31 @@ GNU General Public License for more details.
 You should have received a copy of the GNU General Public License along
 with this program in LICENSE. If not, see https://www.gnu.org/licenses/.
 
-This project's GPL grant covers rights held by HabQi. Pre-existing
-NeoForge MDK template material remains available under its original MIT
+The GPL grant applies to the code and covers rights held by HabQi.
+Unless otherwise stated, this project's original art assets, including
+models (.mqo, .mqoz, .obj), associated material artwork, textures and
+images (.png, .jpg, .jpeg), are licensed under the Creative Commons
+Attribution-NonCommercial-NoDerivatives 4.0 International license
+(CC BY-NC-ND 4.0), rather than the code's GPL license.
+See ASSET_LICENSE.txt for scope, attribution and license links.
+
+Pre-existing NeoForge MDK template material remains available under its original MIT
 license; see TEMPLATE_LICENSE.txt. Rights independently granted by the
 template's copyright holders under that MIT license remain available.
 Nashorn (org.openjdk.nashorn:nashorn-core, provided by NeoForge at
 runtime) remains subject to GPL version 2 with the Classpath Exception.
 Other third-party components remain subject to their respective licenses.
+
+Sources and implementation references
+
+- Art assets used by the project's native turnout implementation come from E231-500.
+- JavaScript (JS) compatibility for RTM vehicles was developed with reference to
+  the RealTrainModUnofficial project.
+- Cache loading for RTM vehicles was developed with reference to the AppleExtended
+  project.
+- Support for movable parts and walking inside IR vehicles was developed with
+  reference to the Immersive Railroading project.
+
+These source acknowledgements and implementation references do not change the
+copyright ownership or existing license terms of the respective third-party works,
+nor do they constitute relicensing of those works.

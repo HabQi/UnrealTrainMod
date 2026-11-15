@@ -1,0 +1,57 @@
+UnrealTrainMod 美术资源许可声明
+
+Copyright (c) 2026 HabQi (https://github.com/HabQi)
+项目地址：https://github.com/HabQi/UnrealTrainMod
+SPDX-License-Identifier: CC-BY-NC-ND-4.0
+
+除另有明确声明外，本项目原创美术资源按 Creative Commons
+署名—非商业性使用—禁止演绎 4.0 国际许可协议（CC BY-NC-ND 4.0）发布。
+
+适用范围
+
+本声明适用于本仓库及随模组分发的原创美术资源，包括但不限于：
+- 模型：.mqo、.mqoz、.obj 等格式的模型及其配套美术材质资源。
+- 贴图和图像：.png、.jpg、.jpeg 等格式的贴图、图标及其他美术图像。
+- 其他未单独声明许可证的原创美术资源。
+
+本声明不改变代码的现有开源许可证。程序源码、脚本及其他代码仍按
+GPL-3.0-only 发布，完整条款见 LICENSE，相关署名及例外见 NOTICE。
+本声明不对第三方作品重新授权；第三方组件、美术资源及用户自行加载的
+RTM／IR 等资源包仍遵循各自权利人的许可证和授权条件。
+
+美术资源来源
+
+项目原生道岔实现所用的美术资源来自 E231-500。相关资源的原作者署名
+及既有授权条件继续适用，本声明不构成对这些第三方资源的重新授权。
+代码实现的参考项目见 NOTICE 中的“Sources and implementation references”。
+
+许可与署名
+
+在遵守许可协议的前提下，可以出于非商业目的复制、分享未改编的美术资源。
+分享时应保留已提供的作者、版权、许可及免责声明，提供许可协议链接，
+并按协议要求说明修改情况；不得暗示作者为使用者或其使用方式背书。
+不得将这些美术资源用于商业目的；若对资源进行再混合、转换或基于其创作，
+不得分享改编后的作品。不得施加限制他人行使协议所授予权利的法律或技术措施。
+
+署名示例（另有作者署名的资源应保留其实际署名）：
+UnrealTrainMod 美术资源 — HabQi
+https://github.com/HabQi/UnrealTrainMod
+CC BY-NC-ND 4.0 — https://creativecommons.org/licenses/by-nc-nd/4.0/
+
+以上为许可说明，具体权利、义务、例外及免责以完整许可协议为准：
+https://creativecommons.org/licenses/by-nc-nd/4.0/legalcode.zh-hans
+许可摘要：https://creativecommons.org/licenses/by-nc-nd/4.0/deed.zh-hans
+
+English notice
+
+Unless otherwise stated, original art assets in this repository and distributed
+with UnrealTrainMod, including models (.mqo, .mqoz, .obj), associated material
+artwork, textures and images (.png, .jpg, .jpeg), are licensed under the Creative
+Commons Attribution-NonCommercial-NoDerivatives 4.0 International license
+(CC BY-NC-ND 4.0): https://creativecommons.org/licenses/by-nc-nd/4.0/
+
+The code remains licensed under GPL-3.0-only; see LICENSE and NOTICE.
+Third-party works and externally loaded resource packs retain their own licenses.
+Art assets used by the project's native turnout implementation come from E231-500;
+their original attribution and existing license terms continue to apply.
+Full legal terms: https://creativecommons.org/licenses/by-nc-nd/4.0/legalcode.en
