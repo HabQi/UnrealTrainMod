@@ -47,9 +47,14 @@ final class NativeDiamondRenderState {
             var matrix = part.transform(origin, layout.scale());
             var normals = matrix.normal(new Matrix3f());
             for (var source : sources.get(part.name())) {
-                var mesh = source.mesh();
-                output.append(source.texture(), source.doubleSided(), mesh, (index, values) -> {
-                    int v = index*8; var data = mesh.vertices();
+                var mesh = part.visibleLength() > 0 ? NativeTurnoutMeshes.trim(source.mesh(),
+                        (float)(-part.visibleLength()/2-0.0005), (float)(part.visibleLength()/2+0.0005)) : source.mesh();
+                if (part.miterSlope() != 0) mesh = NativeTurnoutMeshes.miter(mesh, (float)part.localX(),
+                        (float)part.localZ(), (float)part.miterSlope(), part.name().equals("wingRm") || part.localZ() < 0);
+                if (part.curve() != null) mesh = NativeTurnoutCurves.follow(mesh, (float)part.localZ(), part.localX(), part.curve());
+                var prepared = mesh;
+                output.append(source.texture(), source.doubleSided(), prepared, (index, values) -> {
+                    int v = index*8; var data = prepared.vertices();
                     matrix.transformPosition(position.set(data[v], data[v+1], data[v+2]));
                     normals.transform(normal.set(data[v+5], data[v+6], data[v+7]));
                     if (normal.lengthSquared() > 0) normal.normalize();

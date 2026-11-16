@@ -156,4 +156,17 @@ final class NativeTurnoutMeshes {
     static IndexedMesh trim(IndexedMesh mesh, float start, float end) {
         return NativeRailSlices.split(mesh, List.of(start, end)).getFirst();
     }
+
+    /** Static rail/wing joint: clip in a linear projection, then restore source coordinates. */
+    static IndexedMesh miter(IndexedMesh mesh, float center, float joint, float slope, boolean forward) {
+        float direction = forward ? 1 : -1;
+        var vertices = mesh.vertices().clone();
+        for (int i = 0; i < vertices.length; i += 8)
+            vertices[i+2] = direction*(vertices[i+2]-joint)+slope*(vertices[i]-center);
+        var result = trim(new IndexedMesh(vertices, mesh.colors(), mesh.indices()), 0, Float.POSITIVE_INFINITY);
+        var data = result.vertices();
+        for (int i = 0; i < data.length; i += 8)
+            data[i+2] = joint+direction*(data[i+2]-slope*(data[i]-center));
+        return result;
+    }
 }

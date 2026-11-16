@@ -144,6 +144,23 @@ final class NativeTurnoutCurves {
         }
     }
 
+    /** Sweep an authored cross section during static baking, retaining its UVs and source profile. */
+    static IndexedMesh follow(IndexedMesh source, float start, double center, NativeRailCurve curve) {
+        float min = Float.POSITIVE_INFINITY, max = Float.NEGATIVE_INFINITY;
+        var vertices = source.vertices();
+        for (int i = 2; i < vertices.length; i += 8) { min = Math.min(min, vertices[i]); max = Math.max(max, vertices[i]); }
+        var cuts = new TreeSet<Float>(); cuts.add(min); cuts.add(max);
+        for (var knot : curve.knots()) {
+            float plane = start+(float)knot.distance();
+            if (plane > min && plane < max) cuts.add(plane);
+        }
+        var sections = new ArrayList<IndexedMesh>(); var sweeps = new HashMap<Float, Sweep>();
+        for (var band : NativeRailSlices.split(source, new ArrayList<>(cuts))) {
+            sweep(band.vertices(), start, center, curve, sweeps); sections.add(band);
+        }
+        return NativeTurnoutMeshes.join(sections);
+    }
+
     static IndexedMesh rail(IndexedMesh source, float length, RailBend bend, double center) {
         if (bend.curve() != null) {
             var sections = new ArrayList<IndexedMesh>(); var sweeps = new HashMap<Float, Sweep>();

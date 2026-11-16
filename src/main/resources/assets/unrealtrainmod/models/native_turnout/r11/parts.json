@@ -155,6 +155,46 @@
       "name": "redpoint",
       "file": "redpoint.obj",
       "faces": 16
+    },
+    {
+      "name": "wingLm",
+      "file": "winglm.obj",
+      "faces": 147
+    },
+    {
+      "name": "wingRm",
+      "file": "wingrm.obj",
+      "faces": 147
+    },
+    {
+      "name": "wingL10",
+      "file": "wingl10.obj",
+      "faces": 135
+    },
+    {
+      "name": "wingR10",
+      "file": "wingr10.obj",
+      "faces": 135
+    },
+    {
+      "name": "wingL2_5",
+      "file": "wingl2_5.obj",
+      "faces": 135
+    },
+    {
+      "name": "wingR2_5",
+      "file": "wingr2_5.obj",
+      "faces": 135
+    },
+    {
+      "name": "wingL5",
+      "file": "wingl5.obj",
+      "faces": 135
+    },
+    {
+      "name": "wingR5",
+      "file": "wingr5.obj",
+      "faces": 135
     }
   ]
 }

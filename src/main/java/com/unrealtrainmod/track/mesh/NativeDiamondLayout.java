@@ -26,9 +26,48 @@ public record NativeDiamondLayout(TrackVector origin, double scale, List<Part> p
     public static final double ORDINARY_PERIOD = 1.5;
     private static final double SLEEPER_HALF_WIDTH = 1.239434, SLEEPER_HALF_LENGTH = 0.820367;
     private static final double WING_X = 0.0311652;
+    private static final double WING_SETBACK = 0.0625;
+    // Authored head faces: wingLr's inside edge at its joint, and wingLm/Rm's working face.
+    private static final double WING_INNER_HEAD_X = -0.00419823, MIDDLE_WORK_X = 1.32916428;
+    private static final double WING_REAR_END = -1.00021492;
+    private static final double NOSE_TIP_X = 0.000016;
     private static final double RAIL_START = -0.8101502, RAIL_END = 0.80895454;
+    private static final double RAIL_HALF_WIDTH = 0.07479225;
     private static final double JOINT_OVERLAP = 0.005;
     private static final double NOSE_X = 0.03129997, NOSE_END = 1.9996259;
+
+    /** Authored cut angles, acute top corners and complete source bounds, in normalized metres. */
+    private enum ShortWing {
+        ANGLE_2_5("2_5", 4.0515653276815415, -0.61218834, -0.98867249),
+        ANGLE_5("5", 8.103755489266485, -0.46188690, -0.65045898),
+        ANGLE_10("10", 16.587985955601223, -0.27731493, -0.37469009);
+
+        static final double TIP_X = 0.01844046, MIN_X = -0.04206725, MAX_X = 0.13510782, MAX_Z = 1.76608551;
+        final String leftName, rightName;
+        final double cutAngle, tipZ, minZ;
+
+        ShortWing(String suffix, double cutAngle, double tipZ, double minZ) {
+            leftName = "wingL"+suffix; rightName = "wingR"+suffix;
+            this.cutAngle = cutAngle; this.tipZ = tipZ; this.minZ = minZ;
+        }
+        static ShortWing nearest(double degrees) {
+            var selected = ANGLE_2_5;
+            double difference = Math.abs(degrees-selected.cutAngle);
+            // Ascending source angles make ties prefer the larger cut angle.
+            for (var candidate : values()) {
+                double next = Math.abs(degrees-candidate.cutAngle);
+                if (next < difference || Math.abs(next-difference) <= 1e-7) {
+                    selected = candidate; difference = next;
+                }
+            }
+            return selected;
+        }
+        static ShortWing forName(String name) {
+            for (var candidate : values())
+                if (name.equals(candidate.leftName) || name.equals(candidate.rightName)) return candidate;
+            return null;
+        }
+    }
 
     public NativeDiamondLayout {
         parts = List.copyOf(parts); ordinary = List.copyOf(ordinary); chunks = Set.copyOf(chunks);
@@ -42,7 +81,15 @@ public record NativeDiamondLayout(TrackVector origin, double scale, List<Part> p
         public InvalidLayout(Problem problem) { super(problem.name()); this.problem = problem; }
         public Problem problem() { return problem; }
     }
-    public record Part(String name, TrackVector position, double yaw, double localX, double localZ, long chunk) {
+    public record Part(String name, TrackVector position, double yaw, double localX, double localZ, long chunk,
+                       double visibleLength, NativeRailCurve curve, double miterSlope) {
+        public Part(String name, TrackVector position, double yaw, double localX, double localZ, long chunk) {
+            this(name, position, yaw, localX, localZ, chunk, 0, null, 0);
+        }
+        public Part(String name, TrackVector position, double yaw, double localX, double localZ, long chunk,
+                    double visibleLength, NativeRailCurve curve) {
+            this(name, position, yaw, localX, localZ, chunk, visibleLength, curve, 0);
+        }
         public Matrix4f transform(TrackVector anchor, double scale) {
             return new Matrix4f().translation((float)(position.x()-anchor.x()), (float)(position.y()-anchor.y()),
                     (float)(position.z()-anchor.z())).rotateY((float)yaw)
@@ -51,7 +98,7 @@ public record NativeDiamondLayout(TrackVector origin, double scale, List<Part> p
     }
     private record Edge(double distance, TrackVector point) {}
     private record Crossing(double first, double second, TrackVector point) {}
-    private record RailEnd(int side, double distance, TrackVector point, double yaw, double overlap) {}
+    private record RailEnd(int side, double distance, TrackVector point, double yaw, double miterSlope) {}
     private record SleeperRow(double second, TrackVector a, TrackVector b, double yaw, double across) {}
     private record SleeperBoundary(double distance, double yaw) {}
     private record Footprint(List<TrackVector> hull, double minX, double minZ, double maxX, double maxZ) {
@@ -65,6 +112,7 @@ public record NativeDiamondLayout(TrackVector origin, double scale, List<Part> p
         final Map<Long, TrackPose> poses = new HashMap<>();
         final Map<Long, List<Edge>> edges = new HashMap<>();
         final List<RailEnd> railEnds = new ArrayList<>();
+        final Map<Integer, Double> wingEnds = new HashMap<>(), noseEnds = new HashMap<>();
         final List<Footprint> modules = new ArrayList<>();
         double coreStart, coreEnd, sleeperStart, sleeperEnd, firstJoint, lastJoint;
         Path(TrackGeometry geometry) { this.geometry = geometry; coreEnd = sleeperEnd = geometry.getLength(); }
@@ -123,12 +171,14 @@ public record NativeDiamondLayout(TrackVector origin, double scale, List<Part> p
             requireSpace(b, joint.second(), 3.5*scale);
             if (sa != sb) acute(parts, a, b, joint, center, sa, sb, degrees, scale);
             else {
-                // Keep the requested fixed overlap by translating complete source modules.
-                double overlap = JOINT_OVERLAP*scale;
-                a.railEnds.add(new RailEnd(sa, joint.first(), joint.point(), yaw(pa), overlap));
-                b.railEnds.add(new RailEnd(sb, joint.second(), joint.point(), yaw(pb), overlap));
+                var middleAnchor = middle(parts, joint.point(), pa, pb, sa, scale);
+                obtuse(parts, a, b, joint, middleAnchor, sa, scale);
+                double slope = -sa*Math.tan(Math.toRadians(degrees)/2);
+                a.railEnds.add(new RailEnd(sa, joint.first(), joint.point(), yaw(pa), slope));
+                b.railEnds.add(new RailEnd(sb, joint.second(), joint.point(), yaw(pb), slope));
             }
         }
+        connections(parts, a, scale); connections(parts, b, scale);
         var core = parts.stream().map(part -> coreFootprint(part, scale)).toList();
         moduleFootprints(a, scale); moduleFootprints(b, scale);
         var ordinary = new ArrayList<OrdinaryRun>();
@@ -266,8 +316,19 @@ public record NativeDiamondLayout(TrackVector origin, double scale, List<Part> p
     }
 
     private static Footprint coreFootprint(Part part, double scale) {
+        if (part.curve() != null) {
+            var points = new ArrayList<TrackVector>();
+            for (var knot : part.curve().knots()) {
+                var point = shifted(part.position(), part.yaw(), knot.point().x()*scale, knot.point().z()*scale);
+                // Rail and nose cross sections extend less than 75 mm from their reference line.
+                for (int x : new int[]{-1, 1}) for (int z : new int[]{-1, 1})
+                    points.add(new TrackVector(point.x()+x*0.075*scale, point.y(), point.z()+z*0.075*scale));
+            }
+            return footprint(points);
+        }
         // Reference bounds of the existing complete r11 components, including guard fasteners.
         double minX, maxX, minZ, maxZ;
+        var shortWing = ShortWing.forName(part.name());
         if (part.name().startsWith("nose")) {
             minX = -0.106092; maxX = 0.106092; minZ = 0; maxZ = NOSE_END;
         } else if (part.name().startsWith("guard")) {
@@ -276,6 +337,12 @@ public record NativeDiamondLayout(TrackVector origin, double scale, List<Part> p
         } else if (part.name().startsWith("wingFront")) {
             minX = -0.049827; maxX = 0.127347; minZ = -0.000001; maxZ = 2.099801;
             if (part.name().endsWith("R")) { minX = -0.127347; maxX = 0.049827; }
+        } else if (part.name().equals("wingLm") || part.name().equals("wingRm")) {
+            minX = 1.10516998; maxX = 1.36041428; minZ = -1.19073715; maxZ = 0.02806633;
+            if (part.name().equals("wingRm")) { minZ = -0.02806633; maxZ = 1.19017517; }
+        } else if (shortWing != null) {
+            minX = ShortWing.MIN_X; maxX = ShortWing.MAX_X; minZ = shortWing.minZ; maxZ = ShortWing.MAX_Z;
+            if (part.name().equals(shortWing.rightName)) { minX = -ShortWing.MAX_X; maxX = -ShortWing.MIN_X; }
         } else {
             minX = -0.043492; maxX = 0.106092; minZ = -1.000215; maxZ = 0;
             if (part.name().equals("wingRr")) { minX = -0.106092; maxX = 0.043492; }
@@ -331,8 +398,7 @@ public record NativeDiamondLayout(TrackVector origin, double scale, List<Part> p
         double ya = direction(a, joint.first(), joint.first()+direction*2*scale);
         double yb = direction(b, joint.second(), joint.second()+direction*2*scale);
         double noseAngle = Math.abs(Math.toDegrees(Math.atan2(Math.sin(yb-ya), Math.cos(yb-ya))));
-        if (noseAngle < 0.5 || noseAngle > 45) throw new InvalidLayout(Problem.ANGLE);
-        String variant = noseAngle < 5 ? "2_5" : noseAngle < 10 ? "5" : noseAngle < 20 ? "10" : "20";
+        String variant = noseVariant(noseAngle);
         boolean right = Math.sin(yb-ya) > 0;
         addPart(parts, (right ? "noseR" : "noseL")+variant, joint.point(), ya, 0, 0);
         addPart(parts, (right ? "noseL" : "noseR")+variant, joint.point(), yb, 0, 0);
@@ -340,14 +406,146 @@ public record NativeDiamondLayout(TrackVector origin, double scale, List<Part> p
                 shifted(joint.point(), ya, (right ? 1 : -1)*NOSE_X*scale, NOSE_END*scale), ya-(direction < 0 ? Math.PI : 0), 0));
         b.railEnds.add(new RailEnd(sb, joint.second()+direction*NOSE_END*scale,
                 shifted(joint.point(), yb, (right ? -1 : 1)*NOSE_X*scale, NOSE_END*scale), yb-(direction < 0 ? Math.PI : 0), 0));
-        double gap = 0.0625*scale/Math.sin(Math.toRadians(degrees));
+        double gap = WING_SETBACK*scale/Math.sin(Math.toRadians(degrees));
         requireSpace(a, joint.first(), 3.5*scale+gap);
         requireSpace(b, joint.second(), 3.5*scale+gap);
         // As on the ordinary turnout, each rear follows the opposite path into the shared joint.
-        wing(parts, right ? "R" : "L", shifted(joint.point(), baseB, 0, -gap), ya,
-                direction(b, joint.second()-direction*scale, joint.second()), scale);
-        wing(parts, right ? "L" : "R", shifted(joint.point(), baseA, 0, -gap), yb,
-                direction(a, joint.first()-direction*scale, joint.first()), scale);
+        double rearA = direction(a, joint.first()-direction*scale, joint.first());
+        double rearB = direction(b, joint.second()-direction*scale, joint.second());
+        var endB = wing(parts, right ? "R" : "L", shifted(joint.point(), baseB, 0, -gap), ya, rearB, scale);
+        var endA = wing(parts, right ? "L" : "R", shifted(joint.point(), baseA, 0, -gap), yb, rearA, scale);
+        a.wingEnds.put(sa, innerStation(a, sa, endA,
+                joint.first()-direction*(gap-WING_REAR_END*scale), scale));
+        b.wingEnds.put(sb, innerStation(b, sb, endB,
+                joint.second()-direction*(gap-WING_REAR_END*scale), scale));
+    }
+
+    private static void obtuse(List<Part> parts, Path a, Path b, Crossing joint, TrackVector middleAnchor, int side, double scale) {
+        var pa = a.at(joint.first()); var pb = b.at(joint.second());
+        double ya = yaw(pa), yb = yaw(pb);
+        boolean right = Math.sin(yb-ya) > 0;
+        int outwardA = -side*(right ? 1 : -1), outwardB = -outwardA;
+        obtusePair(parts, a, b, middleAnchor, side, joint.first(), joint.second(), !right, outwardB, -outwardA,
+                right ? "noseR" : "noseL", (right ? 1 : -1)*NOSE_X, scale);
+        obtusePair(parts, b, a, middleAnchor, side, joint.second(), joint.first(), right, outwardA, -outwardB,
+                right ? "noseL" : "noseR", (right ? -1 : 1)*NOSE_X, scale);
+    }
+
+    private static void obtusePair(List<Part> parts, Path nosePath, Path wingPath, TrackVector middleAnchor, int side,
+                                  double noseStation, double wingStation, boolean leftWing, int wingDirection, int noseDirection,
+                                  String noseName, double center, double scale) {
+        double noseTip = (noseName.equals("noseL") ? 1 : -1)*NOSE_TIP_X;
+        double noseOffset = side*RAIL_X*scale+noseDirection*(noseTip-center)*scale;
+        // Both head tips share the same horizontal target on the middle wing's working-face extension.
+        var middleNormal = wingPath.at(wingStation).lateral();
+        double tip = noseStation;
+        for (int iteration = 0; iteration < 12; iteration++) {
+            var tipPose = nosePath.at(tip);
+            double error = dot(add(nosePath.edge(tip, noseOffset), middleAnchor, -1), middleNormal);
+            if (Math.abs(error) <= 0.000001*scale) break;
+            double derivative = dot(tipPose.tangent(), middleNormal)*(1-noseOffset*tipPose.curvature());
+            tip = Math.clamp(tip-error/derivative, 0, nosePath.length());
+        }
+        if (Math.abs(dot(add(nosePath.edge(tip, noseOffset), middleAnchor, -1), middleNormal)) > 0.00001*scale)
+            throw new InvalidLayout(Problem.SPACE);
+        var target = nosePath.edge(tip, noseOffset);
+        double station = innerStation(wingPath, side, target, wingStation, scale);
+        double wingYaw = yaw(wingPath.at(station))+(wingDirection < 0 ? Math.PI : 0);
+        double front = direction(nosePath, tip, tip+noseDirection*2*scale);
+        double rear = direction(wingPath, station, station+wingDirection*2*scale);
+        double degrees = Math.toDegrees(Math.acos(Math.clamp(Math.abs(Math.cos(rear-front)), 0, 1)));
+        // Source cuts are measured against one branch, so match the half-angle of the local V joint.
+        double halfAngle = Math.toDegrees(Math.acos(Math.clamp(Math.abs(dot(nosePath.at(tip).tangent(),
+                wingPath.at(station).tangent())), 0, 1)))/2;
+        var profile = ShortWing.nearest(halfAngle);
+        var wingTarget = new TrackVector(target.x(), target.y()-0.002, target.z());
+        addPart(parts, leftWing ? profile.leftName : profile.rightName, wingTarget, wingYaw,
+                (leftWing ? 1 : -1)*ShortWing.TIP_X, profile.tipZ);
+        nose(parts, nosePath, side, tip, noseDirection, noseName+noseVariant(degrees), center, scale);
+    }
+
+    private static void nose(List<Part> parts, Path path, int side, double tip, int direction,
+                             String name, double center, double scale) {
+        double tail = tip+direction*NOSE_END*scale;
+        var position = path.edge(tip, side*RAIL_X*scale);
+        double heading = yaw(path.at(tip))+(direction < 0 ? Math.PI : 0);
+        parts.add(new Part(name, position, heading, center, 0, chunk(position), 0,
+                stockCurve(path, side, tip, tail, position, heading, scale)));
+        path.noseEnds.put(side, tail);
+    }
+
+    private static String noseVariant(double degrees) {
+        if (degrees+1e-7 < 0.5 || degrees > 45+1e-7) throw new InvalidLayout(Problem.ANGLE);
+        double angle = degrees+1e-7;
+        return angle < 5 ? "2_5" : angle < 10 ? "5" : angle < 20 ? "10" : "20";
+    }
+
+    private static double innerStation(Path path, int side, TrackVector point, double guess, double scale) {
+        double s = Math.clamp(guess, 0, path.length());
+        for (int iteration = 0; iteration < 12; iteration++) {
+            var pose = path.at(s); var edge = path.edge(s, side*RAIL_X*scale);
+            double delta = dot(add(point, edge, -1), pose.tangent())/(1-side*RAIL_X*scale*pose.curvature());
+            s = Math.clamp(s+delta, 0, path.length());
+            if (Math.abs(delta) < 0.000001*scale) break;
+        }
+        return s;
+    }
+
+    private static void connections(List<Part> parts, Path path, double scale) {
+        for (int side : new int[]{-1, 1}) {
+            double wing = path.wingEnds.get(side), nose = path.noseEnds.get(side);
+            // At large crossing angles the complete nose can already cover the rear wing endpoint.
+            var joint = path.railEnds.stream().filter(end -> end.side() == side && end.miterSlope() != 0).findFirst().orElseThrow();
+            if ((joint.distance()-wing)*(nose-wing) <= 0) continue;
+            double start = Math.min(wing, nose), length = Math.abs(nose-wing);
+            int count = Math.max(1, (int)Math.ceil(length/(0.5*scale)));
+            for (int index = 0; index < count; index++) {
+                double from = start+length*index/count, to = start+length*(index+1)/count;
+                double span = (to-from)/scale;
+                var position = path.edge(from, side*RAIL_X*scale);
+                double heading = yaw(path.at(from));
+                parts.add(new Part(side > 0 ? "railL" : "railR", position, heading, side*RAIL_X, -span/2,
+                        chunk(position), span, stockCurve(path, side, from, to, position, heading, scale)));
+            }
+        }
+    }
+
+    private static NativeRailCurve stockCurve(Path path, int side, double from, double to,
+                                               TrackVector origin, double heading, double scale) {
+        double length = Math.abs(to-from)/scale, parameter = (to-from)/length;
+        double offset = side*RAIL_X*scale;
+        int count = Math.max(1, (int)Math.ceil(length/0.1));
+        var boundaries = new ArrayList<Double>(count+1);
+        for (int i = 0; i <= count; i++) boundaries.add(i == count ? length : length*i/count);
+        var curve = NativeRailCurve.fit(distance -> {
+            double s = from+distance*parameter;
+            var pose = path.at(s); var t = pose.tangent(); var lateral = pose.lateral();
+            double curvature = pose.curvature(), factor = 1-offset*curvature;
+            double lo = Math.max(0, s-0.001*scale), hi = Math.min(path.length(), s+0.001*scale);
+            double derivative = (path.at(hi).curvature()-path.at(lo).curvature())/(hi-lo);
+            var first = new TrackVector(t.x()*factor*parameter, 0, t.z()*factor*parameter);
+            double normal = curvature*factor, squared = parameter*parameter;
+            var second = new TrackVector((lateral.x()*normal-t.x()*offset*derivative)*squared, 0,
+                    (lateral.z()*normal-t.z()*offset*derivative)*squared);
+            return new NativeRailCurve.Knot(distance, path.edge(s, offset), first, second);
+        }, boundaries, 0.00001*scale);
+        return curve.local(0, length, origin, heading, 0, scale, length);
+    }
+
+    private static TrackVector middle(List<Part> parts, TrackVector joint, TrackPose a, TrackPose b, int side, double scale) {
+        // Match the acute wing's head clearance, including its half-gauge reference and source head offset.
+        double inset = (RAIL_X-1.435/2+WING_SETBACK+WING_INNER_HEAD_X)*scale;
+        double shift = -side*inset/(1+dot(a.tangent(), b.tangent()));
+        var anchor = add(add(joint, a.lateral(), shift), b.lateral(), shift);
+        double ya = yaw(a), yb = yaw(b), reverse = side < 0 ? Math.PI : 0;
+        boolean right = Math.sin(yb-ya) > 0;
+        double halfAngle = Math.acos(Math.clamp(dot(a.tangent(), b.tangent()), -1, 1))/2;
+        // Keep the original anchors; statically miter both source ends on their common bisector.
+        double slope = Math.tan(halfAngle);
+        // Reverse each frame and exchange the longitudinal variants so fasteners face into the diamond.
+        parts.add(new Part(right ? "wingRm" : "wingLm", anchor, ya+reverse, MIDDLE_WORK_X, 0, chunk(anchor), 0, null, slope));
+        parts.add(new Part(right ? "wingLm" : "wingRm", anchor, yb+reverse, MIDDLE_WORK_X, 0, chunk(anchor), 0, null, slope));
+        return anchor;
     }
 
     private static double direction(Path path, double from, double to) {
@@ -356,13 +554,14 @@ public record NativeDiamondLayout(TrackVector origin, double scale, List<Part> p
         return Math.atan2(end.x()-start.x(), end.z()-start.z());
     }
 
-    private static void wing(List<Part> parts, String side, TrackVector origin, double front, double rear, double scale) {
+    private static TrackVector wing(List<Part> parts, String side, TrackVector origin, double front, double rear, double scale) {
         double x = (side.equals("L") ? 1 : -1)*WING_X;
         // Extraction preserves source coordinates: both pieces retain the ordinary turnout's front frame.
         addPart(parts, "wingFront"+side, origin, front, 0, 0);
         addPart(parts, "guard"+side, origin, front, 0, 0);
         var joint = shifted(origin, front, x*scale, 0);
         addPart(parts, "wing"+side+"r", shifted(joint, rear, 0, JOINT_OVERLAP*scale), rear, x, 0);
+        return shifted(joint, rear, 0, (JOINT_OVERLAP+WING_REAR_END)*scale);
     }
     private static void sleepers(List<Part> parts, Path a, Path b, Crossing center, double scale) {
         int first = (int)Math.ceil(-center.first()/scale), last = (int)Math.floor((a.length()-center.first())/scale);
@@ -436,17 +635,21 @@ public record NativeDiamondLayout(TrackVector origin, double scale, List<Part> p
     private static void railApproach(List<Part> parts, Path path, RailEnd end, boolean fromStart, double scale) {
         double direction = fromStart ? -1 : 1;
         double length = (RAIL_END-RAIL_START)*scale;
-        double s = end.distance()-direction*end.overlap(), heading = end.yaw();
-        var anchor = shifted(end.point(), heading, 0, -direction*end.overlap());
-        // Pin the original rail end section to the joint, then repeat complete rigid modules outward.
-        // Each next module starts at the preceding physical end. The last may overhang the path.
+        double s = end.distance(), heading = end.yaw(), slope = end.miterSlope();
+        var anchor = end.point();
+        // Place the first source past the joint far enough for a full-width miter.
+        // Repeat subsequent modules from its unchanged outer end.
         while (fromStart ? s > path.coreStart : s < path.coreEnd) {
-            addPart(parts, end.side() > 0 ? "railL" : "railR", anchor, heading,
-                    end.side()*RAIL_X, fromStart ? RAIL_END : RAIL_START);
-            anchor = shifted(anchor, heading, 0, direction*length);
-            s += direction*length;
+            double extension = RAIL_HALF_WIDTH*Math.abs(slope)*scale;
+            double joint = (fromStart ? RAIL_END : RAIL_START)+direction*extension/scale;
+            parts.add(new Part(end.side() > 0 ? "railL" : "railR", anchor, heading,
+                    end.side()*RAIL_X, joint, chunk(anchor), 0, null, slope));
+            double span = length-extension;
+            anchor = shifted(anchor, heading, 0, direction*span);
+            s += direction*span;
             var next = path.edge(s+direction*length, end.side()*RAIL_X*scale);
             heading = Math.atan2(direction*(next.x()-anchor.x()), direction*(next.z()-anchor.z()));
+            slope = 0;
         }
     }
     private static void requireSpace(Path path, double s, double reach) {

@@ -13,7 +13,7 @@ import java.util.function.Predicate;
 
 /** Resource-time extraction of complete connected components; source vertex attributes stay intact. */
 public final class NativeDiamondModels {
-    public static final String RECIPE = "native-diamond-r11-center-out-10";
+    public static final String RECIPE = "native-diamond-r11-center-out-25";
     private NativeDiamondModels() {}
     private record Point(long x, long y, long z) {}
     private record Component(IndexedMesh mesh, double minX, double maxX) {
