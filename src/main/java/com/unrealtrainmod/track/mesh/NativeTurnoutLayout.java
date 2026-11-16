@@ -205,6 +205,7 @@ public record NativeTurnoutLayout(TrackVector origin, double scale, List<Part> p
             double s = row.mainDistance();
             boolean slide = s > toe - 2.5 * scale && s < root * 0.6;
             String kind = s >= crossing.main() ? "sleeper_point01" : slide ? "sleeper_point03" : "sleeper_point02";
+            // The steel reference stays on the original grid, independently of the authored sleeper grouping.
             if (slide && bladeRow == null) {
                 for (int offset = 0; offset < 4; offset++) {
                     double firstRow = s + (-0.5 + offset * 0.5) * scale;
@@ -218,12 +219,15 @@ public record NativeTurnoutLayout(TrackVector origin, double scale, List<Part> p
                     }
                 }
             }
-            boolean onMain = row.mainDistance() - 0.5 * scale < main.length();
-            boolean onBranch = row.branchDistance() - 0.5 * scale < branch.length();
-            if (onMain) fixed(parts, kind + (kind.endsWith("01") ? "" : side > 0 ? "R" : "L"), row.main(),
-                    onBranch ? row.yaw() : yaw(main.at(row.mainDistance())));
-            if (onBranch) fixed(parts, kind + (kind.endsWith("01") ? "" : side > 0 ? "L" : "R"), row.branch(),
-                    onMain ? row.yaw() : yaw(branch.at(row.branchDistance())));
+            for (int pair = 0; pair < 2; pair++) {
+                var sleeperRow = row(main, branch, s + (-0.25 + pair) * scale, index * 2 + pair, scale);
+                boolean onMain = sleeperRow.mainDistance() - 0.25 * scale < main.length();
+                boolean onBranch = sleeperRow.branchDistance() - 0.25 * scale < branch.length();
+                if (onMain) pairedSleeper(parts, kind + (kind.endsWith("01") ? "" : side > 0 ? "R" : "L"), sleeperRow.main(),
+                        onBranch ? sleeperRow.yaw() : yaw(main.at(sleeperRow.mainDistance())));
+                if (onBranch) pairedSleeper(parts, kind + (kind.endsWith("01") ? "" : side > 0 ? "L" : "R"), sleeperRow.branch(),
+                        onMain ? sleeperRow.yaw() : yaw(branch.at(sleeperRow.branchDistance())));
+            }
         }
         if (normal == null || bladeRow == null || bladeRow.mainDistance() >= toe) throw new InvalidLayout(Problem.SPACE);
         var mainTip = edgeOnRow(branch, bladeRow, side * (RAIL_X - HEAD_HALF) * scale, scale);
@@ -631,6 +635,10 @@ public record NativeTurnoutLayout(TrackVector origin, double scale, List<Part> p
     }
     private static double direction(TrackVector a, TrackVector b) {
         return Math.atan2(b.x() - a.x(), b.z() - a.z());
+    }
+    /** Authored sleeper centers are Z=0 and Z=0.5; place their midpoint on the paired row. */
+    private static void pairedSleeper(LinkedHashSet<Part> parts, String name, TrackVector p, double yaw) {
+        parts.add(new Part(name, p, yaw, 0, 0, 0.25, 0, 0, null, null, null, null));
     }
     private static void fixed(LinkedHashSet<Part> parts, String name, TrackVector p, double yaw) {
         parts.add(new Part(name, p, yaw, 0, 0, 0, 0, 0, null, null, null, null));

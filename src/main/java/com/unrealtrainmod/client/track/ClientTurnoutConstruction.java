@@ -130,5 +130,12 @@ public final class ClientTurnoutConstruction implements ResourceManagerReloadLis
     TrackAssemblyDefinition.Geometry geometry() { return geometry; }
     Map<BlockPos, Integer> volume() { return volume; }
     void nativeProblem(Feedback problem) { nativeProblem = problem; }
+    void nativeReady() {
+        nativeProblem = switch (feedback) {
+            case MODEL_UNSUPPORTED, MISSING_MODEL, NATIVE_FROG, NATIVE_SPACE,
+                    NATIVE_DIAMOND_INTERSECTION, NATIVE_DIAMOND_ANGLE, NATIVE_DIAMOND_SPACE -> Feedback.READY;
+            default -> null;
+        };
+    }
     public Feedback previewFeedback() { return nativeProblem == null ? feedback : nativeProblem; }
 }

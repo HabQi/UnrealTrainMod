@@ -698,10 +698,15 @@
   ,"wiring.unrealtrainmod.remove": "Disconnect"
   ,"gui.unrealtrainmod.font.chinese_unicode": "Unicode font is enabled automatically while Chinese is selected.",
   "gui.unrealtrainmod.rail_models.rtm_scope": "Ordinary track and simple turnouts",
-  "item.unrealtrainmod.track_builder.feedback.model_unsupported": "This model does not support this construction type. Native turnout track supports simple turnouts only; RTM rails support ordinary track and simple turnouts.",
+  "item.unrealtrainmod.track_builder.feedback.model_unsupported": "This model does not support this construction type. Native turnout track is for simple turnouts; native diamond track is for diamond crossings. RTM rails support ordinary track and simple turnouts.",
   "gui.unrealtrainmod.rail_models.native_turnout": "Native turnout track",
   "gui.unrealtrainmod.rail_models.builtin": "Built-in track",
   "gui.unrealtrainmod.rail_models.native_scope": "Simple turnouts only; r11 parts with native layout and blade animation",
   "item.unrealtrainmod.track_builder.feedback.native_frog": "The inner rails have no valid crossing for a frog. Adjust the endpoints or curve parameters.",
-  "item.unrealtrainmod.track_builder.feedback.native_space": "There is insufficient space or a conflict between blades, closure rails and the frog. Lengthen the turnout or adjust its angle."
+  "item.unrealtrainmod.track_builder.feedback.native_space": "There is insufficient space or a conflict between blades, closure rails and the frog. Lengthen the turnout or adjust its angle.",
+  "gui.unrealtrainmod.rail_models.native_diamond": "Native diamond crossing track",
+  "gui.unrealtrainmod.rail_models.native_diamond_scope": "Single horizontal diamond crossing, 0.5 to 45 degrees; complete rigid r11 parts with visible joints and underlying overlaps",
+  "item.unrealtrainmod.track_builder.feedback.native_diamond_intersection": "A native diamond needs one interior crossing and four complete rail intersections. Multiple crossings, tangencies and endpoint contacts are unsupported. Adjust the endpoints or curves.",
+  "item.unrealtrainmod.track_builder.feedback.native_diamond_angle": "The acute angle at the center and all rail intersections must be between 0.5 and 45 degrees. Adjust the endpoints or curves.",
+  "item.unrealtrainmod.track_builder.feedback.native_diamond_space": "There is insufficient space for complete native diamond parts. All endpoints must share a height and gauge, with frogs and check rails inside both paths. Lengthen the paths or adjust their curves."
 }

@@ -691,10 +691,15 @@
   ,"wiring.unrealtrainmod.remove": "拆除此段"
   ,"gui.unrealtrainmod.font.chinese_unicode": "选择中文时，游戏全局自动启用 Unicode 字体。",
   "gui.unrealtrainmod.rail_models.rtm_scope": "可铺设普通线路、普通道岔",
-  "item.unrealtrainmod.track_builder.feedback.model_unsupported": "当前模型不支持此施工类型；原生道岔铁轨仅支持普通道岔，RTM 轨道支持普通线路和普通道岔。",
+  "item.unrealtrainmod.track_builder.feedback.model_unsupported": "当前模型不支持此施工类型；原生道岔铁轨仅用于普通道岔，原生菱形交叉铁轨仅用于菱形交叉；RTM 轨道支持普通线路和普通道岔。",
   "gui.unrealtrainmod.rail_models.native_turnout": "原生道岔铁轨",
   "gui.unrealtrainmod.rail_models.builtin": "内置轨道",
   "gui.unrealtrainmod.rail_models.native_scope": "仅用于普通道岔；r11 部件，原生布局与尖轨动画",
   "item.unrealtrainmod.track_builder.feedback.native_frog": "两条内侧钢轨没有有效交点，无法布置辙叉；请调整末端位置或曲线参数。",
-  "item.unrealtrainmod.track_builder.feedback.native_space": "尖轨、连接轨或辙叉的空间不足／发生冲突；请加长道岔或调整分叉角度。"
+  "item.unrealtrainmod.track_builder.feedback.native_space": "尖轨、连接轨或辙叉的空间不足／发生冲突；请加长道岔或调整分叉角度。",
+  "gui.unrealtrainmod.rail_models.native_diamond": "原生菱形交叉铁轨",
+  "gui.unrealtrainmod.rail_models.native_diamond_scope": "仅用于单交点水平菱形交叉，交角 0.5°～45°；完整 r11 部件刚性拼装，接缝及底层交叠保留",
+  "item.unrealtrainmod.track_builder.feedback.native_diamond_intersection": "原生菱形交叉需要唯一内部交点及四处完整钢轨交叉；不支持多重交叉、相切或端点接触。请调整端点或曲线。",
+  "item.unrealtrainmod.track_builder.feedback.native_diamond_angle": "原生菱形交叉的中心及各钢轨交点锐交角须在 0.5°～45°；请调整端点或曲线。",
+  "item.unrealtrainmod.track_builder.feedback.native_diamond_space": "原生菱形交叉部件安放空间不足；四端须同高同轨距，辙叉和护轨须完整位于线路内部。请加长线路或调整曲线。"
 }

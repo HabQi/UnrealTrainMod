@@ -17,6 +17,8 @@ import com.unrealtrainmod.track.mesh.TrackMeshData;
 import com.unrealtrainmod.track.mesh.RailTrackMeshBuilder;
 import com.unrealtrainmod.track.assembly.TrackAssemblyType;
 import com.unrealtrainmod.track.model.RailCatalog;
+import com.unrealtrainmod.track.model.NativeTurnoutCatalog;
+import com.unrealtrainmod.track.mesh.NativeDiamondLayout;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -154,6 +156,50 @@ public final class TrackWorldRenderer {
         }
     }
 
+    static void renderDiamondPreview(RenderLevelStageEvent event, NativeDiamondRenderState preview,
+                                     java.util.Map<Long, TrackStaticMesh> meshes, Set<Long> chunks,
+                                     TrackStaticBuffers buffers, long layoutNanos) {
+        var level = Minecraft.getInstance().level;
+        boolean iris = IrisCompat.active();
+        var stats = TrackRenderStats.begin(level, "preview", "native-diamond-r11");
+        long start = stats == null ? 0 : System.nanoTime()-layoutNanos;
+        var budget = frameBudget; budget.stats = stats;
+        if (stats != null && layoutNanos > 0) {
+            stats.nativeLayout(preview.layout.samples(), preview.layout.partCount()); stats.built(layoutNanos);
+        }
+        int uploads = frameUploads;
+        var queue = DRAW_QUEUE; queue.begin(); buffers.beginView();
+        var camera = event.getCamera().getPosition(); var modelView = new Matrix4f();
+        try (var scope = iris ? new IrisDrawScope() : null;
+             var state = iris ? null : new TrackRenderState(stats)) {
+            RenderSystem.setShaderColor(1, 1, 1, 1);
+            for (long chunk : chunks) {
+                if (!level.hasChunk(ChunkPos.getX(chunk), ChunkPos.getZ(chunk))) continue;
+                var mesh = meshes.get(chunk);
+                if (mesh == null) {
+                    if (!budget.available()) continue;
+                    long buildStart = System.nanoTime();
+                    try { mesh = preview.build(chunk); meshes.put(chunk, mesh); }
+                    finally { budget.pageFinished(buildStart); if (stats != null) stats.built(System.nanoTime()-buildStart); }
+                }
+                if (mesh.isEmpty() || !event.getFrustum().isVisible(mesh.bounds())) continue;
+                buffers.request(mesh, TrackRenderStats.STRUCTURE_ASSEMBLY);
+                var origin = mesh.origin();
+                modelView.set(event.getModelViewMatrix()).translate((float)(origin.x()-camera.x),
+                        (float)-camera.y, (float)(origin.z()-camera.z));
+                queue.addStatic(mesh, new Matrix4f(modelView), TrackRenderStats.STRUCTURE_ASSEMBLY);
+                if (stats != null) { stats.candidate(); stats.visible(); }
+            }
+            uploads = buffers.prepare(level, budget, uploads, stats);
+            queue.resolve(buffers, stats); buffers.collectStats(stats);
+            if (iris) scope.beginTrackBatch();
+            queue.draw(state, event.getProjectionMatrix(), stats);
+        } finally {
+            queue.clear(); frameUploads = uploads;
+            if (stats != null) { stats.stage(System.nanoTime()-start); stats.endFrame(); stats.logIfDue(); }
+        }
+    }
+
     public static void beginFrame() {
         frame++;
         frameBudget = new BuildBudget(null);
@@ -233,7 +279,43 @@ public final class TrackWorldRenderer {
                 if (!entry.rendersModel()) continue;
                 boolean simple = entry.data.definition().type() == TrackAssemblyType.SIMPLE_TURNOUT;
                 var model = ClientRailModelManager.INSTANCE.model(entry.data.modelId());
-                if (com.unrealtrainmod.track.model.NativeTurnoutCatalog.contains(entry.data.modelId()) && !entry.nativeFailed) {
+                boolean diamond = NativeTurnoutCatalog.isDiamond(entry.data.modelId());
+                if (diamond && !entry.nativeFailed) {
+                    if (!event.getFrustum().isVisible(entry.broadBounds())) continue;
+                    if (entry.diamondState == null) {
+                        if (!budget.available()) continue;
+                        long start = System.nanoTime();
+                        try {
+                            if (model == null) throw new IllegalArgumentException("native diamond model unavailable");
+                            var layout = NativeDiamondLayout.build(entry.data.geometry(), entry.data.gauge());
+                            entry.diamondState = new NativeDiamondRenderState(layout, model);
+                            entry.chunks.addAll(layout.chunks());
+                            if (stats != null) stats.nativeLayout(layout.samples(), layout.partCount());
+                        } catch (IllegalArgumentException exception) { entry.failDiamond(exception); }
+                        finally { budget.finished(start, entry.data.modelId(), entry.data.id(), 0, 0, "nativeDiamondLayout"); }
+                    }
+                    if (entry.diamondState != null) {
+                        try {
+                            for (long chunk : entry.chunks) {
+                                if (!level.hasChunk(ChunkPos.getX(chunk), ChunkPos.getZ(chunk))
+                                        || entry.meshes.containsKey(chunk) || !budget.available()) continue;
+                                long start = System.nanoTime();
+                                try { entry.meshes.put(chunk, List.of(entry.diamondState.build(chunk))); }
+                                finally { budget.finished(start, entry.data.modelId(), entry.data.id(), ChunkPos.getX(chunk),
+                                        ChunkPos.getZ(chunk), "nativeDiamondFixedMesh"); }
+                            }
+                        } catch (IllegalArgumentException exception) { entry.failDiamond(exception); }
+                        if (!entry.nativeFailed) {
+                            for (long chunk : entry.chunks) {
+                                if (!level.hasChunk(ChunkPos.getX(chunk), ChunkPos.getZ(chunk))) continue;
+                                var group = entry.meshes.get(chunk);
+                                if (group != null) uploads = drawAll(stats, queue, event, level, camera, modelView, uploads, group);
+                            }
+                            continue;
+                        }
+                    }
+                }
+                if (NativeTurnoutCatalog.R11.toString().equals(entry.data.modelId()) && !entry.nativeFailed) {
                     if (!event.getFrustum().isVisible(entry.broadBounds())) continue;
                     if (entry.nativeState == null) {
                         if (!budget.available()) continue;
@@ -270,6 +352,7 @@ public final class TrackWorldRenderer {
                     }
                 }
                 if (entry.nativeFailed && stats != null) stats.nativeFallback("layout_or_resource");
+                if (diamond && entry.nativeFailed) model = null;
                 boolean scripted = entry.script != null && model != null && model.scripted() && !entry.scriptFailed;
                 boolean inView = event.getFrustum().isVisible(entry.broadBounds());
                 if (scripted && !entry.prepared() && !shadow && inView
@@ -358,7 +441,7 @@ public final class TrackWorldRenderer {
                             var geometry = entry.geometries.get(group.size());
                             long buildStart = System.nanoTime();
                             try {
-                                group.add(build(geometry, entry.data.gauge(), entry.data.modelId(), model, entry.data.id(),
+                                group.add(build(geometry, entry.data.gauge(), diamond && entry.nativeFailed ? null : entry.data.modelId(), model, entry.data.id(),
                                         x, z, !entry.missingReported));
                                 entry.missingReported = true;
                             } finally { budget.finished(buildStart, entry.data.modelId(), entry.data.id(), x, z, "assemblyMesh"); }

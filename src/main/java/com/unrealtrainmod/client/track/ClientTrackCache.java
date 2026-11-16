@@ -291,6 +291,7 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
         final Map<String, TurnoutAnimation> animations = new LinkedHashMap<>();
         final TurnoutEntry script;
         NativeTurnoutRenderState nativeState;
+        NativeDiamondRenderState diamondState;
         boolean nativeFailed;
         boolean scriptFailed, scriptActive, missingReported;
         long scriptPrepareFrame = -1;
@@ -325,6 +326,7 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
         }
 
         AABB broadBounds() {
+            if (diamondState != null) return diamondState.layout.bounds();
             var model = ClientRailModelManager.INSTANCE.model(data.modelId());
             return model == null ? data.bounds() : data.bounds().inflate(model.padding() * model.scaleForGauge(data.gauge()));
         }
@@ -367,11 +369,17 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
 
         @Override public void close() {
             clearFallback();
+            diamondState = null;
             if (nativeState != null) { nativeState.close(); nativeState = null; }
             nativeFailed = false;
             if (script != null) script.close();
             scriptFailed = scriptActive = missingReported = false;
             scriptPrepareFrame = -1;
+        }
+
+        void failDiamond(IllegalArgumentException failure) {
+            LOGGER.warn("Native diamond {} uses simplified fallback: {}", data.id(), failure.getMessage());
+            clearFallback(); diamondState = null; nativeFailed = true;
         }
     }
 

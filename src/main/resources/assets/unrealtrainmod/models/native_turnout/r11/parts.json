@@ -9,27 +9,27 @@
     {
       "name": "sleeper_point01",
       "file": "sleeper_point01.obj",
-      "faces": 2204
+      "faces": 1102
     },
     {
       "name": "sleeper_point02L",
       "file": "sleeper_point02l.obj",
-      "faces": 1348
+      "faces": 674
     },
     {
       "name": "sleeper_point02R",
       "file": "sleeper_point02r.obj",
-      "faces": 1348
+      "faces": 674
     },
     {
       "name": "sleeper_point03L",
       "file": "sleeper_point03l.obj",
-      "faces": 1720
+      "faces": 860
     },
     {
       "name": "sleeper_point03R",
       "file": "sleeper_point03r.obj",
-      "faces": 1720
+      "faces": 860
     },
     {
       "name": "railL",

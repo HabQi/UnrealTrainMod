@@ -215,6 +215,11 @@ public final class ClientRailModelManager extends SimplePreparableReloadListener
                 var nativeModel = NativeTurnoutModels.load(resources);
                 nativeTexture = NativeTurnoutModels.texture(resources);
                 models.put(com.unrealtrainmod.track.model.NativeTurnoutCatalog.R11, nativeModel);
+                try {
+                    models.put(com.unrealtrainmod.track.model.NativeTurnoutCatalog.DIAMOND_R11, NativeDiamondModels.prepare(nativeModel));
+                } catch (IllegalArgumentException exception) {
+                    LOGGER.error("Cannot prepare native r11 diamond: {}", exception.getMessage(), exception);
+                }
             } catch (IOException | IllegalArgumentException exception) {
                 LOGGER.error("Cannot prepare native r11 turnout: {}", exception.getMessage(), exception);
             }

@@ -5,6 +5,8 @@
 package com.unrealtrainmod.track.construction;
 
 import com.unrealtrainmod.track.model.RailCatalog;
+import com.unrealtrainmod.track.model.NativeTurnoutCatalog;
+import com.unrealtrainmod.track.mesh.NativeDiamondLayout;
 import com.unrealtrainmod.UnrealTrainMod;
 import com.unrealtrainmod.item.TurnoutBuilderItem;
 import com.unrealtrainmod.network.payload.OpenTrackCurvePayload;
@@ -198,28 +200,40 @@ public final class TurnoutConstructionManager {
 
     private static Feedback validate(ServerPlayer player, Session s) {
         try {
+            var selectedModel = NativeTurnoutCatalog.constructionModel(player);
+            s.selectedModel = selectedModel;
             var blocks = TrackBlockManager.get(player.serverLevel()); var graph = blocks.graph();
             Feedback stale = refresh(graph, s);
             if (stale != null) return s.validation = stale;
             updateDefaults(graph, s);
             if (s.points.size() == s.kind.pointCount()) {
-                var prepared = graph.prepareAssembly(s.kind, s.points, s.gauge, s.curves, s.edited, s.yaw, null);
-                blocks.validatePlacement(prepared.segments());
-                if (com.unrealtrainmod.track.model.NativeTurnoutCatalog.contains(
-                        com.unrealtrainmod.track.model.NativeTurnoutCatalog.constructionModel(player))) {
-                    if (s.kind != TrackConstructionType.SIMPLE_TURNOUT) return s.validation = Feedback.MODEL_UNSUPPORTED;
-                    if (!s.revision.equals(s.nativeRevision)) {
+                if (NativeTurnoutCatalog.contains(selectedModel)) {
+                    if (!NativeTurnoutCatalog.supports(selectedModel, s.kind)) return s.validation = Feedback.MODEL_UNSUPPORTED;
+                    if (!s.revision.equals(s.nativeRevision) || !selectedModel.equals(s.nativeModel) || s.nativeGauge != s.gauge) {
                         s.nativeRevision = s.revision;
+                        s.nativeModel = selectedModel; s.nativeGauge = s.gauge;
                         s.nativeFeedback = Feedback.READY;
                         try {
-                            com.unrealtrainmod.track.mesh.NativeTurnoutLayout.build(prepared.instance().geometry(), s.gauge);
+                            var nativeGeometry = AssemblyPlacementGeometry.create(s.kind,
+                                    s.points.stream().map(TrackPlacementEndpoint::position).toList(), s.gauge, s.curves, s.yaw);
+                            if (NativeTurnoutCatalog.DIAMOND_R11.equals(selectedModel)) {
+                                NativeDiamondLayout.build(nativeGeometry, s.gauge);
+                            } else com.unrealtrainmod.track.mesh.NativeTurnoutLayout.build(nativeGeometry, s.gauge);
+                        } catch (NativeDiamondLayout.InvalidLayout exception) {
+                            s.nativeFeedback = switch (exception.problem()) {
+                                case INTERSECTION -> Feedback.NATIVE_DIAMOND_INTERSECTION;
+                                case ANGLE -> Feedback.NATIVE_DIAMOND_ANGLE;
+                                case SPACE -> Feedback.NATIVE_DIAMOND_SPACE;
+                            };
                         } catch (com.unrealtrainmod.track.mesh.NativeTurnoutLayout.InvalidLayout exception) {
                             s.nativeFeedback = exception.problem() == com.unrealtrainmod.track.mesh.NativeTurnoutLayout.Problem.FROG
                                     ? Feedback.NATIVE_FROG : Feedback.NATIVE_SPACE;
                         }
                     }
-                    return s.validation = s.nativeFeedback;
+                    if (s.nativeFeedback != Feedback.READY) return s.validation = s.nativeFeedback;
                 }
+                var prepared = graph.prepareAssembly(s.kind, s.points, s.gauge, s.curves, s.edited, s.yaw, null);
+                blocks.validatePlacement(prepared.segments());
                 return s.validation = Feedback.READY;
             }
             AssemblyPlacementGeometry.create(s.kind, s.points.stream().map(TrackPlacementEndpoint::position).toList(),
@@ -406,6 +420,9 @@ public final class TurnoutConstructionManager {
         if (event.getEntity() instanceof ServerPlayer player) {
             var s = SESSIONS.get(player.getUUID());
             if (s != null && !s.matches(player)) clear(player, Feedback.CLEARED);
+            else if (s != null && !Objects.equals(s.selectedModel, NativeTurnoutCatalog.constructionModel(player))) {
+                publish(player, s, validate(player, s));
+            }
         }
     }
     private static void logout(PlayerEvent.PlayerLoggedOutEvent event) { SESSIONS.remove(event.getEntity().getUUID()); }
@@ -432,6 +449,8 @@ public final class TurnoutConstructionManager {
         int editPoint;
         Feedback validation = Feedback.TURNOUT_A;
         UUID nativeRevision;
+        ResourceLocation selectedModel, nativeModel;
+        double nativeGauge = Double.NaN;
         Feedback nativeFeedback;
         Session(ServerPlayer player, TrackConstructionType kind) {
             this.player = player; this.kind = kind; level = player.serverLevel(); yaw = player.getYRot();

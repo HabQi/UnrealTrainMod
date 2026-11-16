@@ -3,8 +3,8 @@ package com.unrealtrainmod.client.track;
 
 import com.unrealtrainmod.network.payload.TrackConstructionPayload.Feedback;
 import com.unrealtrainmod.track.assembly.TrackAssemblyDefinition;
-import com.unrealtrainmod.track.construction.TrackConstructionType;
 import com.unrealtrainmod.track.mesh.NativeTurnoutLayout;
+import com.unrealtrainmod.track.mesh.NativeDiamondLayout;
 import com.unrealtrainmod.track.model.NativeTurnoutCatalog;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -18,6 +18,7 @@ final class NativeTurnoutPreview {
     private static TrackAssemblyDefinition.Geometry geometry;
     private static ClientRailModelManager.Model model;
     private static NativeTurnoutRenderState state;
+    private static NativeDiamondRenderState diamondState;
     private static final Map<Long, TrackStaticMesh> meshes = new LinkedHashMap<>();
     private static final Set<Long> chunks = new LinkedHashSet<>();
     private static final TrackStaticBuffers buffers = new TrackStaticBuffers(false);
@@ -32,11 +33,12 @@ final class NativeTurnoutPreview {
             clear(); construction.nativeProblem(null); return;
         }
         var draft = construction.draft();
-        if (draft.kind() != TrackConstructionType.SIMPLE_TURNOUT) {
+        var selected = NativeTurnoutCatalog.constructionModel(player);
+        if (!NativeTurnoutCatalog.supports(selected, draft.kind())) {
             clear(); construction.nativeProblem(Feedback.MODEL_UNSUPPORTED); return;
         }
         var current = construction.geometry();
-        var currentModel = ClientRailModelManager.INSTANCE.model(NativeTurnoutCatalog.R11);
+        var currentModel = ClientRailModelManager.INSTANCE.model(selected);
         if (current == null || draft.points().size() != draft.kind().pointCount()) {
             clear(); construction.nativeProblem(null); return;
         }
@@ -45,16 +47,30 @@ final class NativeTurnoutPreview {
             construction.nativeProblem(null);
         }
         long layoutNanos = 0;
-        if (!failed && state == null && TrackWorldRenderer.previewBudget().available()) {
+        if (!failed && state == null && diamondState == null && TrackWorldRenderer.previewBudget().available()) {
             long start = System.nanoTime();
             try {
                 if (model == null) {
                     failed = true; construction.nativeProblem(Feedback.MISSING_MODEL); return;
                 }
-                var layout = NativeTurnoutLayout.build(geometry, draft.gauge());
-                state = new NativeTurnoutRenderState(layout, model, buffers);
-                state.movement(0);
-                for (var part : layout.parts()) chunks.add(NativeTurnoutMeshes.chunk(part.position()));
+                if (NativeTurnoutCatalog.DIAMOND_R11.equals(selected)) {
+                    var layout = NativeDiamondLayout.build(geometry, draft.gauge());
+                    diamondState = new NativeDiamondRenderState(layout, model);
+                    chunks.addAll(layout.chunks());
+                } else {
+                    var layout = NativeTurnoutLayout.build(geometry, draft.gauge());
+                    state = new NativeTurnoutRenderState(layout, model, buffers);
+                    state.movement(0);
+                    for (var part : layout.parts()) chunks.add(NativeTurnoutMeshes.chunk(part.position()));
+                }
+                construction.nativeReady();
+            } catch (NativeDiamondLayout.InvalidLayout exception) {
+                failed = true;
+                construction.nativeProblem(switch (exception.problem()) {
+                    case INTERSECTION -> Feedback.NATIVE_DIAMOND_INTERSECTION;
+                    case ANGLE -> Feedback.NATIVE_DIAMOND_ANGLE;
+                    case SPACE -> Feedback.NATIVE_DIAMOND_SPACE;
+                });
             } catch (NativeTurnoutLayout.InvalidLayout exception) {
                 failed = true;
                 construction.nativeProblem(exception.problem() == NativeTurnoutLayout.Problem.FROG
@@ -68,7 +84,18 @@ final class NativeTurnoutPreview {
                 TrackWorldRenderer.previewBudget().pageFinished(start);
             }
         }
-        if (state != null) TrackWorldRenderer.renderNativePreview(event, state, meshes, chunks, buffers, layoutNanos);
+        if (state != null || diamondState != null) {
+            construction.nativeReady();
+            try {
+                if (diamondState != null) TrackWorldRenderer.renderDiamondPreview(event, diamondState, meshes, chunks, buffers, layoutNanos);
+                else TrackWorldRenderer.renderNativePreview(event, state, meshes, chunks, buffers, layoutNanos);
+            } catch (IllegalArgumentException exception) {
+                clear(); failed = true; geometry = current; model = currentModel;
+                construction.nativeProblem(Feedback.MISSING_MODEL);
+                org.slf4j.LoggerFactory.getLogger(NativeTurnoutPreview.class)
+                        .warn("Native construction preview unavailable: {}", exception.getMessage());
+            }
+        }
     }
 
     static void invalidateGpu() {
@@ -78,6 +105,6 @@ final class NativeTurnoutPreview {
     static void clear() {
         buffers.close(); meshes.clear(); chunks.clear();
         if (state != null) state.close();
-        state = null; geometry = null; model = null; failed = false;
+        state = null; diamondState = null; geometry = null; model = null; failed = false;
     }
 }

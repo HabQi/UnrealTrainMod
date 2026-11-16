@@ -25,7 +25,7 @@ public final class RailCatalog {
     }
 
     public static boolean supportsAssembly(ResourceLocation id, TrackConstructionType kind) {
-        if (NativeTurnoutCatalog.contains(id)) return kind == TrackConstructionType.SIMPLE_TURNOUT;
+        if (NativeTurnoutCatalog.contains(id)) return NativeTurnoutCatalog.supports(id, kind);
         var rail = find(id);
         return rail != null && (rail.source().format() != RailDefinition.Format.MQO
                 || kind == TrackConstructionType.SIMPLE_TURNOUT);

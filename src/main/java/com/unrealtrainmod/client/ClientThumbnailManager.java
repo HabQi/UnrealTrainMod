@@ -185,14 +185,18 @@ public final class ClientThumbnailManager extends SimplePreparableReloadListener
         var images = new HashMap<Key, NativeImage>();
         try {
             try {
-                var key = new Key(Kind.RAIL, com.unrealtrainmod.track.model.NativeTurnoutCatalog.R11);
-                String digest = ResourceIds.hash(RECIPE + "\nnative-turnout\n"
-                        + com.unrealtrainmod.client.track.NativeTurnoutModels.fingerprint(resources));
-                var entry = new Entry(ResourceLocation.fromNamespaceAndPath(UnrealTrainMod.MODID, "thumbnail/" + digest),
-                        directory.resolve(digest + ".png"));
-                preparedEntries.put(key, entry);
-                var image = read(entry.file(), sampleScale(Kind.RAIL));
-                if (image != null) images.put(key, image);
+                String source = com.unrealtrainmod.client.track.NativeTurnoutModels.fingerprint(resources);
+                for (var id : com.unrealtrainmod.track.model.NativeTurnoutCatalog.all()) {
+                    var key = new Key(Kind.RAIL, id);
+                    String layout = com.unrealtrainmod.track.model.NativeTurnoutCatalog.DIAMOND_R11.equals(id)
+                            ? com.unrealtrainmod.client.track.NativeDiamondModels.RECIPE : "native-turnout";
+                    String digest = ResourceIds.hash(RECIPE + "\n" + layout + "\n" + source);
+                    var entry = new Entry(ResourceLocation.fromNamespaceAndPath(UnrealTrainMod.MODID, "thumbnail/" + digest),
+                            directory.resolve(digest + ".png"));
+                    preparedEntries.put(key, entry);
+                    var image = read(entry.file(), sampleScale(Kind.RAIL));
+                    if (image != null) images.put(key, image);
+                }
             } catch (IOException exception) {
                 LOGGER.warn("Cannot prepare native turnout thumbnail: {}", exception.getMessage());
             }

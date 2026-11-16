@@ -91,6 +91,8 @@ public final class TurnoutConstructionRenderer {
                 double direction = port == null ? 0 : ((port.outwardYaw() % 360) + 540) % 360 - 180;
                 String label = port == null ? name : String.format(Locale.ROOT, "%s  %.1f°", name, direction);
                 if (i == 0 && (state.previewFeedback() == Feedback.NATIVE_FROG || state.previewFeedback() == Feedback.NATIVE_SPACE
+                        || state.previewFeedback() == Feedback.NATIVE_DIAMOND_INTERSECTION
+                        || state.previewFeedback() == Feedback.NATIVE_DIAMOND_ANGLE || state.previewFeedback() == Feedback.NATIVE_DIAMOND_SPACE
                         || state.previewFeedback() == Feedback.MODEL_UNSUPPORTED || state.previewFeedback() == Feedback.MISSING_MODEL)) {
                     label += " " + Component.translatable(state.previewFeedback().translationKey()).getString();
                 }
