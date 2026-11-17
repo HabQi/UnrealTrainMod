@@ -2,6 +2,7 @@
 package com.unrealtrainmod.client.track;
 
 import com.unrealtrainmod.track.geometry.TrackVector;
+import com.unrealtrainmod.model.IndexedMesh;
 import com.unrealtrainmod.track.mesh.NativeDiamondLayout;
 import com.unrealtrainmod.track.mesh.RailMeshAccumulator;
 import com.unrealtrainmod.track.mesh.RailTrackMeshBuilder;
@@ -19,6 +20,7 @@ final class NativeDiamondRenderState {
     final NativeDiamondLayout layout;
     private final Map<String, List<Source>> sources;
     private final Map<Long, List<NativeDiamondLayout.Part>> chunks;
+    private final Map<NativeDiamondLayout.Part,List<Source>> fixedRails = new java.util.HashMap<>();
 
     NativeDiamondRenderState(NativeDiamondLayout layout, ClientRailModelManager.Model model) {
         this.layout = layout;
@@ -26,33 +28,41 @@ final class NativeDiamondRenderState {
         for (var part : layout.parts()) if (!sources.containsKey(part.name())) {
             throw new IllegalArgumentException("Missing native diamond part: "+part.name());
         }
-        if (!sources.containsKey("sleeper")) throw new IllegalArgumentException("Missing native diamond part: sleeper");
+        if (!sources.containsKey("sleeper_support")) throw new IllegalArgumentException("Missing native diamond part: sleeper_support");
         var groups = new LinkedHashMap<Long, List<NativeDiamondLayout.Part>>();
-        for (var part : layout.parts()) groups.computeIfAbsent(part.chunk(), ignored -> new java.util.ArrayList<>()).add(part);
+        for (var part : layout.parts()) {
+            var keys = List.of(part.chunk());
+            if (isLongRail(part)) {
+                var prepared = sources.get(part.name()).stream().map(source -> new Source(source.part(),source.texture(),source.doubleSided(),mesh(part,source))).toList();
+                fixedRails.put(part,prepared);
+                keys = NativeTurnoutMeshes.railChunks(layout.origin(),part.transform(layout.origin(),layout.scale()),prepared,layout.scale());
+            }
+            for (long key : keys) groups.computeIfAbsent(key,ignored -> new java.util.ArrayList<>()).add(part);
+        }
         groups.replaceAll((chunk, parts) -> List.copyOf(parts));
         chunks = Map.copyOf(groups);
     }
-    TrackStaticMesh build(long chunk) { return new RailTrackGpuMesh(build(layout, sources, chunk, chunks.getOrDefault(chunk, List.of()))); }
+    TrackStaticMesh build(long chunk) { return new RailTrackGpuMesh(build(layout, sources, chunk, chunks.getOrDefault(chunk, List.of()),fixedRails)); }
     static RailTrackMeshData build(NativeDiamondLayout layout, Map<String, List<Source>> sources, Long chunk) {
-        return build(layout, sources, chunk, layout.parts());
+        var selected = chunk == null ? layout.parts() : layout.parts().stream().filter(part -> part.chunk() == chunk.longValue()).toList();
+        return build(layout, sources, chunk, selected,Map.of());
     }
     private static RailTrackMeshData build(NativeDiamondLayout layout, Map<String, List<Source>> sources,
-                                           Long chunk, List<NativeDiamondLayout.Part> parts) {
+                                           Long chunk, List<NativeDiamondLayout.Part> parts, Map<NativeDiamondLayout.Part,List<Source>> fixedRails) {
         var origin = chunk == null ? layout.origin() : new TrackVector(ChunkPos.getX(chunk)*16.0,
                 Math.floor(layout.origin().y()/16)*16, ChunkPos.getZ(chunk)*16.0);
         var output = new RailMeshAccumulator(origin);
         var position = new Vector3f(); var normal = new Vector3f();
         for (var part : parts) {
-            if (chunk != null && part.chunk() != chunk.longValue()) continue;
             var matrix = part.transform(origin, layout.scale());
             var normals = matrix.normal(new Matrix3f());
-            for (var source : sources.get(part.name())) {
-                var mesh = part.visibleLength() > 0 ? NativeTurnoutMeshes.trim(source.mesh(),
-                        (float)(-part.visibleLength()/2-0.0005), (float)(part.visibleLength()/2+0.0005)) : source.mesh();
-                if (part.miterSlope() != 0) mesh = NativeTurnoutMeshes.miter(mesh, (float)part.localX(),
-                        (float)part.localZ(), (float)part.miterSlope(), part.name().equals("wingRm") || part.localZ() < 0);
-                if (part.curve() != null) mesh = NativeTurnoutCurves.follow(mesh, (float)part.localZ(), part.localX(), part.curve());
-                var prepared = mesh;
+            var cached = fixedRails.get(part);
+            for (var source : cached == null ? sources.get(part.name()) : cached) {
+                var prepared = cached == null ? mesh(part,source) : source.mesh();
+                if (chunk != null && isLongRail(part)) {
+                    NativeTurnoutMeshes.appendRailChunk(output,source,prepared,matrix,position,normal);
+                    continue;
+                }
                 output.append(source.texture(), source.doubleSided(), prepared, (index, values) -> {
                     int v = index*8; var data = prepared.vertices();
                     matrix.transformPosition(position.set(data[v], data[v+1], data[v+2]));
@@ -66,10 +76,27 @@ final class NativeDiamondRenderState {
         }
         for (var run : layout.ordinary()) {
             if (chunk == null) {
-                for (long key : layout.chunks()) appendOrdinary(output, origin, layout.scale(), sources.get("sleeper"), run, key);
-            } else appendOrdinary(output, origin, layout.scale(), sources.get("sleeper"), run, chunk);
+                for (long key : layout.chunks()) appendOrdinary(output, origin, layout.scale(), sources.get("sleeper_support"), run, key);
+            } else appendOrdinary(output, origin, layout.scale(), sources.get("sleeper_support"), run, chunk);
         }
         return output.finish();
+    }
+
+    static IndexedMesh mesh(NativeDiamondLayout.Part part, Source source) {
+        if (isLongRail(part)) {
+            double start = part.localZ(), end = start+part.visibleLength();
+            return NativeTurnoutCurves.fixedRail(source.mesh(),start,end,part.localX(),part.curve(),
+                    part.startMiter() ? part.miterSlope() : 0,part.startMiter() ? 0 : part.miterSlope());
+        }
+        var mesh = part.visibleLength() > 0 ? NativeTurnoutMeshes.trim(source.mesh(),
+                (float)(-part.visibleLength()/2-0.0005), (float)(part.visibleLength()/2+0.0005)) : source.mesh();
+        if (part.miterSlope() != 0) mesh = NativeTurnoutMeshes.miter(mesh, (float)part.localX(),
+                (float)part.localZ(), (float)part.miterSlope(), part.name().equals("wingRm") || part.localZ() < 0);
+        if (part.curve() != null) mesh = NativeTurnoutCurves.follow(mesh, (float)part.localZ(), part.localX(), part.curve());
+        return mesh;
+    }
+    private static boolean isLongRail(NativeDiamondLayout.Part part) {
+        return (part.name().equals("railL") || part.name().equals("railR")) && part.visibleLength() > 0 && part.curve() != null;
     }
 
     private static void appendOrdinary(RailMeshAccumulator output, TrackVector origin, double scale,

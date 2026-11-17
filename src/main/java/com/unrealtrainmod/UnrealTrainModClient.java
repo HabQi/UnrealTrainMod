@@ -122,6 +122,7 @@ public class UnrealTrainModClient {
         // Expose the client configuration in the Mods screen.
         container.registerExtensionPoint(IConfigScreenFactory.class, ModConfigScreen::new);
         NeoForge.EVENT_BUS.addListener(UnrealTrainModClient::onGameShuttingDown);
+        NeoForge.EVENT_BUS.addListener(com.unrealtrainmod.client.track.NativeScissorsExport::register);
         NeoForge.EVENT_BUS.addListener(ActivationWarningOverlay::render);
         NeoForge.EVENT_BUS.addListener(TrainDebugOverlay::render);
         NeoForge.EVENT_BUS.addListener(TrainDebugOverlay::onSync);

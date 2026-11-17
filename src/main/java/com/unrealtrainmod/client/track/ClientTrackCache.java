@@ -152,6 +152,7 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
                 if (entry.script.parts != null) entry.script.parts.removeChunk(chunk);
             }
             if (entry.nativeState != null) entry.nativeState.removeChunk(chunk);
+            if (entry.scissorsState != null) entry.scissorsState.removeChunk(chunk);
 
             if (entry.chunks.isEmpty()) { entry.close(); iterator.remove(); }
         }
@@ -207,12 +208,14 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
 
     /** Backend switches retain CPU geometry, scripts and animation timelines. */
     public void invalidateGpuBuffers() {
-        NativeTurnoutPreview.invalidateGpu();
         for (var entry : entries.values()) entry.meshes.values().forEach(TrackRenderMesh::close);
         for (var entry : assemblies.values()) {
             entry.meshes.values().forEach(group -> group.forEach(TrackRenderMesh::close));
             entry.tongues.values().forEach(group -> group.forEach(TrackRenderMesh::close));
             if (entry.nativeState != null) entry.nativeState.invalidateGpu();
+            if (entry.scissorsState != null) entry.scissorsState.invalidateGpu();
+            if (entry.loading != null) for (var group : entry.meshes.values()) for (var mesh : group)
+                NativeTurnoutLoading.associate(mesh, entry.loading);
             if (entry.script != null) {
                 entry.script.meshes.values().forEach(TrackRenderMesh::close);
                 if (entry.script.parts != null) entry.script.parts.invalidateInstances();
@@ -224,7 +227,6 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
     }
 
     public void invalidateMeshes() {
-        NativeTurnoutPreview.clear();
         for (Entry entry : entries.values()) entry.close();
         for (var entry : assemblies.values()) entry.close();
         scriptFailures.clear();
@@ -255,7 +257,6 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
 
     @Override
     public void close() {
-        NativeTurnoutPreview.clear();
         for (Entry entry : entries.values()) entry.close();
         for (var entry : assemblies.values()) entry.close();
         NativeTurnoutModels.clearDerivedSources();
@@ -270,6 +271,7 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
         ticks = 0; displayTime = -1;
         // The statistics window keys on the level object; release it with the cache.
         TrackRenderStats.reset();
+        NativeTurnoutLoading.clear();
         RailScriptRuntime.drainMetrics();
     }
 
@@ -292,6 +294,8 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
         final TurnoutEntry script;
         NativeTurnoutRenderState nativeState;
         NativeDiamondRenderState diamondState;
+        NativeScissorsRenderState scissorsState;
+        NativeTurnoutLoading.Trace loading;
         boolean nativeFailed;
         boolean scriptFailed, scriptActive, missingReported;
         long scriptPrepareFrame = -1;
@@ -326,6 +330,7 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
         }
 
         AABB broadBounds() {
+            if (scissorsState != null) return scissorsState.layout.bounds();
             if (diamondState != null) return diamondState.layout.bounds();
             var model = ClientRailModelManager.INSTANCE.model(data.modelId());
             return model == null ? data.bounds() : data.bounds().inflate(model.padding() * model.scaleForGauge(data.gauge()));
@@ -340,7 +345,7 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
         }
 
         boolean moving(double time) {
-            return rendersModel() && (nativeState != null || scriptActive || data.definition() == TrackAssemblyDefinition.CUSTOM)
+            return rendersModel() && (nativeState != null || scissorsState != null || scriptActive || data.definition() == TrackAssemblyDefinition.CUSTOM)
                     && animations.values().stream().anyMatch(animation -> animation.moving(time));
         }
 
@@ -370,7 +375,9 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
         @Override public void close() {
             clearFallback();
             diamondState = null;
+            if (scissorsState != null) { scissorsState.close(); scissorsState = null; }
             if (nativeState != null) { nativeState.close(); nativeState = null; }
+            if (loading != null) { loading.close(); loading = null; }
             nativeFailed = false;
             if (script != null) script.close();
             scriptFailed = scriptActive = missingReported = false;

@@ -46,6 +46,7 @@ public final class TurnoutBuilderItem extends Item {
         String prefix = switch (type) {
             case DIAMOND_CROSSING -> "diamond_crossing_builder";
             case SINGLE_CROSSOVER -> "single_crossover_builder";
+            case SCISSORS_CROSSOVER -> "scissors_crossover_builder";
             default -> "turnout_builder";
         };
         for (String key : List.of("select", "preview", "cancel", "permission")) {

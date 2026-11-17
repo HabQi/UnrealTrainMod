@@ -4,6 +4,7 @@
  */
 package com.unrealtrainmod.client.track;
 
+import com.unrealtrainmod.track.mesh.NativeLayoutProfile;
 import com.unrealtrainmod.client.GpuModel;
 import com.unrealtrainmod.client.StaticModelShader;
 import com.unrealtrainmod.model.IndexedMesh;
@@ -31,7 +32,10 @@ final class SharedRailPart implements AutoCloseable {
 
     void upload(TrackRenderStats stats) {
         long start = stats == null ? 0 : System.nanoTime();
-        gpu = GpuModel.uploadSharedMesh(source);
+        try (var stage = NativeLayoutProfile.stage("render/partSourceUpload")) {
+            gpu = GpuModel.uploadSharedMesh(source);
+            if (stage != null) { stage.value("vertices", source.colors().length); stage.value("indices", source.indices().length); }
+        }
         if (stats != null) {
             stats.gpuUpload(System.nanoTime() - start);
             stats.uploaded(source.colors().length * StaticModelShader.FORMAT.getVertexSize(),

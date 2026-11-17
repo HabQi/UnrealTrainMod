@@ -4,6 +4,7 @@
  */
 package com.unrealtrainmod.client.compat.iris;
 
+import com.unrealtrainmod.client.track.NativeTurnoutLoading;
 import com.mojang.blaze3d.platform.GlStateManager;
 import com.mojang.blaze3d.vertex.BufferBuilder;
 import com.mojang.blaze3d.vertex.BufferUploader;
@@ -53,6 +54,7 @@ public final class IrisGeometryCache {
         long requestedFrame;
         long requestedNanos;
         Mesh gpu;
+        NativeTurnoutLoading.Trace loading;
         Entry(Key key) {
             this.key = key;
             requestedFrame = frame;
@@ -286,6 +288,7 @@ public final class IrisGeometryCache {
         boolean hit = entry != null && entry.gpu != null;
         if (entry == null) {
             entry = new Entry(key);
+            entry.loading = NativeTurnoutLoading.current();
             ENTRIES.put(key, entry);
             if (immediate) {
                 if (light) trimLights((long)count * IrisCompat.entityVertexSize());
@@ -300,16 +303,18 @@ public final class IrisGeometryCache {
 
     private static void build(Entry entry) {
         long begun = System.nanoTime();
-        try {
+        try (var stage = NativeTurnoutLoading.gpu(entry.loading, "render/irisGeometryBuildUpload")) {
             entry.gpu = upload(entry.key);
+            if (stage != null) { stage.value("vertices", entry.key.count); stage.value("bytes", entry.gpu.storage.bytes); }
             bytes += entry.gpu.storage.bytes;
             if (entry.key.light) lightBytes += entry.gpu.storage.bytes;
             peakBytes = Math.max(peakBytes, bytes);
             windowBytes += entry.gpu.storage.bytes;
             IrisRenderStats.upload(entry.gpu.storage.bytes, entry.key.light);
         } catch (RuntimeException exception) {
+            NativeTurnoutLoading.failure(entry.loading, exception);
             LoggerFactory.getLogger(IrisGeometryCache.class).warn("Cannot cache Iris geometry; keeping CPU submission", exception);
-        }
+        } finally { entry.loading = null; }
         recordBuild(begun);
     }
 

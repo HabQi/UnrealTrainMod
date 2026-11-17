@@ -25,7 +25,7 @@ final class TrackDrawQueue implements AutoCloseable {
     private record Draw(RenderType type, VertexBuffer buffer, Matrix4f modelView,
                         int source, int structure, int vertices, int triangles, int storedVertices,
                         float movement, IrisGeometryCache.Mesh cached, int light,
-                        TrackStaticMesh pending, TrackStaticBuffers.Range range) {}
+                        TrackStaticMesh pending, TrackStaticBuffers.Range range, NativeTurnoutLoading.Trace loading) {}
     private final List<Draw> requests = new ArrayList<>();
     private final LinkedHashMap<RenderType, List<Draw>> groups = new LinkedHashMap<>();
     private boolean resolved, iris;
@@ -41,7 +41,7 @@ final class TrackDrawQueue implements AutoCloseable {
 
     void addStatic(TrackStaticMesh mesh, Matrix4f modelView, int structure) {
         requests.add(new Draw(null, null, modelView, mesh.source(), structure, 0, 0, 0,
-                Float.NaN, null, 0, mesh, null));
+                Float.NaN, null, 0, mesh, null, NativeTurnoutLoading.owner(mesh)));
     }
 
     void resolve(TrackStaticBuffers buffers, TrackRenderStats stats) {
@@ -55,11 +55,11 @@ final class TrackDrawQueue implements AutoCloseable {
         resolved = true;
     }
 
-    void addStaticRange(TrackStaticBuffers.Range range, Matrix4f modelView, TrackRenderStats stats) {
+    void addStaticRange(TrackStaticBuffers.Range range, Matrix4f modelView, TrackRenderStats stats, NativeTurnoutLoading.Trace loading) {
         var page = range.page();
         addResolved(new Draw(page.type, page.buffer, modelView, page.source, page.structure,
                 range.count(), range.count() / 3, range.storedVertices(),
-                Float.NaN, null, 0, null, range));
+                Float.NaN, null, 0, null, range, loading));
         if (stats != null && page.source == TrackRenderStats.RAIL_MODEL
                 && page.structure == TrackRenderStats.STRUCTURE_TRACK) stats.railChunkBatch(page.chunk, page.type);
     }
@@ -69,17 +69,17 @@ final class TrackDrawQueue implements AutoCloseable {
         var type = IrisCompat.active() ? IrisRenderTypes.get(ClientModelManager.WHITE, false, false, true)
                 : TrackRenderTypes.OPAQUE;
         add(new Draw(type, buffer, modelView, TrackRenderStats.NATIVE, structure,
-                stored, vertices / 2, stored, Float.NaN, null, 0, null, null));
+                stored, vertices / 2, stored, Float.NaN, null, 0, null, null, null));
     }
 
     void addMorph(VertexBuffer buffer, Matrix4f modelView, int structure, int vertices, float movement) {
         add(new Draw(TrackRenderTypes.MORPH, buffer, modelView, TrackRenderStats.NATIVE, structure,
-                vertices, vertices / 2, vertices, movement, null, 0, null, null));
+                vertices, vertices / 2, vertices, movement, null, 0, null, null, null));
     }
 
-    void addCached(IrisGeometryCache.Mesh mesh, RenderType type, Matrix4f modelView, int light) {
+    void addCached(IrisGeometryCache.Mesh mesh, RenderType type, Matrix4f modelView, int light, NativeTurnoutLoading.Trace loading) {
         add(new Draw(type, null, modelView, TrackRenderStats.RAIL_MODEL, TrackRenderStats.STRUCTURE_ASSEMBLY,
-                mesh.vertices, mesh.vertices / 3, mesh.vertices, Float.NaN, mesh, light, null, null));
+                mesh.vertices, mesh.vertices / 3, mesh.vertices, Float.NaN, mesh, light, null, null, loading));
     }
 
     private void add(Draw draw) {
@@ -133,16 +133,20 @@ final class TrackDrawQueue implements AutoCloseable {
                     vertices += member.vertices(); triangles += member.triangles(); stored += member.storedVertices();
                 }
                 first.limit(ranges); counts.limit(ranges);
-                if (iris) {
-                    boolean changed = IrisDrawScope.current().drawTrackRanges(draw.buffer(), first, counts,
-                            draw.type(), draw.modelView(), projection);
-                    IrisRenderStats.gpu(triangles);
-                    if (stats != null) { if (changed) stats.renderTypeSetup(); stats.irisShaderBind(); }
-                } else {
-                    state.prepareParts(draw.type(), draw.modelView(), projection);
-                    draw.buffer().bind();
-                    draw.range().page().buffer.drawRanges(first, counts, offsets, ranges);
+                try (var operation = NativeTurnoutLoading.firstDraw(draw.loading())) {
+                    if (operation != null) operation.value("mergedInputRanges", end-i);
+                    if (iris) {
+                        boolean changed = IrisDrawScope.current().drawTrackRanges(draw.buffer(), first, counts,
+                                draw.type(), draw.modelView(), projection);
+                        IrisRenderStats.gpu(triangles);
+                        if (stats != null) { if (changed) stats.renderTypeSetup(); stats.irisShaderBind(); }
+                    } else {
+                        state.prepareParts(draw.type(), draw.modelView(), projection);
+                        draw.buffer().bind();
+                        draw.range().page().buffer.drawRanges(first, counts, offsets, ranges);
+                    }
                 }
+                for (int j = i; j < end; j++) NativeTurnoutLoading.submitted(draws.get(j).loading());
                 if (stats != null) {
                     stats.ranges(end - i, ranges, ranges > 1 ? ranges : 0);
                     stats.drawn(draw.source(), draw.structure(), 1, vertices, triangles, stored, 0);
@@ -150,16 +154,19 @@ final class TrackDrawQueue implements AutoCloseable {
                 i = end;
                 continue;
             }
-            if (iris) {
-                boolean changed = draw.cached() != null
-                        ? IrisDrawScope.current().drawCached(draw.cached(), draw.type(), draw.modelView(), projection, draw.light())
-                        : IrisDrawScope.draw(draw.buffer(), draw.type(), draw.modelView(), projection);
-                IrisRenderStats.gpu(draw.triangles());
-                if (stats != null) { if (changed) stats.renderTypeSetup(); stats.irisShaderBind(); }
-            } else {
-                if (!Float.isNaN(draw.movement())) state.drawMorph(draw.buffer(), draw.modelView(), projection, draw.movement());
-                else state.drawNative(draw.buffer(), draw.modelView(), projection);
+            try (var operation = NativeTurnoutLoading.firstDraw(draw.loading())) {
+                if (iris) {
+                    boolean changed = draw.cached() != null
+                            ? IrisDrawScope.current().drawCached(draw.cached(), draw.type(), draw.modelView(), projection, draw.light())
+                            : IrisDrawScope.draw(draw.buffer(), draw.type(), draw.modelView(), projection);
+                    IrisRenderStats.gpu(draw.triangles());
+                    if (stats != null) { if (changed) stats.renderTypeSetup(); stats.irisShaderBind(); }
+                } else {
+                    if (!Float.isNaN(draw.movement())) state.drawMorph(draw.buffer(), draw.modelView(), projection, draw.movement());
+                    else state.drawNative(draw.buffer(), draw.modelView(), projection);
+                }
             }
+            NativeTurnoutLoading.submitted(draw.loading());
             if (stats != null) {
                 stats.ranges(1, 1, 0);
                 stats.drawn(draw.source(), draw.structure(), 1, draw.vertices(), draw.triangles(), draw.storedVertices(), 0);

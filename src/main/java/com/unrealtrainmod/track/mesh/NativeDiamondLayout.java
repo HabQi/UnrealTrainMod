@@ -38,17 +38,24 @@ public record NativeDiamondLayout(TrackVector origin, double scale, List<Part> p
 
     /** Authored cut angles, acute top corners and complete source bounds, in normalized metres. */
     private enum ShortWing {
-        ANGLE_2_5("2_5", 4.0515653276815415, -0.61218834, -0.98867249),
-        ANGLE_5("5", 8.103755489266485, -0.46188690, -0.65045898),
-        ANGLE_10("10", 16.587985955601223, -0.27731493, -0.37469009);
+        ANGLE_2_5("2_5", 4.0515653276815415, -0.61218834, -0.98867249,
+                0.13194996, 1.32954239, -0.13005525, 1.33055298),
+        ANGLE_5("5", 8.103755489266485, -0.46188690, -0.65045898,
+                0.13207628, 1.33043167, -0.13106576, 1.33055313),
+        ANGLE_10("10", 16.587985955601223, -0.27731493, -0.37469009,
+                0.13025736, 1.33148270, -0.13194995, 1.33143738);
 
-        static final double TIP_X = 0.01844046, MIN_X = -0.04206725, MAX_X = 0.13510782, MAX_Z = 1.76608551;
+        static final double TIP_X = 0.01844046, MIN_X = -0.04206725;
         final String leftName, rightName;
         final double cutAngle, tipZ, minZ;
+        final double leftMaxX, leftMaxZ, rightMinX, rightMaxZ;
 
-        ShortWing(String suffix, double cutAngle, double tipZ, double minZ) {
-            leftName = "wingL"+suffix; rightName = "wingR"+suffix;
+        ShortWing(String suffix, double cutAngle, double tipZ, double minZ,
+                  double leftMaxX, double leftMaxZ, double rightMinX, double rightMaxZ) {
+            leftName = "wingL"+suffix+"_short"; rightName = "wingR"+suffix+"_short";
             this.cutAngle = cutAngle; this.tipZ = tipZ; this.minZ = minZ;
+            this.leftMaxX = leftMaxX; this.leftMaxZ = leftMaxZ;
+            this.rightMinX = rightMinX; this.rightMaxZ = rightMaxZ;
         }
         static ShortWing nearest(double degrees) {
             var selected = ANGLE_2_5;
@@ -82,7 +89,11 @@ public record NativeDiamondLayout(TrackVector origin, double scale, List<Part> p
         public Problem problem() { return problem; }
     }
     public record Part(String name, TrackVector position, double yaw, double localX, double localZ, long chunk,
-                       double visibleLength, NativeRailCurve curve, double miterSlope) {
+                       double visibleLength, NativeRailCurve curve, double miterSlope, boolean startMiter) {
+        public Part(String name, TrackVector position, double yaw, double localX, double localZ, long chunk,
+                    double visibleLength, NativeRailCurve curve, double miterSlope) {
+            this(name,position,yaw,localX,localZ,chunk,visibleLength,curve,miterSlope,false);
+        }
         public Part(String name, TrackVector position, double yaw, double localX, double localZ, long chunk) {
             this(name, position, yaw, localX, localZ, chunk, 0, null, 0);
         }
@@ -97,11 +108,11 @@ public record NativeDiamondLayout(TrackVector origin, double scale, List<Part> p
         }
     }
     private record Edge(double distance, TrackVector point) {}
-    private record Crossing(double first, double second, TrackVector point) {}
-    private record RailEnd(int side, double distance, TrackVector point, double yaw, double miterSlope) {}
+    record Crossing(double first, double second, TrackVector point) {}
+    public record RailEnd(int side, double distance, TrackVector point, double yaw, double miterSlope) {}
     private record SleeperRow(double second, TrackVector a, TrackVector b, double yaw, double across) {}
     private record SleeperBoundary(double distance, double yaw) {}
-    private record Footprint(List<TrackVector> hull, double minX, double minZ, double maxX, double maxZ) {
+    record Footprint(List<TrackVector> hull, double minX, double minZ, double maxX, double maxZ) {
         boolean intersects(Footprint other) {
             return maxX > other.minX && other.maxX > minX && maxZ > other.minZ && other.maxZ > minZ
                     && !separated(hull, other.hull) && !separated(other.hull, hull);
@@ -142,7 +153,18 @@ public record NativeDiamondLayout(TrackVector origin, double scale, List<Part> p
                         new TrackPoint(Math.sin(angle)*length, length+Math.cos(angle)*length), new LinearGrade(0, 0), 1.435), 1.435);
     }
 
+    public record SleeperGroup(Part part, boolean second, double distance, TrackVector rowOrigin) {}
+    public record Core(NativeDiamondLayout layout, List<RailEnd> first, List<RailEnd> second,
+                       boolean secondReversed, double firstCenter, double secondCenter, List<SleeperGroup> sleepers) {}
+    public static Core core(TrackGeometry first, TrackGeometry second, double gauge) {
+        var result = new ArrayList<Core>();
+        build(first, second, gauge, result);
+        return result.getFirst();
+    }
     private static NativeDiamondLayout build(TrackGeometry first, TrackGeometry second, double gauge) {
+        return build(first, second, gauge, null);
+    }
+    private static NativeDiamondLayout build(TrackGeometry first, TrackGeometry second, double gauge, List<Core> result) {
         var a = new Path(first); var b = new Path(second);
         double scale = gauge/1.435;
         double height = a.at(0).position().y();
@@ -180,11 +202,21 @@ public record NativeDiamondLayout(TrackVector origin, double scale, List<Part> p
         }
         connections(parts, a, scale); connections(parts, b, scale);
         var core = parts.stream().map(part -> coreFootprint(part, scale)).toList();
-        moduleFootprints(a, scale); moduleFootprints(b, scale);
         var ordinary = new ArrayList<OrdinaryRun>();
-        ordinaryRuns(a, b, center, core, scale, ordinary);
-        fixedTrack(parts, a, scale); fixedTrack(parts, b, scale);
-        sleepers(parts, a, b, center, scale);
+        var sleeperGroups = result == null ? null : new ArrayList<SleeperGroup>();
+        if (result == null) {
+            moduleFootprints(a, scale); moduleFootprints(b, scale);
+            ordinaryRuns(a, b, center, core, scale, ordinary, parts);
+            fixedTrack(parts, a, scale); fixedTrack(parts, b, scale);
+
+            sleepers(parts, a, b, center, scale, sleeperGroups);
+        } else {
+            for (var path : List.of(a, b)) {
+                path.sleeperStart = path.railEnds.stream().mapToDouble(RailEnd::distance).min().orElseThrow()-0.5*scale;
+                path.sleeperEnd = path.railEnds.stream().mapToDouble(RailEnd::distance).max().orElseThrow()+0.5*scale;
+            }
+            sleepers(parts, a, b, center, scale, sleeperGroups);
+        }
         var chunks = new LinkedHashSet<Long>();
         double radius = 4.5*scale;
         double minX = Double.POSITIVE_INFINITY, minZ = minX, maxX = Double.NEGATIVE_INFINITY, maxZ = maxX;
@@ -201,8 +233,11 @@ public record NativeDiamondLayout(TrackVector origin, double scale, List<Part> p
             minX = Math.min(minX, point.x()-radius); maxX = Math.max(maxX, point.x()+radius);
             minZ = Math.min(minZ, point.z()-radius); maxZ = Math.max(maxZ, point.z()+radius);
         }
-        return new NativeDiamondLayout(a.at(0).position(), scale, parts, ordinary, chunks,
+        var layout = new NativeDiamondLayout(a.at(0).position(), scale, parts, ordinary, chunks,
                 new AABB(minX, height-1.5*scale, minZ, maxX, height+0.25*scale, maxZ), a.poses.size()+b.poses.size()+reversedSamples);
+        if (result != null) result.add(new Core(layout, List.copyOf(a.railEnds), List.copyOf(b.railEnds),
+                b.geometry != second, center.first(), center.second(), List.copyOf(sleeperGroups)));
+        return layout;
     }
 
     private static void moduleFootprints(Path path, double scale) {
@@ -241,7 +276,7 @@ public record NativeDiamondLayout(TrackVector origin, double scale, List<Part> p
         return add(add(pose.position(), pose.lateral(), offset), pose.tangent(), s-Math.clamp(s, 0, path.length()));
     }
 
-    private static void ordinaryRuns(Path a, Path b, Crossing center, List<Footprint> core, double scale, List<OrdinaryRun> runs) {
+    private static void ordinaryRuns(Path a, Path b, Crossing center, List<Footprint> core, double scale, List<OrdinaryRun> runs, List<Part> parts) {
         for (int direction : new int[]{-1, 1}) {
             boolean onA = false, onB = false;
             SleeperBoundary previousA = null, previousB = null;
@@ -252,9 +287,9 @@ public record NativeDiamondLayout(TrackVector origin, double scale, List<Part> p
                 double heading = row == null ? yaw(a.at(s)) : row.yaw();
                 var currentA = new SleeperBoundary(s, heading);
                 var currentB = row == null ? null : new SleeperBoundary(row.second(), heading);
-                if (!onA && previousA != null) onA = ordinaryRun(a, b, currentA, previousA, direction, core, scale, runs);
+                if (!onA && previousA != null) onA = ordinaryRun(a, b, currentA, previousA, direction, core, scale, runs, parts);
                 if (!onB && currentB != null && previousB != null)
-                    onB = ordinaryRun(b, a, currentB, previousB, direction, core, scale, runs);
+                    onB = ordinaryRun(b, a, currentB, previousB, direction, core, scale, runs, parts);
                 if (onA && onB) break;
                 previousA = currentA; previousB = currentB;
             }
@@ -266,7 +301,7 @@ public record NativeDiamondLayout(TrackVector origin, double scale, List<Part> p
                     if (s < 0 || s > b.length()) break;
                     if (sleeperRow(b, a, s, scale) != null) { previous = null; continue; }
                     var current = new SleeperBoundary(s, yaw(b.at(s)));
-                    if (previous != null && ordinaryRun(b, a, current, previous, direction, core, scale, runs)) break;
+                    if (previous != null && ordinaryRun(b, a, current, previous, direction, core, scale, runs, parts)) break;
                     previous = current;
                 }
             }
@@ -279,7 +314,7 @@ public record NativeDiamondLayout(TrackVector origin, double scale, List<Part> p
     }
 
     private static boolean ordinaryRun(Path path, Path other, SleeperBoundary candidate, SleeperBoundary retained, int direction,
-                                        List<Footprint> core, double scale, List<OrdinaryRun> runs) {
+                                        List<Footprint> core, double scale, List<OrdinaryRun> runs, List<Part> parts) {
         double period = ORDINARY_PERIOD*scale;
         double candidateCenter = ordinaryStart(path, candidate, direction, scale)+direction*period/2;
         if (!separate(moduleFootprint(path, candidateCenter, scale), other.modules, core)) return false;
@@ -306,6 +341,10 @@ public record NativeDiamondLayout(TrackVector origin, double scale, List<Part> p
             path.sleeperEnd = retained.distance();
             path.coreEnd = firstCenter+RAIL_START*scale;
         }
+        double lastCenter = firstCenter+direction*(count-1)*period;
+        double outer = lastCenter+direction*RAIL_END*scale;
+        double from = direction < 0 ? outer : path.coreEnd, to = direction < 0 ? path.coreStart : outer;
+        for (int side : new int[]{-1,1}) addRails(parts,path.geometry,from,to,side,scale,0,0,null,null);
         return true;
     }
 
@@ -315,7 +354,7 @@ public record NativeDiamondLayout(TrackVector origin, double scale, List<Part> p
         return true;
     }
 
-    private static Footprint coreFootprint(Part part, double scale) {
+    static Footprint coreFootprint(Part part, double scale) {
         if (part.curve() != null) {
             var points = new ArrayList<TrackVector>();
             for (var knot : part.curve().knots()) {
@@ -331,18 +370,20 @@ public record NativeDiamondLayout(TrackVector origin, double scale, List<Part> p
         var shortWing = ShortWing.forName(part.name());
         if (part.name().startsWith("nose")) {
             minX = -0.106092; maxX = 0.106092; minZ = 0; maxZ = NOSE_END;
-        } else if (part.name().startsWith("guard")) {
-            minX = 1.10517; maxX = 1.360414; minZ = -1.193223; maxZ = 2.106004;
-            if (part.name().endsWith("R")) { minX = -1.360414; maxX = -1.10517; }
-        } else if (part.name().startsWith("wingFront")) {
-            minX = -0.049827; maxX = 0.127347; minZ = -0.000001; maxZ = 2.099801;
-            if (part.name().endsWith("R")) { minX = -0.127347; maxX = 0.049827; }
+        } else if (part.name().equals("guardL_short") || part.name().equals("guardR_short")) {
+            minX = 1.10516998; maxX = 1.36041428; minZ = -0.83420723; maxZ = 1.42413879;
+            if (part.name().equals("guardR_short")) { minX = -1.36041428; maxX = -1.10516998; }
+        } else if (part.name().equals("wingFrontL_short") || part.name().equals("wingFrontR_short")) {
+            minX = -0.04982666; maxX = 0.12087976; minZ = -0.00000060; maxZ = 1.42720108;
+            if (part.name().equals("wingFrontR_short")) { minX = -0.11926294; maxX = 0.04982666; maxZ = 1.42720123; }
         } else if (part.name().equals("wingLm") || part.name().equals("wingRm")) {
             minX = 1.10516998; maxX = 1.36041428; minZ = -1.19073715; maxZ = 0.02806633;
             if (part.name().equals("wingRm")) { minZ = -0.02806633; maxZ = 1.19017517; }
         } else if (shortWing != null) {
-            minX = ShortWing.MIN_X; maxX = ShortWing.MAX_X; minZ = shortWing.minZ; maxZ = ShortWing.MAX_Z;
-            if (part.name().equals(shortWing.rightName)) { minX = -ShortWing.MAX_X; maxX = -ShortWing.MIN_X; }
+            boolean right = part.name().equals(shortWing.rightName);
+            minX = right ? shortWing.rightMinX : ShortWing.MIN_X;
+            maxX = right ? -ShortWing.MIN_X : shortWing.leftMaxX;
+            minZ = shortWing.minZ; maxZ = right ? shortWing.rightMaxZ : shortWing.leftMaxZ;
         } else {
             minX = -0.043492; maxX = 0.106092; minZ = -1.000215; maxZ = 0;
             if (part.name().equals("wingRr")) { minX = -0.106092; maxX = 0.043492; }
@@ -354,7 +395,7 @@ public record NativeDiamondLayout(TrackVector origin, double scale, List<Part> p
         return footprint(points);
     }
 
-    private static Footprint footprint(List<TrackVector> points) {
+    static Footprint footprint(List<TrackVector> points) {
         points.sort(Comparator.comparingDouble(TrackVector::x).thenComparingDouble(TrackVector::z));
         var hull = new ArrayList<TrackVector>();
         for (var point : points) {
@@ -498,15 +539,8 @@ public record NativeDiamondLayout(TrackVector origin, double scale, List<Part> p
             var joint = path.railEnds.stream().filter(end -> end.side() == side && end.miterSlope() != 0).findFirst().orElseThrow();
             if ((joint.distance()-wing)*(nose-wing) <= 0) continue;
             double start = Math.min(wing, nose), length = Math.abs(nose-wing);
-            int count = Math.max(1, (int)Math.ceil(length/(0.5*scale)));
-            for (int index = 0; index < count; index++) {
-                double from = start+length*index/count, to = start+length*(index+1)/count;
-                double span = (to-from)/scale;
-                var position = path.edge(from, side*RAIL_X*scale);
-                double heading = yaw(path.at(from));
-                parts.add(new Part(side > 0 ? "railL" : "railR", position, heading, side*RAIL_X, -span/2,
-                        chunk(position), span, stockCurve(path, side, from, to, position, heading, scale)));
-            }
+            addRails(parts,path.geometry,start,start+length,side,scale,0,0,null,null);
+
         }
     }
 
@@ -556,19 +590,20 @@ public record NativeDiamondLayout(TrackVector origin, double scale, List<Part> p
 
     private static TrackVector wing(List<Part> parts, String side, TrackVector origin, double front, double rear, double scale) {
         double x = (side.equals("L") ? 1 : -1)*WING_X;
-        // Extraction preserves source coordinates: both pieces retain the ordinary turnout's front frame.
-        addPart(parts, "wingFront"+side, origin, front, 0, 0);
-        addPart(parts, "guard"+side, origin, front, 0, 0);
+        // Both source parts retain the front frame; the guard's 3 mm vertical inset is independent of gauge.
+        addPart(parts, "wingFront"+side+"_short", origin, front, 0, 0);
+        var guard = new TrackVector(origin.x(), origin.y()-.003, origin.z());
+        addPart(parts, "guard"+side+"_short", guard, front, 0, 0);
         var joint = shifted(origin, front, x*scale, 0);
         addPart(parts, "wing"+side+"r", shifted(joint, rear, 0, JOINT_OVERLAP*scale), rear, x, 0);
         return shifted(joint, rear, 0, (JOINT_OVERLAP+WING_REAR_END)*scale);
     }
-    private static void sleepers(List<Part> parts, Path a, Path b, Crossing center, double scale) {
+    private static void sleepers(List<Part> parts, Path a, Path b, Crossing center, double scale, List<SleeperGroup> groups) {
         int first = (int)Math.ceil(-center.first()/scale), last = (int)Math.floor((a.length()-center.first())/scale);
         for (int index = first; index <= last; index++) {
             double s = center.first()+index*scale;
             var row = sleeperRow(a, b, s, scale);
-            if (row == null) { unpairedSleeper(parts, a, b, s, scale); continue; }
+            if (row == null) { unpairedSleeper(parts, a, b, s, scale, groups, false); continue; }
             boolean onA = coreSleeper(a, s), onB = coreSleeper(b, row.second());
             if (!onA && !onB) continue;
             var pa = a.at(s); var pb = b.at(row.second());
@@ -577,18 +612,25 @@ public record NativeDiamondLayout(TrackVector origin, double scale, List<Part> p
                 throw new InvalidLayout(Problem.SPACE);
             // Coincident rows use the stable path order; both complementary sources remain present.
             boolean right = row.across() >= -0.00001*scale;
-            if (onA) addPart(parts, right ? "sleeper_point02R" : "sleeper_point02L", row.a(), row.yaw(), 0, 0.25);
-            if (onB) addPart(parts, right ? "sleeper_point02L" : "sleeper_point02R", row.b(), row.yaw(), 0, 0.25);
+            if (onA) {
+                addPart(parts, right ? "sleeper_point02R" : "sleeper_point02L", row.a(), row.yaw(), 0, 0.25);
+                if (groups != null) groups.add(new SleeperGroup(parts.getLast(), false, s, row.a()));
+            }
+            if (onB) {
+                addPart(parts, right ? "sleeper_point02L" : "sleeper_point02R", row.b(), row.yaw(), 0, 0.25);
+                if (groups != null) groups.add(new SleeperGroup(parts.getLast(), true, row.second(), row.a()));
+            }
         }
         double otherCenter = center.second();
         first = (int)Math.ceil(-otherCenter/scale); last = (int)Math.floor((b.length()-otherCenter)/scale);
         for (int index = first; index <= last; index++) {
             double s = otherCenter+index*scale;
-            if (coreSleeper(b, s) && sleeperRow(b, a, s, scale) == null) unpairedSleeper(parts, b, a, s, scale);
+            if (coreSleeper(b, s) && sleeperRow(b, a, s, scale) == null) unpairedSleeper(parts, b, a, s, scale, groups, true);
         }
     }
     private static boolean coreSleeper(Path path, double s) { return s >= path.sleeperStart && s <= path.sleeperEnd; }
-    private static void unpairedSleeper(List<Part> parts, Path path, Path other, double s, double scale) {
+    private static void unpairedSleeper(List<Part> parts, Path path, Path other, double s, double scale,
+                                        List<SleeperGroup> groups, boolean second) {
         if (!coreSleeper(path, s)) return;
         var pose = path.at(s);
         var start = other.at(0).position(); var end = other.at(other.length()).position();
@@ -596,6 +638,7 @@ public record NativeDiamondLayout(TrackVector origin, double scale, List<Part> p
                 < Math.hypot(end.x()-pose.position().x(), end.z()-pose.position().z()) ? start : end;
         double across = (nearest.x()-pose.position().x())*pose.lateral().x()+(nearest.z()-pose.position().z())*pose.lateral().z();
         addPart(parts, across >= -0.00001*scale ? "sleeper_point02R" : "sleeper_point02L", pose.position(), yaw(pose), 0, 0.25);
+        if (groups != null) groups.add(new SleeperGroup(parts.getLast(), second, s, pose.position()));
     }
     private static SleeperRow sleeperRow(Path a, Path b, double s, double scale) {
         double tolerance = 0.00001*scale;
@@ -633,25 +676,32 @@ public record NativeDiamondLayout(TrackVector origin, double scale, List<Part> p
         }
     }
     private static void railApproach(List<Part> parts, Path path, RailEnd end, boolean fromStart, double scale) {
-        double direction = fromStart ? -1 : 1;
-        double length = (RAIL_END-RAIL_START)*scale;
-        double s = end.distance(), heading = end.yaw(), slope = end.miterSlope();
-        var anchor = end.point();
-        // Place the first source past the joint far enough for a full-width miter.
-        // Repeat subsequent modules from its unchanged outer end.
-        while (fromStart ? s > path.coreStart : s < path.coreEnd) {
-            double extension = RAIL_HALF_WIDTH*Math.abs(slope)*scale;
-            double joint = (fromStart ? RAIL_END : RAIL_START)+direction*extension/scale;
-            parts.add(new Part(end.side() > 0 ? "railL" : "railR", anchor, heading,
-                    end.side()*RAIL_X, joint, chunk(anchor), 0, null, slope));
-            double span = length-extension;
-            anchor = shifted(anchor, heading, 0, direction*span);
-            s += direction*span;
-            var next = path.edge(s+direction*length, end.side()*RAIL_X*scale);
-            heading = Math.atan2(direction*(next.x()-anchor.x()), direction*(next.z()-anchor.z()));
-            slope = 0;
+        double from = fromStart ? path.coreStart : end.distance(), to = fromStart ? end.distance() : path.coreEnd;
+        if (to-from <= 1e-6*scale) return;
+        addRails(parts,path.geometry,from,to,end.side(),scale,fromStart ? 0 : end.miterSlope(),
+                fromStart ? end.miterSlope() : 0,fromStart ? null : end,fromStart ? end : null);
+    }
+    private static void addRails(List<Part> parts, TrackGeometry geometry, double from, double to, int side, double scale,
+                                 double startMiter, double endMiter, RailEnd startPort, RailEnd endPort) {
+        double offset = side*RAIL_X*scale;
+        var a = NativeFixedRails.pose(geometry,from); var b = NativeFixedRails.pose(geometry,to);
+        var start = startPort == null ? NativeFixedRails.edge(geometry,from,offset) : startPort.point();
+        var end = endPort == null ? NativeFixedRails.edge(geometry,to,offset) : endPort.point();
+        double ya = startPort == null ? yaw(a) : startPort.yaw(), yb = endPort == null ? yaw(b) : endPort.yaw();
+        var reference = NativeFixedRails.reference(geometry,from,to,offset,start,end,ya,yb,scale);
+        var cuts = NativeFixedRails.cuts(reference,scale,startMiter,endMiter);
+        for (int i = 1; i < cuts.size(); i++) {
+            double low = cuts.get(i-1), high = cuts.get(i), span = (high-low)/scale;
+            var pose = reference.at(low); var position = pose.point(); double heading = Math.atan2(pose.first().x(),pose.first().z());
+            double headMiter = i == 1 ? startMiter : 0, tailMiter = i+1 == cuts.size() ? endMiter : 0;
+            var curve = reference.local(low,high,position,heading,0,scale,span,.075*scale*Math.abs(headMiter),.075*scale*Math.abs(tailMiter));
+            // A miter is needed only at the protected core port. Ordinary strip joins share their end section.
+            double slope = i == 1 && startMiter != 0 ? startMiter : i+1 == cuts.size() ? endMiter : 0;
+            parts.add(new Part(side > 0 ? "railL" : "railR",position,heading,side*RAIL_X,-span/2,chunk(position),span,curve,slope,
+                    i == 1 && startMiter != 0));
         }
     }
+
     private static void requireSpace(Path path, double s, double reach) {
         if (s < reach || path.length()-s < reach) throw new InvalidLayout(Problem.SPACE);
     }
@@ -665,7 +715,13 @@ public record NativeDiamondLayout(TrackVector origin, double scale, List<Part> p
     }
     private static long chunk(TrackVector point) { return ChunkPos.asLong((int)Math.floor(point.x()/16), (int)Math.floor(point.z()/16)); }
 
+    static boolean intersects(TrackGeometry a, TrackGeometry b, double scale) {
+        return crossing(new Path(a), new Path(b), 0, 0, scale, false) != null;
+    }
     private static Crossing crossing(Path a, Path b, double offsetA, double offsetB, double scale) {
+        return crossing(a, b, offsetA, offsetB, scale, true);
+    }
+    private static Crossing crossing(Path a, Path b, double offsetA, double offsetB, double scale, boolean required) {
         var first = flatten(a, offsetA, scale); var second = flatten(b, offsetB, scale);
         Crossing result = null;
         for (int i = 1; i < first.size(); i++) for (int j = 1; j < second.size(); j++) {
@@ -690,7 +746,7 @@ public record NativeDiamondLayout(TrackVector origin, double scale, List<Part> p
                     || Math.abs(result.second()-candidate.second()) > 0.01*scale)) throw new InvalidLayout(Problem.INTERSECTION);
             result = candidate;
         }
-        if (result == null) throw new InvalidLayout(Problem.INTERSECTION);
+        if (result == null && required) throw new InvalidLayout(Problem.INTERSECTION);
         return result;
     }
     private static Crossing refine(Path a, Path b, double sa, double sb, double oa, double ob, double scale) {

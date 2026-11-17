@@ -195,6 +195,86 @@
       "name": "wingR5",
       "file": "wingr5.obj",
       "faces": 135
+    },
+    {
+      "name": "guardL",
+      "file": "guardl.obj",
+      "faces": 262
+    },
+    {
+      "name": "wingFrontL",
+      "file": "wingfrontl.obj",
+      "faces": 126
+    },
+    {
+      "name": "guardR",
+      "file": "guardr.obj",
+      "faces": 262
+    },
+    {
+      "name": "wingFrontR",
+      "file": "wingfrontr.obj",
+      "faces": 126
+    },
+    {
+      "name": "wingLf_short",
+      "file": "winglf_short.obj",
+      "faces": 400
+    },
+    {
+      "name": "wingFrontL_short",
+      "file": "wingfrontl_short.obj",
+      "faces": 126
+    },
+    {
+      "name": "guardL_short",
+      "file": "guardl_short.obj",
+      "faces": 274
+    },
+    {
+      "name": "wingL10_short",
+      "file": "wingl10_short.obj",
+      "faces": 135
+    },
+    {
+      "name": "wingL5_short",
+      "file": "wingl5_short.obj",
+      "faces": 135
+    },
+    {
+      "name": "wingL2_5_short",
+      "file": "wingl2_5_short.obj",
+      "faces": 135
+    },
+    {
+      "name": "wingRf_short",
+      "file": "wingrf_short.obj",
+      "faces": 400
+    },
+    {
+      "name": "wingFrontR_short",
+      "file": "wingfrontr_short.obj",
+      "faces": 126
+    },
+    {
+      "name": "guardR_short",
+      "file": "guardr_short.obj",
+      "faces": 274
+    },
+    {
+      "name": "wingR10_short",
+      "file": "wingr10_short.obj",
+      "faces": 135
+    },
+    {
+      "name": "wingR5_short",
+      "file": "wingr5_short.obj",
+      "faces": 135
+    },
+    {
+      "name": "wingR2_5_short",
+      "file": "wingr2_5_short.obj",
+      "faces": 135
     }
   ]
 }

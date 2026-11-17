@@ -15,6 +15,7 @@ import net.minecraft.world.level.ChunkPos;
 final class NativeTurnoutRenderState implements AutoCloseable {
     final NativeTurnoutLayout layout;
     final RailPartRenderer parts;
+    NativeTurnoutLoading.Trace loading;
     private final Map<NativeTurnoutLayout.Part, List<Source>> sources;
     private final List<NativeTurnoutMeshes.PreparedPart> movingParts;
     private final Map<Long, List<NativeTurnoutMeshes.PreparedPart>> fixedParts;
@@ -44,11 +45,23 @@ final class NativeTurnoutRenderState implements AutoCloseable {
         this(layout, model, TrackStaticBuffers.WORLD);
     }
     NativeTurnoutRenderState(NativeTurnoutLayout layout, ClientRailModelManager.Model model, TrackStaticBuffers buffers) {
+        this(layout, NativeTurnoutModels.sources(model.parts()), buffers);
+    }
+    NativeTurnoutRenderState(NativeTurnoutLayout layout, Map<String, List<Source>> originals, TrackStaticBuffers buffers) {
         this.layout = layout; this.buffers = buffers;
-        sources = NativeTurnoutMeshes.prepare(layout, NativeTurnoutModels.sources(model.parts()));
-        movingParts = NativeTurnoutMeshes.movingParts(layout, sources);
-        fixedParts = NativeTurnoutMeshes.fixedParts(layout, sources);
+        loading = NativeTurnoutLoading.current();
+        sources = NativeTurnoutMeshes.prepare(layout, originals);
+        try {
+            movingParts = NativeTurnoutMeshes.movingParts(layout, sources);
+            fixedParts = NativeTurnoutMeshes.fixedParts(layout, sources);
+        } catch (RuntimeException | Error failure) { NativeTurnoutMeshes.release(sources); throw failure; }
         parts = new RailPartRenderer(layout.origin(), Math.floor(layout.origin().y()/16)*16, true);
+        parts.loading(loading);
+    }
+    void attachLoading(NativeTurnoutLoading.Trace trace) {
+        loading = trace; parts.loading(trace);
+        for (var endpoint : endpoints) if (endpoint != null) for (var mesh : endpoint.meshes.values())
+            NativeTurnoutLoading.associate(mesh.mesh(), trace);
     }
     private int endpointIndex() { return movement == 0 ? 0 : movement == 1 ? 1 : -1; }
     void movement(float value) {
@@ -59,7 +72,16 @@ final class NativeTurnoutRenderState implements AutoCloseable {
         movement = value; representationFrame = -1;
     }
     TrackStaticMesh build(long chunk) {
-        return new RailTrackGpuMesh(NativeTurnoutMeshes.build(layout, fixedParts.getOrDefault(chunk, List.of()), chunk, 0));
+        try (var operation = NativeTurnoutLoading.open(loading, "geometry/fixedChunk")) {
+            if (operation != null) { operation.value("chunkX", ChunkPos.getX(chunk)); operation.value("chunkZ", ChunkPos.getZ(chunk)); }
+            var data = buildData(chunk); NativeTurnoutLoading.geometry(operation, data);
+            var mesh = new RailTrackGpuMesh(data);
+            NativeTurnoutLoading.associate(mesh, loading);
+            return mesh;
+        }
+    }
+    com.unrealtrainmod.track.mesh.RailTrackMeshData buildData(long chunk) {
+        return NativeTurnoutMeshes.build(layout, fixedParts.getOrDefault(chunk, List.of()), chunk, 0);
     }
     private static boolean loaded(long chunk, Set<Long> chunks, ClientLevel level) {
         return chunks.contains(chunk) && level.hasChunk(ChunkPos.getX(chunk), ChunkPos.getZ(chunk));
@@ -83,13 +105,19 @@ final class NativeTurnoutRenderState implements AutoCloseable {
             for (var group : endpoint.groups.entrySet()) {
                 long chunk = group.getKey(); if (!loaded(chunk, chunks, level)) continue;
                 var cached = endpoint.meshes.get(chunk);
-                if (cached == null && !shadow && budget.available()) {
+                boolean buildEndpoint = cached == null && !shadow && budget.available();
+                if (cached == null && !shadow && !buildEndpoint) NativeTurnoutLoading.budgetWait(loading);
+                if (buildEndpoint) {
                     long start = System.nanoTime();
-                    try {
+                    try (var operation = NativeTurnoutLoading.open(loading, "geometry/endpointCache")) {
+                        if (operation != null) { operation.value("endpoint", index); operation.value("chunkX", ChunkPos.getX(chunk)); operation.value("chunkZ", ChunkPos.getZ(chunk)); }
                         var data = NativeTurnoutMeshes.endpoint(layout, chunk, group.getValue()); long bytes = 0;
                         for (var batch : data.batches()) bytes += (long)batch.mesh().vertices().length*Float.BYTES
                                 +(long)(batch.mesh().colors().length+batch.mesh().indices().length)*Integer.BYTES;
-                        cached = new EndpointMesh(new RailTrackGpuMesh(data), bytes); endpoint.meshes.put(chunk, cached);
+                        cached = new EndpointMesh(new RailTrackGpuMesh(data,TrackStaticMesh.PageDomain.ENDPOINT), bytes); endpoint.meshes.put(chunk, cached);
+                        NativeTurnoutLoading.associate(cached.mesh(), loading);
+                        if (operation != null) operation.value("cpuMeshBytes", bytes);
+                        NativeTurnoutLoading.geometry(operation, data);
                         if (stats != null) stats.nativeEndpointBuilt();
                     } finally { budget.pageFinished(start); if (stats != null) stats.built(System.nanoTime()-start); }
                 }
@@ -109,8 +137,12 @@ final class NativeTurnoutRenderState implements AutoCloseable {
             var mesh = endpoint.meshes.remove(chunk); if (mesh != null) buffers.remove(mesh.mesh());
         }
         representationFrame = -1; parts.removeChunk(chunk);
+        if (loading != null) loading.restart("chunkRemoved");
     }
-    void invalidateGpu() { representationFrame = -1; merged = false; parts.invalidateInstances(); }
+    void invalidateGpu() {
+        representationFrame = -1; merged = false; parts.invalidateInstances();
+        if (loading != null) loading.restart("backendInvalidated");
+    }
     @Override public void close() {
         if (closed) return;
         closed = true; parts.close(); snapshot = null;

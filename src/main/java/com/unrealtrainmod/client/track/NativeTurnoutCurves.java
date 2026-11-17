@@ -6,14 +6,16 @@ import com.unrealtrainmod.track.geometry.TrackVector;
 import com.unrealtrainmod.track.mesh.NativeRailCurve;
 import com.unrealtrainmod.track.mesh.NativeTurnoutLayout.BladeContact;
 import com.unrealtrainmod.track.mesh.NativeTurnoutLayout.RailBend;
-import java.util.ArrayList;
+import java.io.IOException;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.IdentityHashMap;
 import java.util.Map;
 import java.util.TreeMap;
-import java.util.TreeSet;
+import java.util.WeakHashMap;
 
-/** Source preparation only. Curves are local polynomials, never per-vertex path samples. */
+/** Source preparation only: deform existing vertices without longitudinal subdivision. */
 final class NativeTurnoutCurves {
     private static final double HEAD_HALF = 0.0354982;
     private NativeTurnoutCurves() {}
@@ -24,11 +26,27 @@ final class NativeTurnoutCurves {
     }
 
     private static final Map<IndexedMesh, Profile> PROFILES = new IdentityHashMap<>();
+    // Resource metadata follows its source mesh across world/cache resets, without retaining old reloads.
+    private static final Map<IndexedMesh, float[]> PARAMETERS = Collections.synchronizedMap(new WeakHashMap<>());
+    static void parameters(IndexedMesh mesh, float[] corners) throws IOException {
+        if (corners.length != mesh.indices().length) throw new IOException("Native rail parameter corner count does not match OBJ triangles");
+        var values = new float[mesh.colors().length]; Arrays.fill(values, Float.NaN);
+        for (int i = 0; i < corners.length; i++) {
+            int vertex = mesh.indices()[i]; float value = corners[i];
+            if (!Float.isFinite(value) || value < 0 || value > 1) throw new IOException("Invalid native rail parameter V");
+            if (!Float.isNaN(values[vertex]) && Math.abs(values[vertex]-value) > 0.000001f)
+                throw new IOException("Shared native OBJ vertex has conflicting deformation parameters");
+            values[vertex] = value;
+        }
+        for (float value : values) if (Float.isNaN(value)) throw new IOException("Native rail vertex has no deformation parameter");
+        PARAMETERS.put(mesh, values);
+    }
     private static final class Profile {
         final TreeMap<Float, Float> values = new TreeMap<>();
         Profile(IndexedMesh rail) {
             var data = rail.vertices();
-            for (int i = 0; i < data.length; i += 8) if (Math.abs(data[i+7]) < 0.1f) values.put(data[i+4], data[i]);
+            var parameters = PARAMETERS.get(rail);
+            for (int i = 0; i < data.length; i += 8) if (Math.abs(data[i+7]) < 0.1f) values.put(parameters[i/8], data[i]);
         }
         double target(float v) {
             float key = Math.clamp(v, values.firstKey(), values.lastKey());
@@ -64,51 +82,44 @@ final class NativeTurnoutCurves {
 
     static IndexedMesh blade(IndexedMesh source, IndexedMesh rail, float length, BladeContact contact) {
         var vertices = source.vertices().clone(); double factor = length / (0.65 + 1.572079);
+        var profile = PROFILES.computeIfAbsent(rail, Profile::new);
+        var parameters = PARAMETERS.get(source);
         for (int i = 0; i < vertices.length; i += 8) {
             vertices[i + 2] = (float)(0.65 + (vertices[i + 2] - 0.65) * factor);
             normal(vertices, i, vertices[i + 5], vertices[i + 6], vertices[i + 7] / factor);
         }
         var stretched = new IndexedMesh(vertices, source.colors(), source.indices());
-        var profile = PROFILES.computeIfAbsent(rail, Profile::new);
         double side = contact.side(), center = side * 0.74875, tip = 0.65f - length;
-        var cuts = new TreeSet<Float>(); cuts.add((float)tip); cuts.add(0.65f);
-        for (var edge : contact.edges()) cuts.add((float)(tip + edge.distance()));
-        for (var knot : contact.curve().knots()) cuts.add((float)(tip + knot.distance()));
-        for (int i = 0; i <= 4; i++) cuts.add(0.25f + i * 0.1f);
-        var planes = new ArrayList<>(cuts); var sections = new ArrayList<IndexedMesh>();
-        var sweeps = new HashMap<Float, Sweep>(); var shapes = new HashMap<Float, BladeSection>();
+        var clipped = NativeRailClip.clip(stretched, (float)tip, 0.65f, parameters);
+        var mesh = clipped.mesh(); var data = mesh.vertices();
+        var shapes = new HashMap<Float, BladeSection>();
         var targets = new HashMap<Float, Double>();
-        var bands = NativeRailSlices.split(stretched, planes);
-        for (var band : bands) {
-            var data = band.vertices();
-            for (int i = 0; i < data.length; i += 8) {
-                double target = targets.computeIfAbsent(data[i+4], profile::target);
-                var shape = shapes.computeIfAbsent(data[i+2], z -> section(z, tip, length, contact));
-                double delta = target-data[i], nx = data[i+5];
-                double nz = (1-shape.weight())*data[i+7]-nx*shape.tailSlope()*delta;
-                data[i] += (float)(shape.weight()*delta); normal(data, i, nx, data[i+6], nz);
-                double upper = shape.upper(), lower = shape.lower(), upperSlope = shape.upperSlope(), lowerSlope = shape.lowerSlope();
-                double ratio = (side*(target-center) + HEAD_HALF)/(2*HEAD_HALF);
-                double fitted = center + side*(lower + (upper-lower)*ratio);
-                double width = (upper-lower)/(2*HEAD_HALF);
-                double fittedSlope = side*(lowerSlope + (upperSlope-lowerSlope)*ratio);
-                double h = Math.clamp((data[i + 1] + 0.06)/0.035, 0, 1), blend = h*h*(3-2*h);
-                double blendSlope = 6*h*(1-h)/0.035, change = fitted-data[i];
-                double jacobian = 1-blend + blend*width;
-                nx = data[i + 5];
-                normal(data, i, nx, data[i + 6]*jacobian-nx*blendSlope*change,
-                        data[i + 7]*jacobian-nx*blend*fittedSlope);
-                data[i] += (float)(blend*change);
-                double heightOffset = shape.heightOffset(), heightSlope = shape.heightSlope();
-                double heightJacobian = 1+heightOffset*blendSlope;
-                normal(data, i, data[i+5]*heightJacobian, data[i+6],
-                        data[i+7]*heightJacobian-data[i+6]*heightSlope*blend);
-                data[i+1] += (float)(heightOffset*blend);
-            }
-            sweep(data, (float)tip, center, contact.curve(), sweeps);
-            sections.add(band);
+        for (int i = 0; i < data.length; i += 8) {
+            double target = targets.computeIfAbsent(clipped.parameters()[i/8], profile::target);
+            var shape = shapes.computeIfAbsent(data[i+2], z -> section(z, tip, length, contact));
+            double delta = target-data[i], nx = data[i+5];
+            double nz = (1-shape.weight())*data[i+7]-nx*shape.tailSlope()*delta;
+            data[i] += (float)(shape.weight()*delta); normal(data, i, nx, data[i+6], nz);
+            double upper = shape.upper(), lower = shape.lower(), upperSlope = shape.upperSlope(), lowerSlope = shape.lowerSlope();
+            double ratio = (side*(target-center) + HEAD_HALF)/(2*HEAD_HALF);
+            double fitted = center + side*(lower + (upper-lower)*ratio);
+            double width = (upper-lower)/(2*HEAD_HALF);
+            double fittedSlope = side*(lowerSlope + (upperSlope-lowerSlope)*ratio);
+            double h = Math.clamp((data[i + 1] + 0.06)/0.035, 0, 1), blend = h*h*(3-2*h);
+            double blendSlope = 6*h*(1-h)/0.035, change = fitted-data[i];
+            double jacobian = 1-blend + blend*width;
+            nx = data[i + 5];
+            normal(data, i, nx, data[i + 6]*jacobian-nx*blendSlope*change,
+                    data[i + 7]*jacobian-nx*blend*fittedSlope);
+            data[i] += (float)(blend*change);
+            double heightOffset = shape.heightOffset(), heightSlope = shape.heightSlope();
+            double heightJacobian = 1+heightOffset*blendSlope;
+            normal(data, i, data[i+5]*heightJacobian, data[i+6],
+                    data[i+7]*heightJacobian-data[i+6]*heightSlope*blend);
+            data[i+1] += (float)(heightOffset*blend);
         }
-        return NativeTurnoutMeshes.join(sections);
+        sweep(data, (float)tip, center, contact.curve(), new HashMap<>());
+        return mesh;
     }
 
     private record Sweep(TrackVector point, TrackVector first, TrackVector lateral, TrackVector normal,
@@ -132,65 +143,69 @@ final class NativeTurnoutCurves {
 
     private static void sweep(float[] data, float start, double center, NativeRailCurve curve, Map<Float, Sweep> cache) {
         for (int i = 0; i < data.length; i += 8) {
-            float z = data[i + 2]; var s = cache.computeIfAbsent(z, key -> sweep(curve, key-start));
-            double across = data[i]-center, height = data[i+1];
-            var point = NativeRailCurve.add(NativeRailCurve.add(s.point(), s.lateral(), across), s.normal(), height);
-            var forward = NativeRailCurve.add(NativeRailCurve.add(s.first(), s.lateralDerivative(), across), s.normalDerivative(), height);
-            var nx = NativeRailCurve.cross(s.normal(), forward); var ny = NativeRailCurve.cross(forward, s.lateral());
-            var nz = NativeRailCurve.cross(s.lateral(), s.normal());
-            var n = NativeRailCurve.add(NativeRailCurve.add(NativeRailCurve.multiply(nx, data[i+5]), ny, data[i+6]), nz, data[i+7]);
-            data[i] = (float)(center+point.x()); data[i+1] = (float)point.y(); data[i+2] = (float)(start+point.z());
-            normal(data, i, n.x(), n.y(), n.z());
+            float z = data[i + 2]; var s = cache.computeIfAbsent(z, key -> sweep(curve, (double)key-start));
+            sweep(data,i,start,center,s);
         }
+    }
+    private static void sweep(float[] data, int i, double start, double center, Sweep s) {
+        double across = data[i]-center, height = data[i+1];
+        var point = NativeRailCurve.add(NativeRailCurve.add(s.point(), s.lateral(), across), s.normal(), height);
+        var forward = NativeRailCurve.add(NativeRailCurve.add(s.first(), s.lateralDerivative(), across), s.normalDerivative(), height);
+        var nx = NativeRailCurve.cross(s.normal(), forward); var ny = NativeRailCurve.cross(forward, s.lateral());
+        var nz = NativeRailCurve.cross(s.lateral(), s.normal());
+        var n = NativeRailCurve.add(NativeRailCurve.add(NativeRailCurve.multiply(nx, data[i+5]), ny, data[i+6]), nz, data[i+7]);
+        data[i] = (float)(center+point.x()); data[i+1] = (float)point.y(); data[i+2] = (float)(start+point.z());
+        normal(data, i, n.x(), n.y(), n.z());
     }
 
     /** Sweep an authored cross section during static baking, retaining its UVs and source profile. */
     static IndexedMesh follow(IndexedMesh source, float start, double center, NativeRailCurve curve) {
-        float min = Float.POSITIVE_INFINITY, max = Float.NEGATIVE_INFINITY;
-        var vertices = source.vertices();
-        for (int i = 2; i < vertices.length; i += 8) { min = Math.min(min, vertices[i]); max = Math.max(max, vertices[i]); }
-        var cuts = new TreeSet<Float>(); cuts.add(min); cuts.add(max);
-        for (var knot : curve.knots()) {
-            float plane = start+(float)knot.distance();
-            if (plane > min && plane < max) cuts.add(plane);
+        var vertices = source.vertices().clone();
+        sweep(vertices, start, center, curve, new HashMap<>());
+        return new IndexedMesh(vertices, source.colors(), source.indices());
+    }
+
+    /** Two authored end sections, including miter shear; no serial clipping or added strip stations. */
+    static IndexedMesh fixedRail(IndexedMesh source, double start, double end, double center, NativeRailCurve curve,
+                                 double startMiter, double endMiter) {
+        var data = source.vertices().clone(); float min = Float.POSITIVE_INFINITY, max = Float.NEGATIVE_INFINITY;
+        for (int i = 2; i < data.length; i += 8) { min = Math.min(min,data[i]); max = Math.max(max,data[i]); }
+        double span = (double)max-min, factor = (end-start)/span;
+        var frames = new HashMap<Double,Sweep>();
+        for (int i = 0; i < data.length; i += 8) {
+            double t = ((double)data[i+2]-min)/span, across = data[i]-center;
+            double shear = -(1-t)*startMiter+t*endMiter, jacobian = factor+across*(startMiter+endMiter)/span;
+            double nz = data[i+7]/jacobian;
+            normal(data,i,data[i+5]-nz*shear,data[i+6],nz);
+            // Evaluate from the exact double station; a float round trip can cross a curve boundary.
+            double station = (end-start)*t+across*shear;
+            if (curve == null) data[i+2] = (float)(start+station);
+            else sweep(data,i,start,center,frames.computeIfAbsent(station,s -> sweep(curve,s)));
         }
-        var sections = new ArrayList<IndexedMesh>(); var sweeps = new HashMap<Float, Sweep>();
-        for (var band : NativeRailSlices.split(source, new ArrayList<>(cuts))) {
-            sweep(band.vertices(), start, center, curve, sweeps); sections.add(band);
-        }
-        return NativeTurnoutMeshes.join(sections);
+        return new IndexedMesh(data,source.colors(),source.indices());
     }
 
     static IndexedMesh rail(IndexedMesh source, float length, RailBend bend, double center) {
+        float start = -length/2;
         if (bend.curve() != null) {
-            var sections = new ArrayList<IndexedMesh>(); var sweeps = new HashMap<Float, Sweep>();
-            float start = -length/2;
-            var cuts = new ArrayList<Float>();
-            for (var knot : bend.curve().knots()) cuts.add(start+(float)knot.distance());
-            for (var band : NativeRailSlices.split(source, cuts)) {
-                sweep(band.vertices(), start, center, bend.curve(), sweeps); sections.add(band);
-            }
-            return NativeTurnoutMeshes.join(sections);
+            var mesh = NativeTurnoutMeshes.trim(source, start, length/2);
+            sweep(mesh.vertices(), start, center, bend.curve(), new HashMap<>());
+            return mesh;
         }
-        if (bend.start() == 0 && bend.end() == 0) return NativeTurnoutMeshes.trim(source, -length / 2 - 0.0005f, length / 2 + 0.0005f);
+        var result = NativeTurnoutMeshes.trim(source, start-0.0005f, length/2+0.0005f);
+        if (bend.start() == 0 && bend.end() == 0) return result;
         double startSlope = Math.tan(bend.start()), endSlope = Math.tan(bend.end());
-        int count = Math.max(1, (int)Math.ceil(length / 0.1));
-        var sections = new ArrayList<IndexedMesh>(); var cuts = new ArrayList<Float>();
-        for (int i = 0; i <= count; i++) cuts.add(i == 0 ? -length/2-0.0005f : i == count ? length/2+0.0005f : -length/2+length*i/count);
-        for (var band : NativeRailSlices.split(source, cuts)) {
-            var data = band.vertices();
-            for (int i = 0; i < data.length; i += 8) {
-                double t = (data[i + 2] + length / 2) / length;
-                double offset = length * ((t*t*t - 2*t*t + t)*startSlope + (t*t*t - t*t)*endSlope);
-                double slope = (3*t*t - 4*t + 1)*startSlope + (3*t*t - 2*t)*endSlope;
-                double cosine = 1 / Math.sqrt(1 + slope*slope), sine = slope*cosine;
-                double across = data[i] - center;
-                data[i] = (float)(center + offset + across*cosine);
-                data[i + 2] -= (float)(across*sine);
-                normal(data, i, data[i + 5]*cosine + data[i + 7]*sine, data[i + 6], -data[i + 5]*sine + data[i + 7]*cosine);
-            }
-            sections.add(band);
+        var data = result.vertices();
+        for (int i = 0; i < data.length; i += 8) {
+            double t = (data[i + 2] + length / 2) / length;
+            double offset = length * ((t*t*t - 2*t*t + t)*startSlope + (t*t*t - t*t)*endSlope);
+            double slope = (3*t*t - 4*t + 1)*startSlope + (3*t*t - 2*t)*endSlope;
+            double cosine = 1 / Math.sqrt(1 + slope*slope), sine = slope*cosine;
+            double across = data[i] - center;
+            data[i] = (float)(center + offset + across*cosine);
+            data[i + 2] -= (float)(across*sine);
+            normal(data, i, data[i + 5]*cosine + data[i + 7]*sine, data[i + 6], -data[i + 5]*sine + data[i + 7]*cosine);
         }
-        return NativeTurnoutMeshes.join(sections);
+        return result;
     }
 }

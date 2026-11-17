@@ -14,9 +14,21 @@ public final class NativeRailCurve {
     private final int hash;
     public NativeRailCurve(List<Knot> knots) { this(knots, new TrackVector(0, 1, 0)); }
     public NativeRailCurve(List<Knot> knots, TrackVector up) {
-        this.knots = List.copyOf(knots); this.up = up;
-        spans = new Span[knots.size()-1];
-        for (int i = 0; i < spans.length; i++) spans[i] = new Span(knots.get(i), knots.get(i+1));
+        if (knots.size() < 2 || !(knots.getLast().distance() > knots.getFirst().distance()))
+            throw new IllegalArgumentException("Rail curve requires a positive station interval");
+        // Sample stations and strip boundaries can differ by only a few rounding bits.
+        // Keep the exact endpoints, without fitting a polynomial across that microscopic gap.
+        var distinct = new ArrayList<Knot>(); distinct.add(knots.getFirst());
+        double tolerance = 1e-7*Math.max(1,knots.getLast().distance()-knots.getFirst().distance());
+        for (int i = 1; i+1 < knots.size(); i++) {
+            var knot = knots.get(i);
+            if (knot.distance()-distinct.getLast().distance() > tolerance
+                    && knots.getLast().distance()-knot.distance() > tolerance) distinct.add(knot);
+        }
+        distinct.add(knots.getLast());
+        this.knots = List.copyOf(distinct); this.up = up;
+        spans = new Span[this.knots.size()-1];
+        for (int i = 0; i < spans.length; i++) spans[i] = new Span(this.knots.get(i), this.knots.get(i+1));
         hash = 31*this.knots.hashCode()+up.hashCode();
     }
     public List<Knot> knots() { return knots; }
@@ -37,10 +49,20 @@ public final class NativeRailCurve {
         return low;
     }
     public Knot at(double distance) {
+        var first = knots.getFirst(); var last = knots.getLast();
+        if (distance < first.distance()) return extend(first,distance);
+        if (distance > last.distance()) return extend(last,distance);
         int index = Math.clamp(upperBound(distance)-1, 0, spans.length-1);
+        if (distance == last.distance()) return last;
+        if (distance == knots.get(index).distance()) return knots.get(index);
         var span = spans[index];
         double t = (distance-span.start)*span.inverse;
         return new Knot(distance, span.value(t, 0), span.value(t, 1), span.value(t, 2));
+    }
+    private static Knot extend(Knot endpoint, double distance) {
+        // End cuts may extend beyond the reference. Never extrapolate a quintic there.
+        return new Knot(distance,add(endpoint.point(),endpoint.first(),distance-endpoint.distance()),
+                endpoint.first(),new TrackVector(0,0,0));
     }
 
     private static final class Span {
@@ -94,9 +116,15 @@ public final class NativeRailCurve {
 
     /** Slice only the selected knot interval, using one fixed inverse rigid transform. */
     public NativeRailCurve local(double start, double end, TrackVector origin, double yaw, double pitch, double scale, double length) {
-        var selected = new ArrayList<Knot>(); selected.add(at(start));
-        for (int i = upperBound(start); i < knots.size() && knots.get(i).distance() < end; i++) selected.add(knots.get(i));
-        selected.add(at(end));
+        return local(start,end,origin,yaw,pitch,scale,length,0,0);
+    }
+    /** Keep the parent curve over the complete sheared end section, including miter overhang. */
+    public NativeRailCurve local(double start, double end, TrackVector origin, double yaw, double pitch, double scale, double length,
+                                double startExtension, double endExtension) {
+        double low = start-startExtension, high = end+endExtension;
+        var selected = new ArrayList<Knot>(); selected.add(at(low));
+        for (int i = upperBound(low); i < knots.size() && knots.get(i).distance() < high; i++) selected.add(knots.get(i));
+        selected.add(at(high));
         double parameter = (end-start)/length, sy = Math.sin(yaw), cy = Math.cos(yaw), sp = Math.sin(pitch), cp = Math.cos(pitch);
         var result = new ArrayList<Knot>(selected.size());
         for (var knot : selected) result.add(new Knot((knot.distance()-start)/parameter,

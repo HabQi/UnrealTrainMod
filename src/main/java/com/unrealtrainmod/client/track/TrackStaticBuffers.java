@@ -4,6 +4,7 @@
  */
 package com.unrealtrainmod.client.track;
 
+import com.unrealtrainmod.track.mesh.NativeLayoutProfile;
 import com.mojang.blaze3d.vertex.BufferBuilder;
 import com.mojang.blaze3d.vertex.ByteBufferBuilder;
 import com.mojang.blaze3d.vertex.DefaultVertexFormat;
@@ -37,7 +38,7 @@ final class TrackStaticBuffers implements AutoCloseable {
     private static final int[] QUAD_INDICES = {0, 1, 2, 2, 3, 0};
     private static final int[] IRIS_CORNERS = {0, 1, 2, 0, 2, 3};
 
-    private record Key(long chunk, RenderType type, int source, int structure) {}
+    private record Key(long chunk, RenderType type, int source, int structure, TrackStaticMesh.PageDomain domain) {}
     record Range(Page page, int first, int count, int storedVertices) {}
 
     static final class Page implements AutoCloseable {
@@ -162,6 +163,23 @@ final class TrackStaticBuffers implements AutoCloseable {
         boolean complete() { return partIndex == parts.size(); }
 
         void page(Group group, boolean iris, boolean fullBright, ClientLevel level, TrackRenderStats stats) {
+            NativeTurnoutLoading.Trace loading = null;
+            if (NativeTurnoutLoading.enabled()) {
+                var contributors = new java.util.LinkedHashSet<NativeTurnoutLoading.Trace>();
+                int references = 0;
+                for (int i = partIndex; i < parts.size() && references < MAX_REFERENCES; i++) {
+                    var trace = NativeTurnoutLoading.owner(parts.get(i).owner);
+                    if (trace != null) contributors.add(trace);
+                    references += Math.min(parts.get(i).count()-(i == partIndex ? reference : 0), MAX_REFERENCES-references);
+                }
+                loading = NativeTurnoutLoading.page(contributors, group.key.chunk(), group.key.type());
+            }
+            try (var trace = loading; var operation = NativeTurnoutLoading.open(trace, "page/build")) {
+                try { pageInternal(group, iris, fullBright, level, stats); }
+                catch (RuntimeException | Error failure) { if (operation != null) operation.failure(failure); throw failure; }
+            }
+        }
+        private void pageInternal(Group group, boolean iris, boolean fullBright, ClientLevel level, TrackRenderStats stats) {
             var format = group.key.source() == TrackRenderStats.NATIVE && !iris
                     ? DefaultVertexFormat.POSITION_COLOR_LIGHTMAP : DefaultVertexFormat.NEW_ENTITY;
             var indices = new IntArrayList();
@@ -173,7 +191,8 @@ final class TrackStaticBuffers implements AutoCloseable {
                 pageReferences += Math.min(remaining, MAX_REFERENCES - pageReferences);
             }
             long packStart = stats == null ? 0 : System.nanoTime();
-            try (var bytes = new ByteBufferBuilder(Math.max(256, pageReferences * format.getVertexSize()))) {
+            try (var packing = NativeLayoutProfile.stage("page/packing");
+                 var bytes = new ByteBufferBuilder(Math.max(256, pageReferences * format.getVertexSize()))) {
                 var builder = new BufferBuilder(bytes, VertexFormat.Mode.TRIANGLES, format);
                 var remap = new Int2IntOpenHashMap();
                 remap.defaultReturnValue(-1);
@@ -205,19 +224,28 @@ final class TrackStaticBuffers implements AutoCloseable {
                     try {
                         int vertexBytes = mesh.vertexBuffer().remaining();
                         light.samples(samples.toLongArray());
+                        if (packing != null) { packing.value("references", references); packing.value("storedVertices", samples.size()); packing.value("vertexBytes", vertexBytes); packing.close(); }
                         if (stats != null) stats.packed(System.nanoTime() - packStart);
                         long uploadStart = stats == null ? 0 : System.nanoTime();
                         // upload() consumes MeshData, including on failure.
-                        buffer.bind();
-                        buffer.upload(mesh);
-                        int indexBytes = iris ? 0 : buffer.uploadIndices(indices.toIntArray(), samples.size());
-                        light.attach(buffer);
+                        int indexBytes;
+                        try (var upload = NativeLayoutProfile.stage("page/vertexIndexUpload")) {
+                            buffer.bind();
+                            buffer.upload(mesh);
+                            indexBytes = iris ? 0 : buffer.uploadIndices(indices.toIntArray(), samples.size());
+                            light.attach(buffer);
+                            if (upload != null) { upload.value("vertexBytes", vertexBytes); upload.value("indexBytes", indexBytes); }
+                        }
                         if (stats != null) {
                             stats.gpuUpload(System.nanoTime() - uploadStart);
                             stats.uploaded(vertexBytes, indexBytes, vertexBytes + indexBytes);
+                            stats.pageDomainUpload(group.key.domain(),vertexBytes+indexBytes);
                         }
-                        light.refresh(level, stats);
-                        light.upload(stats, true, false);
+                        try (var lighting = NativeLayoutProfile.stage("page/initialLight")) {
+                            light.refresh(level, stats);
+                            light.upload(stats, true, false);
+                            if (lighting != null) lighting.value("bytes", light.byteSize());
+                        }
                         if (iris) IrisRenderStats.upload(vertexBytes);
                         var page = new Page(group, vertexBytes, indexBytes, buffer, light);
                         pages.add(page);
@@ -266,6 +294,9 @@ final class TrackStaticBuffers implements AutoCloseable {
 
     void request(TrackStaticMesh mesh, int structure) {
         if (!sources.containsKey(mesh)) mesh.register(this, structure);
+        if (NativeTurnoutLoading.owner(mesh) != null) {
+            if (ready(mesh)) NativeTurnoutLoading.ready(mesh); else NativeTurnoutLoading.pending(mesh);
+        }
         for (var part : sources.get(mesh)) {
             part.requested = view;
             if (part.group.requested != view) {
@@ -303,7 +334,7 @@ final class TrackStaticBuffers implements AutoCloseable {
     private Group group(TrackStaticMesh owner, int structure, RenderType type) {
         var origin = owner.origin();
         long chunk = ChunkPos.asLong((int)Math.floor(origin.x() / 16), (int)Math.floor(origin.z() / 16));
-        var key = new Key(chunk, type, owner.source(), structure);
+        var key = new Key(chunk, type, owner.source(), structure, owner.pageDomain());
         return groups.computeIfAbsent(key, Group::new);
     }
 
@@ -349,7 +380,8 @@ final class TrackStaticBuffers implements AutoCloseable {
     }
 
     boolean enqueueRanges(TrackStaticMesh mesh, TrackDrawQueue queue, Matrix4f modelView, TrackRenderStats stats) {
-        if (!ready(mesh)) return false;
+        if (!ready(mesh)) { NativeTurnoutLoading.pending(mesh); return false; }
+        NativeTurnoutLoading.ready(mesh);
         var parts = sources.get(mesh);
         var source = mesh.origin();
         for (var part : parts) for (var range : part.ranges) {
@@ -357,12 +389,13 @@ final class TrackStaticBuffers implements AutoCloseable {
             // Page vertices are relative to the chunk in X/Z and already world-height in Y.
             var view = source.x() == page.x() && source.z() == page.z() ? modelView
                     : new Matrix4f(modelView).translate((float)(page.x() - source.x()), 0, (float)(page.z() - source.z()));
-            queue.addStaticRange(range, view, stats);
+            queue.addStaticRange(range, view, stats, NativeTurnoutLoading.owner(mesh));
         }
         return true;
     }
 
     void remove(TrackStaticMesh mesh) {
+        NativeTurnoutLoading.forget(mesh);
         var parts = sources.remove(mesh);
         if (parts == null) return;
         for (var part : parts) {

@@ -31,10 +31,18 @@ public record NativeTurnoutLayout(TrackVector origin, double scale, List<Part> p
     private static final double MOTION_JOINT_ANGLE = Math.toRadians(0.1);
     private static final double SOLVE_TOLERANCE = 0.00001;
 
-    public enum Problem { FROG, SPACE }
+    public enum Problem { FROG, SPACE, ANGLE }
     public static final class InvalidLayout extends IllegalArgumentException {
         private final Problem problem;
-        public InvalidLayout(Problem problem) { super(problem.name()); this.problem = problem; }
+        private final NativeLayoutDiagnostic diagnostic;
+        public InvalidLayout(Problem problem) {
+            this(problem, NativeLayoutDiagnostic.at("turnout_"+problem.name().toLowerCase(java.util.Locale.ROOT), "layout", 0,
+                    Double.NaN, Double.NaN, Double.NaN));
+        }
+        public InvalidLayout(Problem problem, NativeLayoutDiagnostic diagnostic) {
+            super(problem.name()+" "+diagnostic); this.problem = problem; this.diagnostic = diagnostic;
+        }
+        public NativeLayoutDiagnostic diagnostic() { return diagnostic; }
         public Problem problem() { return problem; }
     }
 
@@ -135,9 +143,21 @@ public record NativeTurnoutLayout(TrackVector origin, double scale, List<Part> p
     private record Transition(List<Frame> frames, List<Double> tangents, List<Double> weights, double travel, List<CurvePoint> nodes) {}
     private record CurvePoint(double distance, TrackVector position, double tangent) {}
     private record Frog(TrackVector incoming, TrackVector outgoing) {}
+    private record Wings(TrackVector mainIncoming, TrackVector branchIncoming) {}
+    private record TipSample(double distance, double offset, TrackVector point, double stockDistance) {}
+    private record BladeSolution(double tipStation, double heelStation, double connectorStation, double root,
+                                 TrackVector anchor, Transition transition, List<Double> boundaries,
+                                 NativeRailCurve spine, NativeRailCurve bladeCurve, BladeContact contact) {}
 
     public static NativeTurnoutLayout build(TrackAssemblyDefinition.Geometry geometry, double gauge) {
         return build(geometry.paths().get("straight").getFirst(), geometry.paths().get("diverging").getFirst(), gauge);
+    }
+
+    public static NativeTurnoutLayout build(TrackAssemblyDefinition.Geometry geometry, double gauge, NativeLayoutProfile profile) {
+        try (var stage = profile == null ? null : profile.open("turnout/layout")) {
+            try { return build(geometry, gauge); }
+            catch (RuntimeException | Error failure) { if (stage != null) stage.failure(failure); throw failure; }
+        }
     }
 
     public static NativeTurnoutLayout example() {
@@ -147,46 +167,80 @@ public record NativeTurnoutLayout(TrackVector origin, double scale, List<Part> p
                         new TrackPoint(4.5, 24), new TrackPoint(7, 36), new LinearGrade(0, 0), 1.435), 1.435);
     }
 
+    /** Core exits use the caller's directed path, before any ordinary module is added. */
+    public record Exit(int side, double distance, TrackVector point, double yaw, double protectedEnd) {}
+    public record SleeperGroup(Part part, boolean branch, double distance, TrackVector rowOrigin) {}
+    public record BladeZone(boolean branch, int inner, double tip, double heel, double frog) {}
+    public record Core(NativeTurnoutLayout layout, List<Exit> main, List<Exit> branch, List<SleeperGroup> sleepers,
+                       List<BladeZone> blades) {}
+    public static Core core(TrackGeometry main, TrackGeometry branch, double gauge) {
+        var exits = new ArrayList<List<Exit>>();
+        var sleepers = new ArrayList<SleeperGroup>();
+        var blades = new ArrayList<BladeZone>();
+        var layout = build(main, branch, gauge, exits, sleepers, blades);
+        return new Core(layout, exits.get(0), exits.get(1), List.copyOf(sleepers), List.copyOf(blades));
+    }
+    public static Core core(TrackGeometry main, TrackGeometry branch, double gauge, NativeLayoutProfile profile) {
+        try (var stage = profile == null ? null : profile.open("turnout/core")) {
+            try { return core(main, branch, gauge); }
+            catch (RuntimeException | Error failure) { if (stage != null) stage.failure(failure); throw failure; }
+        }
+    }
     private static NativeTurnoutLayout build(TrackGeometry mainGeometry, TrackGeometry branchGeometry, double gauge) {
+        return build(mainGeometry, branchGeometry, gauge, null, null, null);
+    }
+    private static NativeTurnoutLayout build(TrackGeometry mainGeometry, TrackGeometry branchGeometry, double gauge,
+                                            List<List<Exit>> exits, List<SleeperGroup> sleepers, List<BladeZone> bladeZones) {
         var main = new Path(mainGeometry); var branch = new Path(branchGeometry);
         double scale = gauge / 1.435;
         var end = main.at(main.length()); var branchEnd = branch.at(branch.length()).position();
         double separation = (branchEnd.x() - end.position().x()) * end.lateral().x()
                 + (branchEnd.z() - end.position().z()) * end.lateral().z();
         double side = Math.copySign(1, separation);
-        var crossing = crossing(main, branch, side * gauge / 2, scale);
-        if (crossing.main() < 6 * scale || crossing.branch() < 6 * scale
-                || main.length() - crossing.main() < 3 * scale || branch.length() - crossing.branch() < 3 * scale) {
-            throw new InvalidLayout(Problem.SPACE);
+        Crossing crossing;
+        try (var stage = NativeLayoutProfile.stage("turnout/pathIntersection")) {
+            crossing = crossing(main, branch, side * gauge / 2, scale);
+            if (stage != null) { stage.value("mainFrog", crossing.main()); stage.value("branchFrog", crossing.branch()); }
+        }
+        for (int index = 0; index < 2; index++) {
+            double distance = index == 0 ? crossing.main() : crossing.branch();
+            double length = index == 0 ? main.length() : branch.length();
+            String label = index == 0 ? "main" : "branch";
+            if (distance < 6*scale) throw new InvalidLayout(Problem.SPACE,
+                    NativeLayoutDiagnostic.at("frog_entrance_margin", label, (int)side, 0, distance, 6*scale));
+            if (length-distance < 3*scale) throw new InvalidLayout(Problem.SPACE,
+                    NativeLayoutDiagnostic.at("frog_exit_margin", label, (int)side, distance, length, 3*scale));
         }
         var parts = new LinkedHashSet<Part>();
         double mainYaw = yaw(main.at(crossing.main())), branchYaw = yaw(branch.at(crossing.branch()));
         double angle = Math.abs(Math.toDegrees(wrap(mainYaw - branchYaw)));
-        if (angle < 0.5 || angle > 45) throw new InvalidLayout(Problem.SPACE);
+        if (angle < 0.5 || angle > 45) throw new InvalidLayout(Problem.ANGLE);
         double mainFront = direction(main, crossing.main(), crossing.main() + 2 * scale);
         double branchFront = direction(branch, crossing.branch(), crossing.branch() + 2 * scale);
         double noseAngle = Math.abs(Math.toDegrees(wrap(mainFront - branchFront)));
-        if (noseAngle < 0.5 || noseAngle > 45) throw new InvalidLayout(Problem.SPACE);
+        if (noseAngle < 0.5 || noseAngle > 45) throw new InvalidLayout(Problem.ANGLE);
         String nose = noseAngle < 5 ? "2_5" : noseAngle < 10 ? "5" : noseAngle < 20 ? "10" : "20";
         String mainNose = side > 0 ? "noseR" : "noseL", branchNose = side > 0 ? "noseL" : "noseR";
         fixed(parts, mainNose + nose, crossing.point(), mainFront);
         fixed(parts, branchNose + nose, crossing.point(), branchFront);
-        // Offset toward the incoming side of the crossing; the opposite sign displaces both check rails.
-        double wingOffset = 0.0625 * scale / Math.sin(Math.toRadians(angle));
-        var mainWingOrigin = shifted(crossing.point(), branchYaw, 0, -wingOffset);
-        var branchWingOrigin = shifted(crossing.point(), mainYaw, 0, -wingOffset);
-        String mainWing = side > 0 ? "wingR" : "wingL";
-        String branchWing = side > 0 ? "wingL" : "wingR";
-        var branchIncoming = wing(parts, mainWing, mainWingOrigin, mainFront,
-                direction(branch, crossing.branch() - scale, crossing.branch()), -side * WING_X, scale);
-        var mainIncoming = wing(parts, branchWing, branchWingOrigin, branchFront,
-                direction(main, crossing.main() - scale, crossing.main()), side * WING_X, scale);
-        var mainFrog = new Frog(mainIncoming, shifted(crossing.point(), mainFront, side * WING_X * scale, NOSE_END * scale));
-        var branchFrog = new Frog(branchIncoming, shifted(crossing.point(), branchFront, -side * WING_X * scale, NOSE_END * scale));
-        int divisions = Math.max(1, (int)Math.floor(main.length() / scale * 2));
-        double toe = Math.floor(divisions * (crossing.main() / main.length() / 8 + 0.042)) * main.length() / divisions;
+        var wings = wings(parts,main,branch,crossing,side,mainFront,branchFront,scale);
+        var mainFrog = new Frog(wings.mainIncoming(), shifted(crossing.point(), mainFront, side * WING_X * scale, NOSE_END * scale));
+        var branchFrog = new Frog(wings.branchIncoming(), shifted(crossing.point(), branchFront, -side * WING_X * scale, NOSE_END * scale));
+        double toe = crossing.main()/8+0.042*main.length();
         double branchToe = transverseStation(branch, main.at(toe));
-        double root = crossing.main() * (1 - 0.4 * crossing.main() / main.length());
+        var bladeRow = bladeReference(main, branch, toe, scale);
+        var mainTip = edgeOnRow(branch, bladeRow, side*(RAIL_X-HEAD_HALF)*scale, scale);
+        var branchTip = edgeOnRow(main, bladeRow, -side*(RAIL_X-HEAD_HALF)*scale, scale);
+        var mainBlade = solveBlade(main, branch, crossing.main(), toe, side, mainFrog,
+                branch.edge(branchToe, side*STOCK_WORK_X*scale), mainTip.point(), scale, "main");
+        var branchBlade = solveBlade(branch, main, crossing.branch(), branchToe, -side, branchFrog,
+                main.edge(toe, -side*STOCK_WORK_X*scale), branchTip.point(), scale, "branch");
+        if (bladeZones != null) {
+            bladeZones.add(new BladeZone(false, (int)side, mainBlade.tipStation(), mainBlade.heelStation(), crossing.main()));
+            bladeZones.add(new BladeZone(true, (int)-side, branchBlade.tipStation(), branchBlade.heelStation(), crossing.main()));
+        }
+        var mainCore = exits == null ? List.<Exit>of() : coreExits(parts, main, side, mainFrog, crossing.main(), scale);
+        var branchCore = exits == null ? List.<Exit>of() : coreExits(parts, branch, -side, branchFrog, crossing.branch(), scale);
         var rows = new ArrayList<RowFrame>();
         var lastMain = main.at(main.length()); var lastBranch = branch.at(branch.length());
         double extra = Math.max(0, (lastBranch.position().x() - lastMain.position().x()) * lastMain.tangent().x()
@@ -194,49 +248,53 @@ public record NativeTurnoutLayout(TrackVector origin, double scale, List<Part> p
         int rowCount = (int)Math.ceil((main.length() + extra) / (2 * scale)) + 2;
         double mainOut = station(main, mainFrog.outgoing(), main.at(crossing.main()).tangent());
         double branchOut = station(branch, branchFrog.outgoing(), branch.at(crossing.branch()).tangent());
+        double mainLimit = exits == null ? main.length() : mainCore.stream().mapToDouble(Exit::protectedEnd).max().orElseThrow();
+        double branchLimit = exits == null ? branch.length() : branchCore.stream().mapToDouble(Exit::protectedEnd).max().orElseThrow();
         RowFrame normal = null;
-        RowFrame bladeRow = null;
-        for (int index = 0; index < rowCount; index++) {
-            var row = row(main, branch, index * 2 * scale, index, scale);
-            rows.add(row);
-            if (normal == null && row.mainDistance() - 0.5 * scale > mainOut
-                    && row.branchDistance() - 0.5 * scale > branchOut) normal = row;
-            if (normal != null) continue;
-            double s = row.mainDistance();
-            boolean slide = s > toe - 2.5 * scale && s < root * 0.6;
-            String kind = s >= crossing.main() ? "sleeper_point01" : slide ? "sleeper_point03" : "sleeper_point02";
-            // The steel reference stays on the original grid, independently of the authored sleeper grouping.
-            if (slide && bladeRow == null) {
-                for (int offset = 0; offset < 4; offset++) {
-                    double firstRow = s + (-0.5 + offset * 0.5) * scale;
-                    if (firstRow >= 0) {
-                        double shift = (-0.5 + offset * 0.5) * scale;
-                        var a = shifted(row.main(), row.yaw(), 0, shift);
-                        var b = shifted(row.branch(), row.yaw(), 0, shift);
-                        bladeRow = new RowFrame(-1, station(main, a, main.at(s).tangent()),
-                                station(branch, b, branch.at(row.branchDistance()).tangent()), a, b, row.yaw());
-                        break;
+        try (var stage = NativeLayoutProfile.stage("turnout/sleeperRows")) {
+            for (int index = 0; index < rowCount; index++) {
+                var row = row(main, branch, index * 2 * scale, index, scale);
+                rows.add(row);
+                if (normal == null && row.mainDistance() - 0.5 * scale > mainOut
+                        && row.branchDistance() - 0.5 * scale > branchOut) normal = row;
+                if (exits != null && row.mainDistance()-0.5*scale > mainLimit && row.branchDistance()-0.5*scale > branchLimit) break;
+                if (normal != null && exits == null) continue;
+                double s = row.mainDistance();
+                for (int pair = 0; pair < 2; pair++) {
+                    var sleeperRow = row(main, branch, s + (-0.25 + pair) * scale, index * 2 + pair, scale);
+                    boolean onMain = exits == null ? sleeperRow.mainDistance()-0.25*scale < mainLimit
+                            : sleeperRow.mainDistance()+0.25*scale*Math.abs(Math.cos(sleeperRow.yaw()-yaw(main.at(sleeperRow.mainDistance())))) <= mainLimit+SOLVE_TOLERANCE*scale;
+                    boolean onBranch = exits == null ? sleeperRow.branchDistance()-0.25*scale < branchLimit
+                            : sleeperRow.branchDistance()+0.25*scale*Math.abs(Math.cos(sleeperRow.yaw()-yaw(branch.at(sleeperRow.branchDistance())))) <= branchLimit+SOLVE_TOLERANCE*scale;
+                    if (onMain) {
+                        String kind = sleeperKind(s,crossing.main(),sleeperRow.mainDistance(),mainBlade.tipStation(),mainBlade.heelStation(),scale);
+                        var part = pairedSleeper(parts, kind + (kind.endsWith("01") ? "" : side > 0 ? "R" : "L"), sleeperRow.main(),
+                                sleeperRow.branchDistance()-0.25*scale < branch.length() ? sleeperRow.yaw() : yaw(main.at(sleeperRow.mainDistance())));
+                        if (sleepers != null) sleepers.add(new SleeperGroup(part, false, sleeperRow.mainDistance(), sleeperRow.main()));
+                    }
+                    if (onBranch) {
+                        String kind = sleeperKind(s,crossing.main(),sleeperRow.branchDistance(),branchBlade.tipStation(),branchBlade.heelStation(),scale);
+                        var part = pairedSleeper(parts, kind + (kind.endsWith("01") ? "" : side > 0 ? "L" : "R"), sleeperRow.branch(),
+                                sleeperRow.mainDistance()-0.25*scale < main.length() ? sleeperRow.yaw() : yaw(branch.at(sleeperRow.branchDistance())));
+                        if (sleepers != null) sleepers.add(new SleeperGroup(part, true, sleeperRow.branchDistance(), sleeperRow.main()));
                     }
                 }
             }
-            for (int pair = 0; pair < 2; pair++) {
-                var sleeperRow = row(main, branch, s + (-0.25 + pair) * scale, index * 2 + pair, scale);
-                boolean onMain = sleeperRow.mainDistance() - 0.25 * scale < main.length();
-                boolean onBranch = sleeperRow.branchDistance() - 0.25 * scale < branch.length();
-                if (onMain) pairedSleeper(parts, kind + (kind.endsWith("01") ? "" : side > 0 ? "R" : "L"), sleeperRow.main(),
-                        onBranch ? sleeperRow.yaw() : yaw(main.at(sleeperRow.mainDistance())));
-                if (onBranch) pairedSleeper(parts, kind + (kind.endsWith("01") ? "" : side > 0 ? "L" : "R"), sleeperRow.branch(),
-                        onMain ? sleeperRow.yaw() : yaw(branch.at(sleeperRow.branchDistance())));
+        }
+        if (normal == null && exits == null) throw new InvalidLayout(Problem.SPACE, NativeLayoutDiagnostic.at("ordinary_boundary", "layout", 0, 0, main.length(), mainOut));
+        try (var stage = NativeLayoutProfile.stage("turnout/railsAndMotion")) {
+            rails(parts, main, crossing.main(), side, false, mainFrog, mainBlade,
+                    normal, false, scale, mainCore);
+            rails(parts, branch, crossing.branch(), -side, true, branchFrog, branchBlade,
+                    normal, true, scale, branchCore);
+            if (stage != null) stage.value("placedParts", parts.size());
+        }
+        if (exits != null) { exits.add(mainCore); exits.add(branchCore); }
+        if (exits == null) {
+            try (var stage = NativeLayoutProfile.stage("turnout/ballast")) {
+                for (var row : rows) bed(parts, main, branch, row, scale);
             }
         }
-        if (normal == null || bladeRow == null || bladeRow.mainDistance() >= toe) throw new InvalidLayout(Problem.SPACE);
-        var mainTip = edgeOnRow(branch, bladeRow, side * (RAIL_X - HEAD_HALF) * scale, scale);
-        var branchTip = edgeOnRow(main, bladeRow, -side * (RAIL_X - HEAD_HALF) * scale, scale);
-        rails(parts, main, branch, crossing.main(), toe, side, false, mainFrog, branch.edge(branchToe, side * STOCK_WORK_X * scale),
-                mainTip, normal.mainDistance(), normal.main(), scale);
-        rails(parts, branch, main, crossing.branch(), branchToe, -side, true, branchFrog, main.edge(toe, -side * STOCK_WORK_X * scale),
-                branchTip, normal.branchDistance(), normal.branch(), scale);
-        for (var row : rows) bed(parts, main, branch, row, scale);
         return new NativeTurnoutLayout(main.at(0).position(), scale, new ArrayList<>(parts),
                 main.poses.size() + branch.poses.size());
     }
@@ -282,6 +340,18 @@ public record NativeTurnoutLayout(TrackVector origin, double scale, List<Part> p
         if (hasBranch && !coincident) parts.add(new Part(name, row.branch(), branchYaw, 0, 0, 0, 0, 0, null, null, null, null));
     }
 
+    private static Wings wings(LinkedHashSet<Part> parts, Path main, Path branch, Crossing crossing,
+                               double side, double mainFront, double branchFront, double scale) {
+        double mainYaw = yaw(main.at(crossing.main())), branchYaw = yaw(branch.at(crossing.branch()));
+        double angle = Math.abs(wrap(mainYaw-branchYaw));
+        // Offset toward the incoming side, shared by standalone and scissors turnouts.
+        double offset = .0625*scale/Math.sin(angle);
+        var branchIncoming = wing(parts,side > 0 ? "wingR" : "wingL",shifted(crossing.point(),branchYaw,0,-offset),
+                mainFront,direction(branch,crossing.branch()-scale,crossing.branch()),-side*WING_X,scale);
+        var mainIncoming = wing(parts,side > 0 ? "wingL" : "wingR",shifted(crossing.point(),mainYaw,0,-offset),
+                branchFront,direction(main,crossing.main()-scale,crossing.main()),side*WING_X,scale);
+        return new Wings(mainIncoming,branchIncoming);
+    }
     private static TrackVector wing(LinkedHashSet<Part> parts, String name, TrackVector origin,
                                     double front, double rear, double localX, double scale) {
         fixed(parts, name + "f", origin, front);
@@ -291,81 +361,218 @@ public record NativeTurnoutLayout(TrackVector origin, double scale, List<Part> p
         return shifted(joint, rear, 0, WING_REAR * scale);
     }
 
-    private static void rails(LinkedHashSet<Part> parts, Path path, Path stock, double frog, double toe,
-                              double inner, boolean reverse, Frog ports, TrackVector oldTip,
-                              Edge contactTip, double normalStart, TrackVector normalPoint, double scale) {
-        var referenceTip = contactTip.point();
-        double incoming = station(path, ports.incoming(), path.at(frog).tangent());
-        double outgoing = station(path, ports.outgoing(), path.at(frog).tangent());
-        double root = frog * (1 - 0.4 * frog / path.length());
-        double bladeLength = (BLADE_JOIN - BLADE_TIP) * scale;
-        if (root - toe < bladeLength + 0.5 * scale || root >= incoming) throw new InvalidLayout(Problem.SPACE);
-        double lo = toe, hi = root;
-        for (int i = 0; i < 24; i++) {
-            double mid = (lo + hi) / 2;
-            if (distance(oldTip, path.edge(mid, inner * RAIL_X * scale)) < bladeLength) lo = mid; else hi = mid;
+    private static List<Exit> coreExits(LinkedHashSet<Part> parts, Path path, double inner, Frog frog,
+                                        double crossing, double scale) {
+        double outgoing = station(path, frog.outgoing(), path.at(crossing).tangent());
+        double protectedEnd = outgoing; var frame = path.at(outgoing);
+        // Only crossing cores request these exits; ordinary turnouts retain the complete unsuffixed wings.
+        for (var part : parts) if (part.name().startsWith("nose") || part.name().startsWith("wing")) {
+            var names = part.name().equals("wingLf") || part.name().equals("wingRf")
+                    ? List.of("guard"+part.name().charAt(4)+"_short", "wingFront"+part.name().charAt(4)+"_short") : List.of(part.name());
+            for (String name : names) {
+                var fixed = new NativeDiamondLayout.Part(name, part.position(), part.yaw(), part.localX(), part.localZ(), 0);
+                for (var point : NativeDiamondLayout.coreFootprint(fixed, scale).hull())
+                    protectedEnd = Math.max(protectedEnd, outgoing+projection(point, frame.position(), frame.tangent()));
+            }
         }
-        double bladeEnd = (lo + hi) / 2;
-        double bladeSpan = distance(referenceTip, path.edge(bladeEnd, inner * RAIL_X * scale));
-        double tolerance = SOLVE_TOLERANCE * scale, railOffset = inner * RAIL_X * scale;
-        // The former shortened layout defines only the heel anchor, not the final blade length.
-        double referenceTipStation = contactStation(path, railOffset, referenceTip, 0, root, tolerance);
-        var referenceSpineTip = path.edge(referenceTipStation, railOffset);
-        double heelStation = chordStation(path, railOffset, referenceSpineTip, bladeSpan * (2.0 / 3), referenceTipStation, root, tolerance);
-        var rear = path.edge(heelStation, railOffset);
-        double tipStation = backwardChordStation(path, railOffset, rear, bladeSpan, 0, referenceTipStation, tolerance);
-        var spineTip = path.edge(tipStation, railOffset);
-        double stockOffset = inner * (RAIL_X - HEAD_HALF) * scale;
-        double stockTipStation = projectedStation(stock, stockOffset, spineTip, spineKnot(path, railOffset, tipStation, scale).first(),
-                0, stock.length(), tolerance);
-        var tip = stock.edge(stockTipStation, stockOffset);
-        double connectorHigh = root - CONNECTION_STEP * scale;
-        double connectorStation = chordStation(path, railOffset, rear, RAIL_STEP * scale,
-                heelStation, connectorHigh, tolerance);
-        var anchor = path.edge(root, railOffset);
-        double fixedYaw = yaw(path.at(root));
-        var tipOffset = NativeRailCurve.add(tip, spineTip, -1);
-        var curve = transition(path, tipStation, heelStation, connectorStation, root,
-                path.at(tipStation).lateral(), tipOffset, inner, scale);
-        var boundaries = new ArrayList<Double>();
-        boundaries.add(tipStation); boundaries.add(heelStation);
+        if (protectedEnd > path.length()) throw new InvalidLayout(Problem.SPACE,
+                NativeLayoutDiagnostic.at("core_boundary", "layout", (int)inner, protectedEnd, path.length(), 0));
+        return List.of(new Exit((int)inner, outgoing, frog.outgoing(), direction(path, crossing, crossing+2*scale), protectedEnd),
+                new Exit((int)-inner, protectedEnd, path.edge(protectedEnd, -inner*RAIL_X*scale), yaw(path.at(protectedEnd)), protectedEnd));
+    }
+
+    /** Continuous reference retains the old row phase's average offset without two-meter jumps. */
+    private static RowFrame bladeReference(Path main, Path branch, double toe, double scale) {
+        return row(main, branch, Math.max(0, toe-2*scale), -1, scale);
+    }
+
+    private static BladeSolution solveBlade(Path path, Path stock, double frog, double toe, double inner,
+                                            Frog ports, TrackVector oldTip, TrackVector referenceTip,
+                                            double scale, String label) {
+        try (var stage = NativeLayoutProfile.stage("turnout/solveBlade/"+label)) {
+            if (stage != null) {
+                stage.value("path", label); stage.value("side", inner); stage.value("toe", toe); stage.value("scale", scale);
+                stage.value("pathLength", path.length());
+                stage.value("candidateAttempts", 0L); stage.value("candidateFailures", 0L);
+                stage.value("positionRefinements", 0L); stage.value("motionRefinements", 0L);
+            }
+            try {
+                var result = solveBladeInternal(path, stock, frog, toe, inner, ports, oldTip, referenceTip, scale, label);
+                if (stage != null) {
+                    stage.value("tip", result.tipStation()); stage.value("heel", result.heelStation());
+                    stage.value("root", result.root()); stage.value("links", result.transition().frames().size());
+                }
+                return result;
+            } catch (RuntimeException | Error failure) { if (stage != null) stage.failure(failure); throw failure; }
+        }
+    }
+    private static BladeSolution solveBladeInternal(Path path, Path stock, double frog, double toe, double inner,
+                                             Frog ports, TrackVector oldTip, TrackVector referenceTip,
+                                             double scale, String label) {
+        var profile = NativeLayoutProfile.current();
+        double incoming = station(path, ports.incoming(), path.at(frog).tangent());
+        double offset = inner*RAIL_X*scale, tolerance = SOLVE_TOLERANCE*scale;
+        double nominalEnd;
+        try { nominalEnd = chordStation(path, offset, oldTip, (BLADE_JOIN-BLADE_TIP)*scale, toe, incoming, tolerance); }
+        catch (InvalidLayout failure) { throw new InvalidLayout(Problem.SPACE,
+                NativeLayoutDiagnostic.at("blade_nominal_length", label, (int)inner, toe, incoming, (BLADE_JOIN-BLADE_TIP)*scale)); }
+        double length = distance(referenceTip, path.edge(nominalEnd, offset));
+        if (profile != null) profile.value("targetLength", length);
+        double referenceStation = contactStation(path, offset, referenceTip, 0, incoming, tolerance);
+        var referenceEdge = path.edge(referenceStation, offset);
+        double nominalHeel = distance(referenceEdge, path.edge(incoming, offset)) < length*2/3 ? incoming
+                : chordStation(path, offset, referenceEdge, length*2/3, referenceStation, incoming, tolerance);
+        double preferredTip = backwardChordStation(path, offset, path.edge(nominalHeel, offset),
+                length, 0, referenceStation, tolerance);
+        double preferredRoot = frog*(1-0.4*frog/path.length());
+        int count = Math.max(1, (int)Math.ceil(incoming/(0.1*scale)));
+        var samples = new ArrayList<TipSample>(); var candidates = new ArrayList<TipSample>();
+        try {
+            var preferred = tipSample(path, stock, preferredTip, inner, scale);
+            if (Math.abs(preferred.offset()) < HEAD_HALF) candidates.add(preferred);
+        } catch (InvalidLayout failure) { /* The nominal tip is only a preference. */ }
+        for (int i = 0; i <= count; i++) {
+            try {
+                var sample = tipSample(path, stock, incoming*i/count, inner, scale);
+                samples.add(sample);
+                if (Math.abs(sample.offset()) < HEAD_HALF) candidates.add(sample);
+            } catch (InvalidLayout failure) { /* This section has no stock working-edge intersection. */ }
+        }
+        for (int i = 1; i < samples.size(); i++) {
+            var a = samples.get(i-1); var b = samples.get(i);
+            if (b.distance()-a.distance() > incoming/count*1.01) continue;
+            for (double target : new double[]{0, -HEAD_HALF+SOLVE_TOLERANCE, HEAD_HALF-SOLVE_TOLERANCE}) {
+                if ((a.offset()-target)*(b.offset()-target) > 0) continue;
+                double lo = a.distance(), hi = b.distance(), start = a.offset()-target;
+                while (hi-lo > tolerance) {
+                    double mid = (lo+hi)/2, value = tipSample(path, stock, mid, inner, scale).offset()-target;
+                    if (start*value <= 0) hi = mid; else { lo = mid; start = value; }
+                }
+                var sample = tipSample(path, stock, (lo+hi)/2, inner, scale);
+                if (Math.abs(sample.offset()) < HEAD_HALF) candidates.add(sample);
+            }
+        }
+        candidates.sort(java.util.Comparator.comparingDouble((TipSample value) -> Math.abs(value.distance()-preferredTip))
+                .thenComparingDouble(TipSample::distance));
+        if (profile != null) { profile.value("candidates", candidates.size()); profile.value("samples", samples.size()); }
+        var failures = new ArrayList<TipSample>(); InvalidLayout closestFailure = null;
+        for (var tip : candidates) {
+            if (profile != null) profile.count("candidateAttempts");
+            BladeSolution result;
+            try { result = bladeCandidate(path, stock, tip, length, preferredRoot, incoming, inner, scale, label); }
+            catch (InvalidLayout failure) {
+                if (profile != null) profile.count("candidateFailures");
+                failures.add(tip); if (closestFailure == null) closestFailure = failure; continue;
+            }
+            if (!failures.isEmpty()) {
+                var failed = failures.stream().min(java.util.Comparator.comparingDouble(value -> Math.abs(value.distance()-tip.distance()))).orElseThrow();
+                double valid = tip.distance(), invalid = failed.distance();
+                var best = tip;
+                while (Math.abs(valid-invalid) > tolerance) {
+                    if (profile != null) { profile.count("positionRefinements"); profile.count("candidateAttempts"); }
+                    double distance = (valid+invalid)/2;
+                    try {
+                        var middle = tipSample(path, stock, distance, inner, scale);
+                        var candidate = bladeCandidate(path, stock, middle, length, preferredRoot, incoming, inner, scale, label);
+                        if (Math.abs(middle.distance()-preferredTip) < Math.abs(best.distance()-preferredTip)) { valid = middle.distance(); best = middle; result = candidate; }
+                        else invalid = middle.distance();
+                    } catch (InvalidLayout failure) { if (profile != null) profile.count("candidateFailures"); invalid = distance; }
+                }
+            }
+            return result;
+        }
+        if (closestFailure != null) throw closestFailure;
+        throw new InvalidLayout(Problem.SPACE, NativeLayoutDiagnostic.at("blade_contact_interval", label, (int)inner, 0, incoming, HEAD_HALF));
+    }
+
+    private static TipSample tipSample(Path path, Path stock, double station, double inner, double scale) {
+        double offset = inner*RAIL_X*scale; var pose = path.at(station);
+        if (1-offset*pose.curvature() <= 0) throw new InvalidLayout(Problem.SPACE);
+        var center = path.edge(station, offset);
+        double stockStation = projectedStation(stock, inner*(RAIL_X-HEAD_HALF)*scale, center,
+                spineKnot(path, offset, station, scale).first(), 0, stock.length(), SOLVE_TOLERANCE*scale);
+        var point = stock.edge(stockStation, inner*(RAIL_X-HEAD_HALF)*scale);
+        double across = projection(point, center, pose.lateral())/scale;
+        return new TipSample(station, across, point, stockStation);
+    }
+
+    private static BladeSolution bladeCandidate(Path path, Path stock, TipSample tip, double length,
+                                                double preferredRoot, double incoming, double inner,
+                                                double scale, String label) {
+        double offset = inner*RAIL_X*scale, tolerance = SOLVE_TOLERANCE*scale;
+        if (Math.abs(tip.offset()) >= HEAD_HALF) throw new InvalidLayout(Problem.SPACE,
+                NativeLayoutDiagnostic.at("blade_tip_width", label, (int)inner, 0, Math.abs(tip.offset()), HEAD_HALF));
+        double tipStation = tip.distance(), heelStation, connectorStation;
+        var spineTip = path.edge(tipStation, offset);
+        try { heelStation = chordStation(path, offset, spineTip, length, tipStation, incoming, tolerance); }
+        catch (InvalidLayout failure) { throw new InvalidLayout(Problem.SPACE,
+                NativeLayoutDiagnostic.at("blade_full_length", label, (int)inner, tipStation, incoming, length)); }
+        var rear = path.edge(heelStation, offset);
+        try { connectorStation = chordStation(path, offset, rear, RAIL_STEP*scale, heelStation, incoming-CONNECTION_STEP*scale, tolerance); }
+        catch (InvalidLayout failure) { throw new InvalidLayout(Problem.SPACE,
+                NativeLayoutDiagnostic.at("blade_connector", label, (int)inner, heelStation, incoming-CONNECTION_STEP*scale, RAIL_STEP*scale)); }
+        double low = connectorStation+CONNECTION_STEP*scale, high = incoming-tolerance;
+        if (low > high) throw new InvalidLayout(Problem.SPACE,
+                NativeLayoutDiagnostic.at("blade_root_space", label, (int)inner, connectorStation, incoming, CONNECTION_STEP*scale));
+        double root = Math.clamp(preferredRoot, low, high); var anchor = path.edge(root, offset);
+        var tipOffset = NativeRailCurve.add(tip.point(), spineTip, -1);
+        Transition curve;
+        try { curve = transition(path, tipStation, heelStation, connectorStation, root, path.at(tipStation).lateral(), tipOffset, inner, scale); }
+        catch (InvalidLayout failure) { throw new InvalidLayout(failure.problem(),
+                NativeLayoutDiagnostic.at("blade_motion", label, (int)inner, tipStation, root, BLADE_OPENING*scale)); }
+        for (int i = 1; i < curve.frames().size(); i++) if (curve.frames().get(i).length() > 1.58*scale)
+            throw new InvalidLayout(Problem.SPACE, NativeLayoutDiagnostic.at("blade_source_coverage", label, (int)inner, 0, curve.frames().get(i).length(), 1.58*scale));
+        var boundaries = new ArrayList<Double>(); boundaries.add(tipStation); boundaries.add(heelStation);
         for (var node : curve.nodes()) boundaries.add(node.distance());
-        var fittingBoundaries = new ArrayList<Double>(); fittingBoundaries.add(tipStation);
+        var fitting = new ArrayList<Double>(); fitting.add(tipStation);
         for (int i = 1; i < boundaries.size(); i++) {
             double a = boundaries.get(i-1), b = boundaries.get(i);
             int count = Math.max(1, (int)Math.ceil((b-a)/(0.1*scale)));
-            for (int j = 1; j <= count; j++) fittingBoundaries.add(j == count ? b : a+(b-a)*j/count);
+            for (int j = 1; j <= count; j++) fitting.add(j == count ? b : a+(b-a)*j/count);
         }
-        var spine = NativeRailCurve.fit(s -> spineKnot(path, railOffset, s, scale), fittingBoundaries, tolerance);
-        var bladeFrame = curve.frames().getFirst();
-        var bladeCurve = spine.local(tipStation, heelStation, spineTip, bladeFrame.yaw(), bladeFrame.pitch(), scale, bladeFrame.length() / scale);
-        var contactEdges = new ArrayList<BladeEdge>();
-        double search = Math.max(0, stockTipStation - tolerance), firstContact = 0;
-        int contactCount = Math.max(2, (int)Math.ceil(bladeSpan / (0.1 * scale)));
-        for (int i = 0; i <= contactCount; i++) {
-            double s = tipStation + (heelStation - tipStation) * i / contactCount;
-            var sample = spine.at(s); var center = sample.point(); var pose = path.at(s);
-            double stockStation = i == 0 ? stockTipStation : projectedStation(stock, stockOffset, center, sample.first(),
-                    search, stock.length(), tolerance);
-            search = Math.max(0, stockStation - tolerance);
-            var edge = i == 0 ? tip : stock.edge(stockStation, stockOffset);
-            double across = ((edge.x()-center.x())*pose.lateral().x() + (edge.z()-center.z())*pose.lateral().z()) / scale;
-            if (i == 0) firstContact = across;
-            double t = (double)i/contactCount, smooth = t*t*t*(10+t*(-15+6*t));
-            double lower = -HEAD_HALF + (inner*firstContact+HEAD_HALF)*(1-smooth);
-            if (inner*across < lower-tolerance/scale) throw new InvalidLayout(Problem.SPACE);
-            contactEdges.add(new BladeEdge((float)(bladeFrame.length() / scale * i / contactCount), (float)across));
+        var spine = NativeRailCurve.fit(s -> {
+            double factor = 1-offset*path.at(s).curvature();
+            if (factor <= 0) throw new InvalidLayout(Problem.SPACE,
+                    NativeLayoutDiagnostic.at("blade_offset_curve", label, (int)inner, s, s, 0));
+            return spineKnot(path, offset, s, scale);
+        }, fitting, tolerance);
+        var frame = curve.frames().getFirst();
+        var bladeCurve = spine.local(tipStation, heelStation, spineTip, frame.yaw(), frame.pitch(), scale, frame.length()/scale);
+        var edges = new ArrayList<BladeEdge>(); double search = Math.max(0, tip.stockDistance()-tolerance);
+        int count = Math.max(2, (int)Math.ceil(length/(0.1*scale)));
+        for (int i = 0; i <= count; i++) {
+            double s = tipStation+(heelStation-tipStation)*i/count; var sample = spine.at(s); var pose = path.at(s);
+            double stockStation = i == 0 ? tip.stockDistance() : projectedStation(stock, inner*(RAIL_X-HEAD_HALF)*scale,
+                    sample.point(), sample.first(), search, stock.length(), tolerance);
+            search = Math.max(0, stockStation-tolerance);
+            var edge = i == 0 ? tip.point() : stock.edge(stockStation, inner*(RAIL_X-HEAD_HALF)*scale);
+            double across = projection(edge, sample.point(), pose.lateral())/scale;
+            double t = (double)i/count, smooth = t*t*t*(10+t*(-15+6*t));
+            double lower = -HEAD_HALF+(inner*tip.offset()+HEAD_HALF)*(1-smooth);
+            if (inner*across < lower-SOLVE_TOLERANCE) throw new InvalidLayout(Problem.SPACE,
+                    NativeLayoutDiagnostic.at("blade_taper", label, (int)inner, lower, inner*across, 0));
+            edges.add(new BladeEdge((float)(frame.length()/scale*i/count), (float)across));
         }
-        if (Math.abs(contactEdges.getFirst().offset()) >= HEAD_HALF
-                || inner * contactEdges.getLast().offset() < 1.2 * HEAD_HALF) throw new InvalidLayout(Problem.SPACE);
-        var tipNormal = NativeRailCurve.cross(spine.at(tipStation).first(), path.at(tipStation).lateral());
-        double tipHeight = NativeRailCurve.dot(tipOffset, tipNormal) / Math.sqrt(NativeRailCurve.dot(tipNormal, tipNormal)) / scale;
-        var bladeContact = new BladeContact(contactEdges, bladeCurve, inner, tipHeight);
+        if (inner*edges.getLast().offset() < 1.2*HEAD_HALF) throw new InvalidLayout(Problem.SPACE,
+                NativeLayoutDiagnostic.at("blade_heel_width", label, (int)inner, 0, inner*edges.getLast().offset(), 1.2*HEAD_HALF));
+        var normal = NativeRailCurve.cross(spine.at(tipStation).first(), path.at(tipStation).lateral());
+        double height = NativeRailCurve.dot(tipOffset, normal)/Math.sqrt(NativeRailCurve.dot(normal, normal))/scale;
+        return new BladeSolution(tipStation, heelStation, connectorStation, root, anchor, curve, List.copyOf(boundaries),
+                spine, bladeCurve, new BladeContact(edges, bladeCurve, inner, height));
+    }
+
+    private static void rails(LinkedHashSet<Part> parts, Path path, double frog,
+                              double inner, boolean reverse, Frog ports, BladeSolution blade,
+                              RowFrame normal, boolean branch, double scale, List<Exit> exits) {
+        double incoming = station(path, ports.incoming(), path.at(frog).tangent());
+        double outgoing = station(path, ports.outgoing(), path.at(frog).tangent());
+        double root = blade.root(); var anchor = blade.anchor(); double fixedYaw = yaw(path.at(root));
+        var curve = blade.transition(); var spine = blade.spine(); var bladeCurve = blade.bladeCurve();
+        var boundaries = blade.boundaries(); var bladeContact = blade.contact();
         Motion next = null;
         var chainParts = new ArrayList<Part>();
         for (int i = curve.frames().size() - 1; i >= 0; i--) {
             var frame = curve.frames().get(i);
-            if (i > 0 && frame.length() > 1.58 * scale) throw new InvalidLayout(Problem.SPACE);
             float derivedLength = i == 0 ? (float)(frame.length() / scale) : 0;
             double localZ = i == 0 ? BLADE_JOIN - derivedLength : -frame.length() / (2 * scale);
             double travel = curve.travel() * curve.weights().get(i);
@@ -386,33 +593,37 @@ public record NativeTurnoutLayout(TrackVector origin, double scale, List<Part> p
         }
         for (var part : chainParts.reversed()) parts.add(part);
 
-        // A single integer grid owns normal sleepers and both of their embedded rails.
+        // Support modules keep their original phase; their two rails are independent fixed strips.
         double step = 1.5 * scale;
         TrackVector innerEnd = path.edge(path.length(), inner * RAIL_X * scale);
         TrackVector outerEnd = path.edge(path.length(), -inner * RAIL_X * scale);
-        double boundary = path.length();
-        if (normalStart < path.length()) {
-            var firstFrame = new Frame(normalPoint, normalPoint, yaw(path.at(normalStart)), 0, 0);
-            innerEnd = localPoint(firstFrame, inner * RAIL_X * scale, -0.75 * scale);
-            outerEnd = localPoint(firstFrame, -inner * RAIL_X * scale, -0.75 * scale);
-            boundary = station(path, innerEnd, path.at(normalStart).tangent());
-            int last = (int)Math.ceil((path.length() - normalStart) / step) - 1;
-            parts.add(new Part("sleeper", normalPoint, firstFrame.yaw(), 0, 0, 0, 0, 0, null, null, null, null));
-            for (int index = 1; index <= last; index++) ordinary(parts, path, normalStart + index * step, scale);
-            double lastCenter = normalStart + last * step;
-            double tail = lastCenter + 0.75 * scale;
-            if (tail < path.length()) {
-                var lastFrame = last == 0 ? firstFrame : centerFrame(path, lastCenter, scale);
-                railRun(parts, path, tail, path.length(), localPoint(lastFrame, inner * RAIL_X * scale, 0.75 * scale),
-                        path.edge(path.length(), inner * RAIL_X * scale), inner, scale, lastFrame.yaw());
-                railRun(parts, path, tail, path.length(), localPoint(lastFrame, -inner * RAIL_X * scale, 0.75 * scale),
-                        path.edge(path.length(), -inner * RAIL_X * scale), -inner, scale, lastFrame.yaw());
+        double boundary = path.length(), boundaryYaw = yaw(path.at(path.length()));
+        if (exits.isEmpty()) {
+            double normalStart = branch ? normal.branchDistance() : normal.mainDistance();
+            var normalPoint = branch ? normal.branch() : normal.main();
+            if (normalStart < path.length()) {
+                var firstFrame = new Frame(normalPoint, normalPoint, yaw(path.at(normalStart)), 0, 0);
+                innerEnd = localPoint(firstFrame, inner * RAIL_X * scale, -0.75 * scale);
+                outerEnd = localPoint(firstFrame, -inner * RAIL_X * scale, -0.75 * scale);
+                boundary = station(path, innerEnd, path.at(normalStart).tangent());
+                boundaryYaw = firstFrame.yaw();
+                int last = (int)Math.ceil((path.length() - normalStart) / step) - 1;
+                parts.add(new Part("sleeper_support", normalPoint, firstFrame.yaw(), 0, 0, 0, 0, 0, null, null, null, null));
+                for (int index = 1; index <= last; index++) ordinary(parts, path, normalStart + index * step, scale);
+                railRun(parts,path,boundary,path.length(),innerEnd,path.edge(path.length(),inner*RAIL_X*scale),
+                        inner,scale,firstFrame.yaw(),true);
+                railRun(parts,path,boundary,path.length(),outerEnd,path.edge(path.length(),-inner*RAIL_X*scale),
+                        -inner,scale,firstFrame.yaw(),true);
             }
         }
-        railRun(parts, path, 0, boundary, path.edge(0, -inner * RAIL_X * scale), outerEnd, -inner, scale, yaw(path.at(0)));
+        if (!exits.isEmpty()) {
+            innerEnd = exits.get(0).point(); outerEnd = exits.get(1).point(); boundary = exits.get(1).distance();
+        }
+        // Scissors cores share their stock rails with the global connection generator.
+        if (exits.isEmpty()) railRun(parts,path,0,boundary,path.edge(0,-inner*RAIL_X*scale),outerEnd,-inner,scale,yaw(path.at(0)),boundaryYaw);
         railRun(parts, path, root, incoming, anchor, ports.incoming(), inner, scale, fixedYaw);
-        railRun(parts, path, outgoing, boundary, ports.outgoing(), innerEnd, inner, scale,
-                direction(path, frog, frog + 2 * scale));
+        if (exits.isEmpty()) railRun(parts, path, outgoing, boundary, ports.outgoing(), innerEnd, inner, scale,
+                direction(path, frog, frog + 2 * scale),boundaryYaw);
     }
 
     private static double projectedStation(Path path, double offset, TrackVector origin, TrackVector direction,
@@ -430,17 +641,6 @@ public record NativeTurnoutLayout(TrackVector origin, double scale, List<Part> p
         return (point.x()-origin.x())*direction.x() + (point.y()-origin.y())*direction.y() + (point.z()-origin.z())*direction.z();
     }
 
-    private static double contactStation(Path path, double offset, TrackVector point, double low, double high, double tolerance) {
-        while (high - low > tolerance) {
-            double mid = (low + high) / 2; var delta = NativeRailCurve.add(path.edge(mid, offset), point, -1);
-            var pose = path.at(mid); var tangent = pose.tangent();
-            double factor = 1-offset*pose.curvature();
-            double forward = (delta.x()*tangent.x()+delta.z()*tangent.z())*factor + delta.y()*tangent.y();
-            if (forward < 0) low = mid; else high = mid;
-        }
-        return (low + high) / 2;
-    }
-
     private static double chordStation(Path path, double offset, TrackVector point, double length,
                                        double low, double high, double tolerance) {
         if (high <= low || distance(point, path.edge(high, offset)) < length) throw new InvalidLayout(Problem.SPACE);
@@ -451,14 +651,25 @@ public record NativeTurnoutLayout(TrackVector origin, double scale, List<Part> p
         return (low + high) / 2;
     }
 
+    private static double contactStation(Path path, double offset, TrackVector point,
+                                         double low, double high, double tolerance) {
+        while (high-low > tolerance) {
+            double mid = (low+high)/2; var pose = path.at(mid);
+            double along = projection(path.edge(mid, offset), point, pose.tangent())*(1-offset*pose.curvature());
+            if (along < 0) low = mid; else high = mid;
+        }
+        return (low+high)/2;
+    }
+
     private static double backwardChordStation(Path path, double offset, TrackVector point, double length,
                                                double low, double high, double tolerance) {
-        if (high <= low || distance(point, path.edge(low, offset)) < length) throw new InvalidLayout(Problem.SPACE);
-        while (high - low > tolerance) {
-            double mid = (low + high) / 2;
+        // A nominal extension before the entry is clamped; the candidate search still checks the full blade.
+        if (distance(point, path.edge(low, offset)) < length) return low;
+        while (high-low > tolerance) {
+            double mid = (low+high)/2;
             if (distance(point, path.edge(mid, offset)) > length) low = mid; else high = mid;
         }
-        return (low + high) / 2;
+        return (low+high)/2;
     }
 
     private static NativeRailCurve.Knot spineKnot(Path path, double offset, double s, double scale) {
@@ -476,6 +687,7 @@ public record NativeTurnoutLayout(TrackVector origin, double scale, List<Part> p
 
     private static Transition transition(Path path, double tipStation, double heelStation, double startDistance, double root,
                                          TrackVector lateral, TrackVector tipOffset, double inner, double scale) {
+        var profile = NativeLayoutProfile.current();
         double length = root - startDistance, offset = inner * RAIL_X * scale;
         int count = Math.max(3, (int)Math.ceil(length / (CONNECTION_STEP * scale)));
         var nodes = new ArrayList<CurvePoint>(count + 1);
@@ -503,6 +715,7 @@ public record NativeTurnoutLayout(TrackVector origin, double scale, List<Part> p
                 for (var node : nodes) tangents.add(node.tangent());
                 return new Transition(frames, tangents, weights, travel, nodes);
             }
+            if (profile != null) profile.count("motionRefinements");
             var nextNodes = new ArrayList<CurvePoint>(nodes.size() + split.cardinality());
             var nextFrames = new ArrayList<Frame>(frames.size() + split.cardinality());
             nextNodes.add(nodes.getFirst());
@@ -587,27 +800,30 @@ public record NativeTurnoutLayout(TrackVector origin, double scale, List<Part> p
 
     private static void railRun(LinkedHashSet<Part> parts, Path path, double a, double b,
                                 TrackVector start, TrackVector end, double side, double scale, double startYaw) {
-        if (b < a) throw new InvalidLayout(Problem.SPACE);
-        if (distance(start, end) < 1e-6 * scale) return;
-        int count = Math.max(1, (int)Math.ceil((b - a) / (RAIL_STEP * scale)));
-        var points = new ArrayList<TrackVector>(); points.add(start);
-        for (int index = 1; index <= count; index++) points.add(index == count ? end
-                : path.edge(a + (b - a) * index / count, side * RAIL_X * scale));
-        var frames = new ArrayList<Frame>();
-        for (int i = 0; i < count; i++) frames.add(frame(points.get(i), points.get(i + 1)));
-        var previous = start;
-        for (int index = 1; index <= count; index++) {
-            var point = points.get(index); var frame = frames.get(index - 1);
-            if (frame.length() > 1.58 * scale) throw new InvalidLayout(Problem.SPACE);
-            double first = index == 1 ? startYaw : frames.get(index - 2).yaw()
-                    + wrap(frame.yaw() - frames.get(index - 2).yaw()) / 2;
-            double last = index == count ? frame.yaw() : frame.yaw() + wrap(frames.get(index).yaw() - frame.yaw()) / 2;
-            parts.add(new Part(side > 0 ? "railL" : "railR", previous, frame.yaw(), frame.pitch(),
-                    side * RAIL_X, -frame.length() / (2 * scale), frame.length() / scale, 0, null,
-                    new RailBend((float)wrap(first - frame.yaw()), (float)wrap(last - frame.yaw())), null, null));
-            previous = point;
+        railRun(parts,path,a,b,start,end,side,scale,startYaw,false);
+    }
+    private static void railRun(LinkedHashSet<Part> parts, Path path, double a, double b,
+                                TrackVector start, TrackVector end, double side, double scale, double startYaw, boolean pathEndTangent) {
+        int oldCount = Math.max(1,(int)Math.ceil((b-a)/(RAIL_STEP*scale)));
+        double endYaw = pathEndTangent ? yaw(path.at(b))
+                : direction(path.edge(b-(b-a)/oldCount,side*RAIL_X*scale),end);
+        railRun(parts,path,a,b,start,end,side,scale,startYaw,endYaw);
+    }
+    private static void railRun(LinkedHashSet<Part> parts, Path path, double a, double b,
+                                TrackVector start, TrackVector end, double side, double scale, double startYaw, double endYaw) {
+        if (distance(start,end) < 1e-6*scale) return;
+        if (b <= a) throw new InvalidLayout(Problem.SPACE,NativeLayoutDiagnostic.at("fixed_rail_order","rail",(int)side,a,b,0));
+        var reference = NativeFixedRails.reference(path.geometry,a,b,side*RAIL_X*scale,start,end,startYaw,endYaw,scale);
+        var cuts = NativeFixedRails.cuts(reference,scale);
+        for (int i = 1; i < cuts.size(); i++) {
+            double from = cuts.get(i-1), to = cuts.get(i), length = (to-from)/scale;
+            var first = reference.at(from); double heading = Math.atan2(first.first().x(),first.first().z());
+            var curve = reference.local(from,to,first.point(),heading,0,scale,length);
+            parts.add(new Part(side > 0 ? "railL" : "railR",first.point(),heading,0,side*RAIL_X,-length/2,length,0,null,
+                    new RailBend(0,0,curve),null,null));
         }
     }
+
     private static Frame frame(TrackVector a, TrackVector b) {
         double dx = b.x() - a.x(), dy = b.y() - a.y(), dz = b.z() - a.z();
         double horizontal = Math.hypot(dx, dz);
@@ -625,7 +841,7 @@ public record NativeTurnoutLayout(TrackVector origin, double scale, List<Part> p
     }
     private static void ordinary(LinkedHashSet<Part> parts, Path path, double s, double scale) {
         var f = centerFrame(path, s, scale);
-        parts.add(new Part("sleeper", localPoint(f, 0, 0), f.yaw(), f.pitch(), 0, 0, 0, 0, null, null, null, null));
+        parts.add(new Part("sleeper_support", localPoint(f, 0, 0), f.yaw(), f.pitch(), 0, 0, 0, 0, null, null, null, null));
     }
     private static double distance(TrackVector a, TrackVector b) {
         return Math.hypot(Math.hypot(b.x() - a.x(), b.z() - a.z()), b.y() - a.y());
@@ -636,9 +852,15 @@ public record NativeTurnoutLayout(TrackVector origin, double scale, List<Part> p
     private static double direction(TrackVector a, TrackVector b) {
         return Math.atan2(b.x() - a.x(), b.z() - a.z());
     }
+    static String sleeperKind(double row, double frog, double station, double tip, double heel, double scale) {
+        return row >= frog ? "sleeper_point01"
+                : station >= tip-0.5*scale && station <= heel+0.5*scale ? "sleeper_point03" : "sleeper_point02";
+    }
+
     /** Authored sleeper centers are Z=0 and Z=0.5; place their midpoint on the paired row. */
-    private static void pairedSleeper(LinkedHashSet<Part> parts, String name, TrackVector p, double yaw) {
-        parts.add(new Part(name, p, yaw, 0, 0, 0.25, 0, 0, null, null, null, null));
+    private static Part pairedSleeper(LinkedHashSet<Part> parts, String name, TrackVector p, double yaw) {
+        var part = new Part(name, p, yaw, 0, 0, 0.25, 0, 0, null, null, null, null);
+        parts.add(part); return part;
     }
     private static void fixed(LinkedHashSet<Part> parts, String name, TrackVector p, double yaw) {
         parts.add(new Part(name, p, yaw, 0, 0, 0, 0, 0, null, null, null, null));

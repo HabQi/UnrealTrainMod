@@ -4,6 +4,7 @@
  */
 package com.unrealtrainmod.client.track;
 
+import com.unrealtrainmod.track.mesh.NativeLayoutProfile;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import com.unrealtrainmod.compat.rtm.script.RailScriptRuntime;
@@ -211,16 +212,31 @@ public final class ClientRailModelManager extends SimplePreparableReloadListener
                 }
             }
             discovery.log("rails");
-            try {
-                var nativeModel = NativeTurnoutModels.load(resources);
-                nativeTexture = NativeTurnoutModels.texture(resources);
+            var nativeTrace = NativeTurnoutLoading.start("resource", "native-r11", "resourceReload");
+            try (var trace = nativeTrace;
+                 var operation = NativeTurnoutLoading.open(trace, "resource/nativeModels")) {
+                Model nativeModel;
+                try (var stage = NativeLayoutProfile.stage("resource/turnoutModel")) {
+                    nativeModel = NativeTurnoutModels.load(resources);
+                }
+                try (var stage = NativeLayoutProfile.stage("resource/texture")) {
+                    nativeTexture = NativeTurnoutModels.texture(resources);
+                }
                 models.put(com.unrealtrainmod.track.model.NativeTurnoutCatalog.R11, nativeModel);
                 try {
-                    models.put(com.unrealtrainmod.track.model.NativeTurnoutCatalog.DIAMOND_R11, NativeDiamondModels.prepare(nativeModel));
+                    var diamondModel = NativeDiamondModels.prepare(nativeModel);
+                    models.put(com.unrealtrainmod.track.model.NativeTurnoutCatalog.DIAMOND_R11, diamondModel);
                 } catch (IllegalArgumentException exception) {
                     LOGGER.error("Cannot prepare native r11 diamond: {}", exception.getMessage(), exception);
                 }
+                try (var stage = NativeLayoutProfile.stage("icon/scissorsModel")) {
+                    models.put(com.unrealtrainmod.track.model.NativeTurnoutCatalog.SCISSORS_R11, NativeScissorsModels.prepare(nativeModel));
+                } catch (IllegalArgumentException exception) {
+                    NativeTurnoutLoading.failure(trace, exception);
+                    LOGGER.error("Cannot prepare native r11 scissors: {}", exception.getMessage(), exception);
+                }
             } catch (IOException | IllegalArgumentException exception) {
+                NativeTurnoutLoading.failure(nativeTrace, exception);
                 LOGGER.error("Cannot prepare native r11 turnout: {}", exception.getMessage(), exception);
             }
             return new Prepared(Map.copyOf(models), images, nativeTexture);
@@ -271,12 +287,15 @@ public final class ClientRailModelManager extends SimplePreparableReloadListener
         try {
             for (var id : List.copyOf(pending.keySet())) {
                 var image = pending.remove(id);
-                MaterialTexture texture;
-                try { texture = new MaterialTexture(image); }
-                catch (RuntimeException | Error exception) { image.close(); throw exception; }
-                try { manager.register(id, texture); }
-                catch (RuntimeException | Error exception) { texture.close(); throw exception; }
-                textures.add(id);
+                try (var trace = id.equals(NativeTurnoutModels.TEXTURE) ? NativeTurnoutLoading.start("resource", id, "textureApply") : null;
+                     var operation = NativeTurnoutLoading.open(trace, "resource/textureRegisterAndUpload")) {
+                    MaterialTexture texture;
+                    try { texture = new MaterialTexture(image); }
+                    catch (RuntimeException | Error exception) { if (operation != null) operation.failure(exception); image.close(); throw exception; }
+                    try { manager.register(id, texture); }
+                    catch (RuntimeException | Error exception) { if (operation != null) operation.failure(exception); texture.close(); throw exception; }
+                    textures.add(id);
+                }
             }
             models = prepared.models();
         } catch (RuntimeException | Error exception) {

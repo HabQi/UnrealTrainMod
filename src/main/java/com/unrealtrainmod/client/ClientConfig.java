@@ -131,6 +131,13 @@ public final class ClientConfig {
             .translation("unrealtrainmod.configuration.logItemRenderStats")
             .define("logItemRenderStats", false);
 
+    public static final ModConfigSpec.BooleanValue LOG_NATIVE_TURNOUT_LOADING = BUILDER
+            .comment("Log detailed native turnout/scissors loading stages independently of track render statistics.",
+                    "Includes layout solving, geometry caches, page packing, uploads and first draw submission.",
+                    "CPU/API timings are not GPU completion times. Enable before entering a world or reloading resources.")
+            .translation("unrealtrainmod.configuration.logNativeTurnoutLoading")
+            .define("logNativeTurnoutLoading", false);
+
     public static final ModConfigSpec.BooleanValue LOG_TRACK_RENDER_STATS = BUILDER
             .comment("Log lightweight track render statistics in roughly five-second windows.",
                     "Also reports construction instruments separately: native/Iris/fallback parts, draws, triangles,",

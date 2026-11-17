@@ -1,0 +1,6 @@
+newmtl r11_shared
+Kd 1 1 1
+d 1
+map_Kd ../../../textures/native_turnout/r11_simplified/r11.png
+map_Bump ../../../textures/native_turnout/r11_simplified/r11_n.png
+map_Ks ../../../textures/native_turnout/r11_simplified/r11_s.png

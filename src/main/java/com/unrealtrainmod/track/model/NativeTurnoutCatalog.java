@@ -9,17 +9,19 @@ import net.minecraft.resources.ResourceLocation;
 public final class NativeTurnoutCatalog {
     public static final ResourceLocation R11 = ResourceLocation.fromNamespaceAndPath("unrealtrainmod", "native_turnout/r11");
     public static final ResourceLocation DIAMOND_R11 = ResourceLocation.fromNamespaceAndPath("unrealtrainmod", "native_diamond/r11");
+    public static final ResourceLocation SCISSORS_R11 = ResourceLocation.fromNamespaceAndPath("unrealtrainmod", "native_scissors/r11");
     private NativeTurnoutCatalog() {}
-    public static boolean contains(ResourceLocation id) { return R11.equals(id) || DIAMOND_R11.equals(id); }
-    public static boolean contains(String id) { return R11.toString().equals(id) || isDiamond(id); }
+    public static boolean contains(ResourceLocation id) { return R11.equals(id) || DIAMOND_R11.equals(id) || SCISSORS_R11.equals(id); }
+    public static boolean contains(String id) { return R11.toString().equals(id) || isDiamond(id) || SCISSORS_R11.toString().equals(id); }
     public static boolean isDiamond(String id) { return DIAMOND_R11.toString().equals(id); }
-    public static List<ResourceLocation> all() { return List.of(R11, DIAMOND_R11); }
+    public static List<ResourceLocation> all() { return List.of(R11, DIAMOND_R11, SCISSORS_R11); }
     public static String nameKey(ResourceLocation id) {
-        return "gui.unrealtrainmod.rail_models."+(DIAMOND_R11.equals(id) ? "native_diamond" : "native_turnout");
+        return "gui.unrealtrainmod.rail_models."+(SCISSORS_R11.equals(id) ? "native_scissors" : DIAMOND_R11.equals(id) ? "native_diamond" : "native_turnout");
     }
     public static boolean supports(ResourceLocation id, TrackConstructionType kind) {
         return R11.equals(id) && kind == TrackConstructionType.SIMPLE_TURNOUT
-                || DIAMOND_R11.equals(id) && kind == TrackConstructionType.DIAMOND_CROSSING;
+                || DIAMOND_R11.equals(id) && kind == TrackConstructionType.DIAMOND_CROSSING
+                || SCISSORS_R11.equals(id) && kind == TrackConstructionType.SCISSORS_CROSSOVER;
     }
 
     /** The held placer wins; construction tools use the first placer in hotbar order. */

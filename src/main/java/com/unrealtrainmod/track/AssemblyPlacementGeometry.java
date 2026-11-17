@@ -30,6 +30,7 @@ public final class AssemblyPlacementGeometry {
             case SIMPLE_TURNOUT -> TrackAssemblyDefinition.CUSTOM;
             case DIAMOND_CROSSING -> TrackAssemblyDefinition.DIAMOND_CROSSING;
             case SINGLE_CROSSOVER -> TrackAssemblyDefinition.SINGLE_CROSSOVER;
+            case SCISSORS_CROSSOVER -> TrackAssemblyDefinition.SCISSORS_CROSSOVER;
             default -> throw new IllegalArgumentException("Unimplemented structure");
         };
     }

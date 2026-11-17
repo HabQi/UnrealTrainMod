@@ -25,21 +25,21 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.world.phys.Vec3;
 import net.neoforged.neoforge.client.event.RenderLevelStageEvent;
 
-/** Cached native model preview plus the immediate union footprint and construction annotations. */
+/** Construction paths, union footprint and station annotations; no rail model preparation. */
 public final class TurnoutConstructionRenderer {
     private TurnoutConstructionRenderer() {}
 
     public static void render(RenderLevelStageEvent event) {
         if (event.getStage() != RenderLevelStageEvent.Stage.AFTER_SOLID_BLOCKS
                 || IrisCompat.shadowPass()) return;
-        NativeTurnoutPreview.render(event);
         var state = ClientTurnoutConstruction.INSTANCE;
         var draft = state.draft(); var geometry = state.geometry();
         if (!state.isActive()) return;
-        int color = state.previewFeedback() == Feedback.READY ? 0xFF50E070
-                : (state.previewFeedback() == Feedback.START || state.previewFeedback() == Feedback.TURNOUT_A
-                        || state.previewFeedback() == Feedback.TURNOUT_B || state.previewFeedback() == Feedback.CROSSING_POINT
-                        || state.previewFeedback() == Feedback.CROSSOVER_POINT) ? 0xFFFFCC55 : 0xFFFF5555;
+        var feedback = state.previewFeedback();
+        int color = feedback == Feedback.READY ? 0xFF50E070
+                : (feedback == Feedback.START || feedback == Feedback.TURNOUT_A
+                        || feedback == Feedback.TURNOUT_B || feedback == Feedback.CROSSING_POINT
+                        || feedback == Feedback.CROSSOVER_POINT || feedback == Feedback.SCISSORS_POINT) ? 0xFFFFCC55 : 0xFFFF5555;
         var previousShader = RenderSystem.getShader();
         float[] previousColor = RenderSystem.getShaderColor().clone();
         var view = RenderSystem.getModelViewStack();
@@ -90,15 +90,18 @@ public final class TurnoutConstructionRenderer {
                 var port = geometry == null ? null : geometry.ports().get(name);
                 double direction = port == null ? 0 : ((port.outwardYaw() % 360) + 540) % 360 - 180;
                 String label = port == null ? name : String.format(Locale.ROOT, "%s  %.1f°", name, direction);
-                if (i == 0 && (state.previewFeedback() == Feedback.NATIVE_FROG || state.previewFeedback() == Feedback.NATIVE_SPACE
-                        || state.previewFeedback() == Feedback.NATIVE_DIAMOND_INTERSECTION
-                        || state.previewFeedback() == Feedback.NATIVE_DIAMOND_ANGLE || state.previewFeedback() == Feedback.NATIVE_DIAMOND_SPACE
-                        || state.previewFeedback() == Feedback.MODEL_UNSUPPORTED || state.previewFeedback() == Feedback.MISSING_MODEL)) {
-                    label += " " + Component.translatable(state.previewFeedback().translationKey()).getString();
+                if (i == 0 && (feedback == Feedback.NATIVE_FROG || feedback == Feedback.NATIVE_SPACE
+                        || feedback == Feedback.NATIVE_DIAMOND_INTERSECTION
+                        || feedback == Feedback.NATIVE_DIAMOND_ANGLE || feedback == Feedback.NATIVE_DIAMOND_SPACE
+                        || feedback == Feedback.NATIVE_SCISSORS_INTERSECTION
+                        || feedback == Feedback.NATIVE_SCISSORS_ANGLE || feedback == Feedback.NATIVE_SCISSORS_SPACE
+                        || feedback == Feedback.MODEL_UNSUPPORTED || feedback == Feedback.MISSING_MODEL)) {
+                    label += " " + Component.translatable(feedback.translationKey()).getString();
                 }
                 if (draft.kind() == TrackConstructionType.DIAMOND_CROSSING
-                        || draft.kind() == TrackConstructionType.SINGLE_CROSSOVER) {
-                    String prefix = draft.kind() == TrackConstructionType.DIAMOND_CROSSING
+                        || draft.kind() == TrackConstructionType.SINGLE_CROSSOVER || draft.kind() == TrackConstructionType.SCISSORS_CROSSOVER) {
+                    String prefix = draft.kind() == TrackConstructionType.SCISSORS_CROSSOVER ? "scissors_crossover_builder"
+                            : draft.kind() == TrackConstructionType.DIAMOND_CROSSING
                             ? "diamond_crossing_builder" : "single_crossover_builder";
                     label += " " + net.minecraft.network.chat.Component.translatable("item.unrealtrainmod." + prefix + "."
                             + (i < 2 ? "line_one" : "line_two")).getString();

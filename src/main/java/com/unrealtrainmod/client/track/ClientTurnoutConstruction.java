@@ -15,6 +15,7 @@ import com.unrealtrainmod.track.AssemblyPlacementGeometry;
 import com.unrealtrainmod.track.assembly.TrackAssemblyDefinition;
 import com.unrealtrainmod.track.block.TrackBlockVolume;
 import com.unrealtrainmod.track.geometry.TrackVector;
+import com.unrealtrainmod.track.model.NativeTurnoutCatalog;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -40,7 +41,6 @@ public final class ClientTurnoutConstruction implements ResourceManagerReloadLis
     private TrackAssemblyDefinition.Geometry geometry;
     private Map<BlockPos, Integer> volume = Map.of();
     private Feedback feedback;
-    private Feedback nativeProblem;
     private List<TrackCurveParameters> previewCurves = List.of();
     private ClientTurnoutConstruction() {}
 
@@ -54,10 +54,10 @@ public final class ClientTurnoutConstruction implements ResourceManagerReloadLis
         }
         if (payload.feedback() == Feedback.CLEARED) return;
         boolean success = switch (payload.feedback()) {
-            case TURNOUT_A, TURNOUT_B, CROSSING_POINT, CROSSOVER_POINT, READY, CREATED, CANCELLED -> true;
+            case TURNOUT_A, TURNOUT_B, CROSSING_POINT, CROSSOVER_POINT, SCISSORS_POINT, READY, CREATED, CANCELLED -> true;
             default -> false;
         };
-        var message = payload.feedback() == Feedback.CROSSING_POINT || payload.feedback() == Feedback.CROSSOVER_POINT
+        var message = payload.feedback() == Feedback.CROSSING_POINT || payload.feedback() == Feedback.CROSSOVER_POINT || payload.feedback() == Feedback.SCISSORS_POINT
                 ? Component.translatable(payload.feedback().translationKey(), payload.points().size(), payload.kind().pointCount())
                 : Component.translatable(payload.feedback().translationKey());
         mc.player.displayClientMessage(message
@@ -121,21 +121,22 @@ public final class ClientTurnoutConstruction implements ResourceManagerReloadLis
     public void onClone(ClientPlayerNetworkEvent.Clone event) { clear(); }
     @Override public void onResourceManagerReload(ResourceManager manager) { restorePreview(); }
     public void clear() {
-        NativeTurnoutPreview.clear();
-        nativeProblem = null;
         world = null; draft = null; geometry = null; volume = Map.of(); feedback = null;
         previewCurves = List.of();
     }
     TurnoutConstructionPayload draft() { return draft; }
     TrackAssemblyDefinition.Geometry geometry() { return geometry; }
     Map<BlockPos, Integer> volume() { return volume; }
-    void nativeProblem(Feedback problem) { nativeProblem = problem; }
-    void nativeReady() {
-        nativeProblem = switch (feedback) {
-            case MODEL_UNSUPPORTED, MISSING_MODEL, NATIVE_FROG, NATIVE_SPACE,
-                    NATIVE_DIAMOND_INTERSECTION, NATIVE_DIAMOND_ANGLE, NATIVE_DIAMOND_SPACE -> Feedback.READY;
-            default -> null;
-        };
+    public Feedback previewFeedback() {
+        var player = Minecraft.getInstance().player;
+        if (geometry != null && draft.points().size() == draft.kind().pointCount() && player != null) {
+            var selected = NativeTurnoutCatalog.constructionModel(player);
+            if (NativeTurnoutCatalog.contains(selected)) {
+                if (!NativeTurnoutCatalog.supports(selected,draft.kind())) return Feedback.MODEL_UNSUPPORTED;
+                if (ClientRailModelManager.INSTANCE.model(selected) == null) return Feedback.MISSING_MODEL;
+            }
+        }
+        // Geometry edits remain pending until the server validates the applied parameters.
+        return feedback;
     }
-    public Feedback previewFeedback() { return nativeProblem == null ? feedback : nativeProblem; }
 }

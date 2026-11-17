@@ -12,9 +12,14 @@ import net.minecraft.world.phys.AABB;
 final class RailTrackGpuMesh extends TrackStaticMesh {
     private final RailTrackMeshData data;
     private final AABB bounds;
+    private final PageDomain pageDomain;
 
     RailTrackGpuMesh(RailTrackMeshData data) {
+        this(data,PageDomain.FIXED);
+    }
+    RailTrackGpuMesh(RailTrackMeshData data, PageDomain pageDomain) {
         this.data = data;
+        this.pageDomain = pageDomain;
         var b = data.bounds();
         bounds = new AABB(b.minX(), b.minY(), b.minZ(), b.maxX(), b.maxY(), b.maxZ()).inflate(0.001);
     }
@@ -23,5 +28,6 @@ final class RailTrackGpuMesh extends TrackStaticMesh {
     @Override public TrackVector origin() { return data.origin(); }
     @Override public boolean isEmpty() { return data.batches().isEmpty(); }
     @Override public int source() { return TrackRenderStats.RAIL_MODEL; }
+    @Override PageDomain pageDomain() { return pageDomain; }
     @Override void register(TrackStaticBuffers buffers, int structure) { buffers.add(this, data, structure); }
 }

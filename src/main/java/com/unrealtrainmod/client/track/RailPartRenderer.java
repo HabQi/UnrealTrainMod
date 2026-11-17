@@ -38,6 +38,11 @@ import org.joml.Vector3f;
 
 /** Rail-only rigid command submission. Shared source meshes belong to the rail model manager. */
 final class RailPartRenderer implements AutoCloseable {
+    private NativeTurnoutLoading.Trace loading;
+    private boolean loadingPrepared, loadingInstances, loadingLight;
+    void loading(NativeTurnoutLoading.Trace trace) {
+        loading = trace; loadingPrepared = loadingInstances = loadingLight = false;
+    }
     private record Key(SharedRailPart mesh, ResourceLocation texture, boolean doubleSided, long chunk, boolean moving) {}
     private record Draw(Key key, PoseStack.Pose pose, int light, PreparedPart prepared, long version) {}
     /** Upload history holds values, never a mutable prepared pose. */
@@ -159,10 +164,16 @@ final class RailPartRenderer implements AutoCloseable {
 
     int draw(TrackRenderState state, TrackPartSnapshot snapshot, TrackPartSnapshot before, float fraction,
              Set<Long> chunks, RenderLevelStageEvent event, ClientLevel level, int uploads, TrackRenderStats stats) {
+        try (var binding = NativeTurnoutLoading.bind(loading)) {
+            return drawNative(snapshot, before, fraction, chunks, event, level, uploads, stats, state);
+        }
+    }
+    private int drawNative(TrackPartSnapshot snapshot, TrackPartSnapshot before, float fraction,
+             Set<Long> chunks, RenderLevelStageEvent event, ClientLevel level, int uploads, TrackRenderStats stats, TrackRenderState state) {
         if (snapshot == null) return uploads;
         long groupStart = stats == null ? 0 : System.nanoTime();
         long lightStart = stats == null ? 0 : System.nanoTime();
-        lighting.refresh(level);
+        refreshLighting(level);
         if (stats != null) {
             long elapsed = System.nanoTime() - lightStart;
             stats.lightRefresh(elapsed, lighting.checkedSamples(), lighting.changedSamples());
@@ -210,14 +221,17 @@ final class RailPartRenderer implements AutoCloseable {
         fixed.clear(); moving.clear();
         if (instanced) {
             for (var group : groups) (group.getFirst().key.moving ? moving : fixed).addAll(group);
-            if (!sameInstances(fixed, uploadedFixed)) {
-                stream(fixedInstances, fixed, stats);
-                uploadedFixed = captureInstances(fixed);
+            try (var operation = loadingInstances ? null : NativeTurnoutLoading.open(loading, "render/initialInstancePackingUpload")) {
+                if (!sameInstances(fixed, uploadedFixed)) {
+                    stream(fixedInstances, fixed, stats);
+                    uploadedFixed = captureInstances(fixed);
+                }
+                if (!sameInstances(moving, uploadedMoving)) {
+                    stream(movingInstances, moving, stats);
+                    uploadedMoving = captureInstances(moving);
+                }
             }
-            if (!sameInstances(moving, uploadedMoving)) {
-                stream(movingInstances, moving, stats);
-                uploadedMoving = captureInstances(moving);
-            }
+            loadingInstances = true;
         }
         long start = stats == null ? 0 : System.nanoTime();
         try {
@@ -239,6 +253,13 @@ final class RailPartRenderer implements AutoCloseable {
     int drawIris(TrackPartSnapshot snapshot, TrackPartSnapshot before, float fraction, Set<Long> chunks,
                  RenderLevelStageEvent event, ClientLevel level, TrackDrawQueue queue, int uploads, TrackRenderStats stats,
                  TrackWorldRenderer.BuildBudget budget, boolean shadow) {
+        try (var binding = NativeTurnoutLoading.bind(loading)) {
+            return drawIrisParts(snapshot, before, fraction, chunks, event, level, queue, uploads, stats, budget, shadow);
+        }
+    }
+    private int drawIrisParts(TrackPartSnapshot snapshot, TrackPartSnapshot before, float fraction, Set<Long> chunks,
+                 RenderLevelStageEvent event, ClientLevel level, TrackDrawQueue queue, int uploads, TrackRenderStats stats,
+                 TrackWorldRenderer.BuildBudget budget, boolean shadow) {
         if (snapshot == null) return uploads;
         var previous = snapshot.matches(before) ? before : null;
         classify(snapshot, previous);
@@ -257,7 +278,7 @@ final class RailPartRenderer implements AutoCloseable {
             var source = prepared.part.source();
             if (source.mesh().indices().length == 0) continue;
             if (!event.getFrustum().isVisible(prepared.bounds)) continue;
-            if (!lightPrepared) { lighting.refresh(level); lightPrepared = true; }
+            if (!lightPrepared) { refreshLighting(level); lightPrepared = true; }
             long start = stats == null ? 0 : System.nanoTime();
             var local = prepared.pose.pose();
             int light = lighting.sample(level, local.m30(), local.m31(), local.m32(), 0, 1, 0);
@@ -266,7 +287,7 @@ final class RailPartRenderer implements AutoCloseable {
             var type = IrisRenderTypes.get(source.texture(), source.doubleSided(), false, false);
             if (gpu != null) {
                 var posedView = new Matrix4f(modelView).mul(local);
-                queue.addCached(gpu, type, posedView, light);
+                queue.addCached(gpu, type, posedView, light, loading);
             } else {
                 if (nativeStyle && stats != null) stats.nativeFallback(prepared.supported ? "iris_cache" : "iris_pose");
                 if (writer == null) writer = new IrisVertices();
@@ -279,7 +300,11 @@ final class RailPartRenderer implements AutoCloseable {
                 int bytes = built.vertexBuffer().remaining();
                 try { irisFallback.upload(built); }
                 finally { VertexBuffer.unbind(); }
-                boolean changed = IrisDrawScope.draw(irisFallback, type, modelView, event.getProjectionMatrix());
+                boolean changed;
+                try (var operation = NativeTurnoutLoading.firstDraw(loading)) {
+                    changed = IrisDrawScope.draw(irisFallback, type, modelView, event.getProjectionMatrix());
+                }
+                NativeTurnoutLoading.submitted(loading);
                 IrisRenderStats.owned(source.mesh().indices().length / 3);
                 IrisRenderStats.upload(bytes);
                 if (stats != null) { stats.activeUpload(bytes); if (changed) stats.renderTypeSetup(); stats.irisShaderBind(); }
@@ -295,6 +320,13 @@ final class RailPartRenderer implements AutoCloseable {
         }
         if (stats != null) stats.dynamicParts(drawn);
         return uploads;
+    }
+
+    private void refreshLighting(ClientLevel level) {
+        try (var operation = loadingLight ? null : NativeTurnoutLoading.open(loading, "render/initialPartLight")) {
+            lighting.refresh(level);
+        }
+        loadingLight = true;
     }
 
     /** A part observed moving stays on the rigid path until the snapshot layout changes. */
@@ -337,7 +369,7 @@ final class RailPartRenderer implements AutoCloseable {
             if (!visible) { group.members.forEach(member -> member.batched = true); continue; }
             if (group.mesh == null && !shadow && budget.available()) {
                 long start = System.nanoTime();
-                try { group.build(entry.getKey(), anchor, meshOriginY); }
+                try (var operation = NativeTurnoutLoading.open(loading, "render/irisFixedGroup")) { group.build(entry.getKey(), anchor, meshOriginY); NativeTurnoutLoading.associate(group.mesh, loading); }
                 finally {
                     budget.pageFinished(start);
                     if (stats != null) stats.built(System.nanoTime() - start);
@@ -362,42 +394,46 @@ final class RailPartRenderer implements AutoCloseable {
     private void prepareParts(TrackPartSnapshot snapshot, TrackPartSnapshot previous, float fraction) {
         if (preparedSnapshot == snapshot && preparedPrevious == previous && preparedFraction == fraction) return;
         if (!snapshot.matches(preparedSnapshot)) grouped.clear();
-        int count = snapshot.parts().size();
-        for (int i = 0; i < count; i++) {
-            if (i == preparedParts.size()) preparedParts.add(new PreparedPart());
-            var prepared = preparedParts.get(i);
-            var part = snapshot.parts().get(i);
-            if (part.source().mesh().indices().length == 0) {
-                prepared.clear();
+        try (var operation = loadingPrepared ? null : NativeTurnoutLoading.open(loading, "render/initialPartPreparation")) {
+            int count = snapshot.parts().size();
+            if (operation != null) operation.value("parts", count);
+            for (int i = 0; i < count; i++) {
+                if (i == preparedParts.size()) preparedParts.add(new PreparedPart());
+                var prepared = preparedParts.get(i);
+                var part = snapshot.parts().get(i);
+                if (part.source().mesh().indices().length == 0) {
+                    prepared.clear();
+                    prepared.part = part;
+                    continue;
+                }
+                snapshot.interpolate(previous, i, fraction, preparedLocal);
+                if (prepared.part == null || prepared.part.source() != part.source()
+                        || !prepared.pose.pose().equals(preparedLocal)) {
+                    prepared.pose.pose().set(preparedLocal);
+                    preparedLocal.normal(prepared.pose.normal());
+                    if (prepared.part == null || prepared.part.source() != part.source())
+                        prepared.shared = ClientRailModelManager.INSTANCE.sharedPart(part.source().mesh());
+                    prepared.bounds = prepared.shared.transformedBounds(preparedLocal, anchor.x(), anchor.y(), anchor.z());
+                    prepared.version++;
+                    prepared.chunk = ChunkPos.asLong((int)Math.floor((anchor.x() + preparedLocal.m30()) / 16),
+                            (int)Math.floor((anchor.z() + preparedLocal.m32()) / 16));
+                    prepared.supported = IrisGeometryCache.supportsPose(preparedLocal);
+                }
+                boolean moving = part.moving() || movingParts.get(i);
+                var key = prepared.key;
+                if (key == null || key.mesh != prepared.shared || key.chunk != prepared.chunk || key.moving != moving
+                        || !key.texture.equals(part.source().texture()) || key.doubleSided != part.source().doubleSided()) {
+                    prepared.key = new Key(prepared.shared, part.source().texture(), part.source().doubleSided(), prepared.chunk, moving);
+                }
                 prepared.part = part;
-                continue;
             }
-            snapshot.interpolate(previous, i, fraction, preparedLocal);
-            if (prepared.part == null || prepared.part.source() != part.source()
-                    || !prepared.pose.pose().equals(preparedLocal)) {
-                prepared.pose.pose().set(preparedLocal);
-                preparedLocal.normal(prepared.pose.normal());
-                if (prepared.part == null || prepared.part.source() != part.source())
-                    prepared.shared = ClientRailModelManager.INSTANCE.sharedPart(part.source().mesh());
-                prepared.bounds = prepared.shared.transformedBounds(preparedLocal, anchor.x(), anchor.y(), anchor.z());
-                prepared.version++;
-                prepared.chunk = ChunkPos.asLong((int)Math.floor((anchor.x() + preparedLocal.m30()) / 16),
-                        (int)Math.floor((anchor.z() + preparedLocal.m32()) / 16));
-                prepared.supported = IrisGeometryCache.supportsPose(preparedLocal);
-            }
-            boolean moving = part.moving() || movingParts.get(i);
-            var key = prepared.key;
-            if (key == null || key.mesh != prepared.shared || key.chunk != prepared.chunk || key.moving != moving
-                    || !key.texture.equals(part.source().texture()) || key.doubleSided != part.source().doubleSided()) {
-                prepared.key = new Key(prepared.shared, part.source().texture(), part.source().doubleSided(), prepared.chunk, moving);
-            }
-            prepared.part = part;
+            for (int i = count; i < preparedPartCount; i++) preparedParts.get(i).clear();
+            preparedPartCount = count;
+            preparedSnapshot = snapshot;
+            preparedPrevious = previous;
+            preparedFraction = fraction;
         }
-        for (int i = count; i < preparedPartCount; i++) preparedParts.get(i).clear();
-        preparedPartCount = count;
-        preparedSnapshot = snapshot;
-        preparedPrevious = previous;
-        preparedFraction = fraction;
+        loadingPrepared = true;
     }
 
     private static boolean sameInstances(List<Draw> current, List<InstanceStamp> previous) {
@@ -436,32 +472,36 @@ final class RailPartRenderer implements AutoCloseable {
                 (float)(anchor.y() - meshOriginY), (float)(anchor.z() - (double)ChunkPos.getZ(key.chunk) * 16));
         int count = key.mesh.source.indices().length;
         int calls;
-        if (instanced) {
-            var shader = InstancedModelShader.state();
-            shader.prepare(StaticModelShader.LEGACY_CUTOUT, true);
-            shader.renderOrigin().set(renderOrigin);
-            state.prepareParts(TrackRenderTypes.part(key.texture, key.doubleSided, true),
-                    modelView, event.getProjectionMatrix());
-            shader.renderOrigin().upload();
-            key.mesh.gpu.drawInstanced(0, count, instances.handle(), instances.offsetOf(offset), group.size(), shader.attributes());
-            calls = 1;
-        } else {
-            for (var draw : group) {
-                var shader = StaticModelShader.state();
-                if (shader == null) buffered(state, draw, modelView, renderOrigin, event, stats);
-                else {
-                    shader.prepare(draw.pose, draw.light, StaticModelShader.LEGACY_CUTOUT, true);
-                    shader.renderOrigin().set(renderOrigin);
-                    state.prepareParts(TrackRenderTypes.part(key.texture, key.doubleSided, false),
-                            modelView, event.getProjectionMatrix());
-                    shader.modelMatrix().upload(); shader.normalMatrix().upload(); shader.light().upload();
-                    shader.overlay().upload(); shader.alphaPass().upload(); shader.directionalLighting().upload();
-                    shader.renderOrigin().upload();
-                    key.mesh.gpu.draw(false, 0, count);
+        try (var operation = NativeTurnoutLoading.firstDraw(loading)) {
+            if (operation != null) operation.value("path", instanced ? "instanced" : StaticModelShader.state() == null ? "buffered" : "sharedPart");
+            if (instanced) {
+                var shader = InstancedModelShader.state();
+                shader.prepare(StaticModelShader.LEGACY_CUTOUT, true);
+                shader.renderOrigin().set(renderOrigin);
+                state.prepareParts(TrackRenderTypes.part(key.texture, key.doubleSided, true),
+                        modelView, event.getProjectionMatrix());
+                shader.renderOrigin().upload();
+                key.mesh.gpu.drawInstanced(0, count, instances.handle(), instances.offsetOf(offset), group.size(), shader.attributes());
+                calls = 1;
+            } else {
+                for (var draw : group) {
+                    var shader = StaticModelShader.state();
+                    if (shader == null) buffered(state, draw, modelView, renderOrigin, event, stats);
+                    else {
+                        shader.prepare(draw.pose, draw.light, StaticModelShader.LEGACY_CUTOUT, true);
+                        shader.renderOrigin().set(renderOrigin);
+                        state.prepareParts(TrackRenderTypes.part(key.texture, key.doubleSided, false),
+                                modelView, event.getProjectionMatrix());
+                        shader.modelMatrix().upload(); shader.normalMatrix().upload(); shader.light().upload();
+                        shader.overlay().upload(); shader.alphaPass().upload(); shader.directionalLighting().upload();
+                        shader.renderOrigin().upload();
+                        key.mesh.gpu.draw(false, 0, count);
+                    }
                 }
+                calls = group.size();
             }
-            calls = group.size();
         }
+        NativeTurnoutLoading.submitted(loading);
         if (stats != null) {
             stats.ranges(calls, calls, 0);
             stats.drawn(TrackRenderStats.RAIL_MODEL, TrackRenderStats.STRUCTURE_ASSEMBLY,
@@ -505,6 +545,7 @@ final class RailPartRenderer implements AutoCloseable {
     }
 
     private void clearInstances() {
+        loadingPrepared = loadingInstances = loadingLight = false;
         for (int i = 0; i < preparedPartCount; i++) preparedParts.get(i).clear();
         preparedPartCount = 0;
         preparedSnapshot = preparedPrevious = null;

@@ -32,7 +32,6 @@ final class TrackRenderStats {
     private static final long IDLE_RESET_NANOS = 1_000_000_000L;
     private static final TrackRenderStats INSTANCE = new TrackRenderStats();
     private static final TrackRenderStats SHADOW = new TrackRenderStats();
-    private static final TrackRenderStats PREVIEW = new TrackRenderStats();
 
     /** Geometry source: native quads or an authored rail model. */
     static final int NATIVE = 0;
@@ -78,6 +77,7 @@ final class TrackRenderStats {
     private long windowLightBytes, windowPageBuilds, windowPageRebuilds, windowResidentPages, windowResidentBytes;
     private int rangeBefore, rangeAfter, multiDrawCalls, multiDrawRanges, pageBuilds, pageRebuilds, residentPages;
     private long lightBytes, residentBytes;
+    private long fixedPageBuilds, endpointPageBuilds, fixedPageUploadBytes, endpointPageUploadBytes;
 
     private int chunks, candidates, visible, empty, pending;
     private final int[] draws = new int[SLOTS];
@@ -100,10 +100,9 @@ final class TrackRenderStats {
         if (!ClientConfig.LOG_TRACK_RENDER_STATS.getAsBoolean()) {
             INSTANCE.closeGpuTimer();
             SHADOW.closeGpuTimer();
-            PREVIEW.closeGpuTimer();
             return null;
         }
-        return (scene.equals("shadow") ? SHADOW : scene.equals("preview") ? PREVIEW : INSTANCE).start(level, scene, path);
+        return (scene.equals("shadow") ? SHADOW : INSTANCE).start(level, scene, path);
     }
 
     private static int slot(int source, int structure) {
@@ -121,10 +120,6 @@ final class TrackRenderStats {
         SHADOW.level = null;
         SHADOW.lastFrame = now;
         SHADOW.resetWindow(now);
-        PREVIEW.closeGpuTimer();
-        PREVIEW.level = null;
-        PREVIEW.lastFrame = now;
-        PREVIEW.resetWindow(now);
     }
 
     private TrackRenderStats start(ClientLevel level, String scene, String path) {
@@ -151,6 +146,7 @@ final class TrackRenderStats {
     }
 
     private void resetWindow(long now) {
+        fixedPageBuilds = endpointPageBuilds = fixedPageUploadBytes = endpointPageUploadBytes = 0;
         nativeLayouts = nativeSamples = nativeParts = 0;
         endpointBuilds = endpointHits = windowEndpointBytes = 0;
         nativeFallbacks.clear();
@@ -259,6 +255,11 @@ final class TrackRenderStats {
     }
 
     void sharedPages(int count, long bytes) { residentPages = count; residentBytes = bytes; }
+
+    void pageDomainUpload(TrackStaticMesh.PageDomain domain, int bytes) {
+        if (domain == TrackStaticMesh.PageDomain.FIXED) { fixedPageBuilds++; fixedPageUploadBytes += bytes; }
+        else { endpointPageBuilds++; endpointPageUploadBytes += bytes; }
+    }
 
     void ranges(int before, int after, int multiRanges) {
         rangeBefore += before; rangeAfter += after;
@@ -439,12 +440,14 @@ final class TrackRenderStats {
                 windowAnimatedGpuSamples == 0 ? "n/a" : ms(windowMaxAnimatedGpu),
                 windowBudgetSkipped, windowSlowBuilds, ms(windowMaxSlowBuild), windowSlowResource);
         LOGGER.info("Track buffers [{}] path={} bufferMode=sharedPages perFrame rangesBefore={} rangesAfter={} multiDrawCalls={} "
-                        + "multiDrawRanges={} savedCalls={} lightBytes={} pageBuilds={} pageRebuilds={} residentPages={} residentBytes={}",
+                        + "multiDrawRanges={} savedCalls={} lightBytes={} pageBuilds={} pageRebuilds={} residentPages={} residentBytes={} "
+                        + "| pageDomains fixedBuilds={} fixedGeometryUpload={} endpointBuilds={} endpointGeometryUpload={}",
                 scene, path, avg(windowRangeBefore, frames), avg(windowRangeAfter, frames),
                 avg(windowMultiDrawCalls, frames), avg(windowMultiDrawRanges, frames),
                 avg(windowRangeBefore - windowRangeAfter + windowMultiDrawRanges - windowMultiDrawCalls, frames),
                 windowLightBytes / frames, avg(windowPageBuilds, frames), avg(windowPageRebuilds, frames),
-                avg(windowResidentPages, frames), windowResidentBytes / frames);
+                avg(windowResidentPages, frames), windowResidentBytes / frames,
+                fixedPageBuilds,fixedPageUploadBytes,endpointPageBuilds,endpointPageUploadBytes);
         if (nativeLayouts > 0 || endpointBuilds > 0 || endpointHits > 0 || !nativeFallbacks.isEmpty()) {
             LOGGER.info("Native r11 [{}] layoutBuilds={} centerlineSamples={} placedParts={} endpointBuilds={} endpointHits={} endpointCpuBytes={} fallbackEvents={}",
                     scene, nativeLayouts, nativeSamples, nativeParts, endpointBuilds, endpointHits, windowEndpointBytes/frames, nativeFallbacks);

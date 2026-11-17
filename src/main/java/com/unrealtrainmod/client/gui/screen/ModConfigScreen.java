@@ -65,6 +65,7 @@ public final class ModConfigScreen extends OptionsSubScreen {
         DEBUG_LOGS("debugLogs",
                 ClientConfig.LOG_VEHICLE_INSTANCING_STATS,
                 ClientConfig.LOG_ITEM_RENDER_STATS,
+                ClientConfig.LOG_NATIVE_TURNOUT_LOADING,
                 ClientConfig.LOG_TRACK_RENDER_STATS);
 
         private final String translationKey;

@@ -207,6 +207,8 @@ public final class TurnoutConstructionManager {
             if (stale != null) return s.validation = stale;
             updateDefaults(graph, s);
             if (s.points.size() == s.kind.pointCount()) {
+                if (s.kind == TrackConstructionType.SCISSORS_CROSSOVER && !NativeTurnoutCatalog.SCISSORS_R11.equals(selectedModel))
+                    return s.validation = selectedModel == null ? Feedback.SELECT_MODEL : Feedback.MODEL_UNSUPPORTED;
                 if (NativeTurnoutCatalog.contains(selectedModel)) {
                     if (!NativeTurnoutCatalog.supports(selectedModel, s.kind)) return s.validation = Feedback.MODEL_UNSUPPORTED;
                     if (!s.revision.equals(s.nativeRevision) || !selectedModel.equals(s.nativeModel) || s.nativeGauge != s.gauge) {
@@ -216,9 +218,18 @@ public final class TurnoutConstructionManager {
                         try {
                             var nativeGeometry = AssemblyPlacementGeometry.create(s.kind,
                                     s.points.stream().map(TrackPlacementEndpoint::position).toList(), s.gauge, s.curves, s.yaw);
-                            if (NativeTurnoutCatalog.DIAMOND_R11.equals(selectedModel)) {
+                            if (NativeTurnoutCatalog.SCISSORS_R11.equals(selectedModel)) {
+                                com.unrealtrainmod.track.mesh.NativeScissorsLayout.build(nativeGeometry, s.gauge);
+                            } else if (NativeTurnoutCatalog.DIAMOND_R11.equals(selectedModel)) {
                                 NativeDiamondLayout.build(nativeGeometry, s.gauge);
                             } else com.unrealtrainmod.track.mesh.NativeTurnoutLayout.build(nativeGeometry, s.gauge);
+                        } catch (com.unrealtrainmod.track.mesh.NativeScissorsLayout.InvalidLayout exception) {
+                            LOGGER.warn("Native construction rejected player={} revision={}: {}", player.getUUID(), s.revision, exception.getMessage());
+                            s.nativeFeedback = switch (exception.problem()) {
+                                case INTERSECTION -> Feedback.NATIVE_SCISSORS_INTERSECTION;
+                                case ANGLE -> Feedback.NATIVE_SCISSORS_ANGLE;
+                                case SPACE -> Feedback.NATIVE_SCISSORS_SPACE;
+                            };
                         } catch (NativeDiamondLayout.InvalidLayout exception) {
                             s.nativeFeedback = switch (exception.problem()) {
                                 case INTERSECTION -> Feedback.NATIVE_DIAMOND_INTERSECTION;
@@ -226,6 +237,7 @@ public final class TurnoutConstructionManager {
                                 case SPACE -> Feedback.NATIVE_DIAMOND_SPACE;
                             };
                         } catch (com.unrealtrainmod.track.mesh.NativeTurnoutLayout.InvalidLayout exception) {
+                            LOGGER.warn("Native construction rejected player={} revision={}: {}", player.getUUID(), s.revision, exception.getMessage());
                             s.nativeFeedback = exception.problem() == com.unrealtrainmod.track.mesh.NativeTurnoutLayout.Problem.FROG
                                     ? Feedback.NATIVE_FROG : Feedback.NATIVE_SPACE;
                         }
@@ -241,6 +253,7 @@ public final class TurnoutConstructionManager {
             return s.validation = switch (s.kind) {
                 case DIAMOND_CROSSING -> Feedback.CROSSING_POINT;
                 case SINGLE_CROSSOVER -> Feedback.CROSSOVER_POINT;
+                case SCISSORS_CROSSOVER -> Feedback.SCISSORS_POINT;
                 default -> s.points.size() == 2 ? Feedback.TURNOUT_B : Feedback.TURNOUT_A;
             };
         } catch (TrackGraphException exception) { return s.validation = failure(exception); }
@@ -400,6 +413,7 @@ public final class TurnoutConstructionManager {
         return switch (kind) {
             case DIAMOND_CROSSING -> "diamond_crossing_builder";
             case SINGLE_CROSSOVER -> "single_crossover_builder";
+            case SCISSORS_CROSSOVER -> "scissors_crossover_builder";
             default -> "turnout_builder";
         };
     }

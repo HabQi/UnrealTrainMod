@@ -12,7 +12,7 @@ import java.util.Set;
 
 /** Named horizontal paths and their control requirements. */
 public enum TrackAssemblyDefinition {
-    CUSTOM, DIAMOND_CROSSING, SINGLE_CROSSOVER;
+    CUSTOM, DIAMOND_CROSSING, SINGLE_CROSSOVER, SCISSORS_CROSSOVER;
 
     private static final Map<String, TrackRouteDefinition> ROUTES = Map.of(
             "straight", new TrackRouteDefinition("A", "B", Map.of("main", SwitchPosition.NORMAL)),
@@ -28,22 +28,31 @@ public enum TrackAssemblyDefinition {
                     "switch_one", SwitchPosition.REVERSE, "switch_two", SwitchPosition.REVERSE)));
     private static final JunctionState CROSSOVER_STATE = new JunctionState(Map.of(
             "switch_one", SwitchPosition.NORMAL, "switch_two", SwitchPosition.NORMAL));
+    private static final Map<String, TrackRouteDefinition> SCISSORS_ROUTES = Map.of(
+            "first_straight", new TrackRouteDefinition("A", "B", Map.of("switch_one", SwitchPosition.NORMAL, "switch_two", SwitchPosition.NORMAL)),
+            "second_straight", new TrackRouteDefinition("C", "D", Map.of("switch_three", SwitchPosition.NORMAL, "switch_four", SwitchPosition.NORMAL)),
+            "first_crossover", new TrackRouteDefinition("A", "D", Map.of("switch_one", SwitchPosition.REVERSE, "switch_four", SwitchPosition.REVERSE)),
+            "second_crossover", new TrackRouteDefinition("C", "B", Map.of("switch_three", SwitchPosition.REVERSE, "switch_two", SwitchPosition.REVERSE)));
+    private static final JunctionState SCISSORS_STATE = new JunctionState(Map.of(
+            "switch_one", SwitchPosition.NORMAL, "switch_two", SwitchPosition.NORMAL,
+            "switch_three", SwitchPosition.NORMAL, "switch_four", SwitchPosition.NORMAL));
     private static final JunctionState NO_CONTROLS = new JunctionState(Map.of());
     public TrackAssemblyType type() {
         return switch (this) {
             case DIAMOND_CROSSING -> TrackAssemblyType.DIAMOND_CROSSING;
             case SINGLE_CROSSOVER -> TrackAssemblyType.SINGLE_CROSSOVER;
+            case SCISSORS_CROSSOVER -> TrackAssemblyType.SCISSORS_CROSSOVER;
             default -> TrackAssemblyType.SIMPLE_TURNOUT;
         };
     }
     public Set<String> portNames() {
-        return this == DIAMOND_CROSSING || this == SINGLE_CROSSOVER ? Set.of("A", "B", "C", "D") : Set.of("A", "B", "C");
+        return this != CUSTOM ? Set.of("A", "B", "C", "D") : Set.of("A", "B", "C");
     }
     public Map<String, TrackRouteDefinition> routes() {
-        return this == DIAMOND_CROSSING ? CROSSING_ROUTES : this == SINGLE_CROSSOVER ? CROSSOVER_ROUTES : ROUTES;
+        return this == SCISSORS_CROSSOVER ? SCISSORS_ROUTES : this == DIAMOND_CROSSING ? CROSSING_ROUTES : this == SINGLE_CROSSOVER ? CROSSOVER_ROUTES : ROUTES;
     }
     public JunctionState initialState() {
-        return this == DIAMOND_CROSSING ? NO_CONTROLS : this == SINGLE_CROSSOVER ? CROSSOVER_STATE : INITIAL_STATE;
+        return this == SCISSORS_CROSSOVER ? SCISSORS_STATE : this == DIAMOND_CROSSING ? NO_CONTROLS : this == SINGLE_CROSSOVER ? CROSSOVER_STATE : INITIAL_STATE;
     }
     public boolean supportsTrailingPass() { return type() == TrackAssemblyType.SIMPLE_TURNOUT; }
 
