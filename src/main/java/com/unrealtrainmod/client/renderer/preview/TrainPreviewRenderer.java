@@ -28,6 +28,7 @@ public final class TrainPreviewRenderer implements AutoCloseable {
     }
 
     public NativeImage capture(LoadedModel model) {
+        if (!TrainModelRenderer.ready(model)) return null;
         queue.clear();
         try {
             return renderer.capture(model.bounds(), -90, 22, true,

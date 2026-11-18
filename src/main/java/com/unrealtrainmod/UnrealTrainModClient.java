@@ -201,6 +201,7 @@ public class UnrealTrainModClient {
         NeoForge.EVENT_BUS.addListener(com.unrealtrainmod.client.track.TotalStationRenderer::onLevelUnload);
         NeoForge.EVENT_BUS.addListener(com.unrealtrainmod.client.track.TotalStationRenderer::onFramePost);
         NeoForge.EVENT_BUS.addListener(ClientTurnoutConstruction.INSTANCE::onSync);
+        NeoForge.EVENT_BUS.addListener(ClientTurnoutConstruction.INSTANCE::confirmPlacement);
         NeoForge.EVENT_BUS.addListener(ClientTurnoutConstruction.INSTANCE::onTick);
         NeoForge.EVENT_BUS.addListener(ClientTurnoutConstruction.INSTANCE::onUnload);
         NeoForge.EVENT_BUS.addListener(ClientTurnoutConstruction.INSTANCE::onLogout);
@@ -226,5 +227,6 @@ public class UnrealTrainModClient {
         ClientButtonTextureManager.INSTANCE.close();
         ClientTrackConstruction.INSTANCE.clear();
         ClientTurnoutConstruction.INSTANCE.clear();
+        com.unrealtrainmod.client.ModelPreparation.shutdown();
     }
 }

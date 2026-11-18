@@ -25,6 +25,9 @@ final class TrackMorphMesh implements TrackRenderMesh {
     private VertexBuffer buffer;
     private boolean morph;
     private float movement, sampledMovement = Float.NaN;
+    private TrackMorphUpload initialUpload;
+    private int generation;
+    private boolean initialFailed;
 
     TrackMorphMesh(TrackMeshData normal, TrackMeshData reverse) {
         this.normal = normal;
@@ -39,20 +42,43 @@ final class TrackMorphMesh implements TrackRenderMesh {
     @Override public AABB bounds() { return bounds; }
     @Override public TrackVector origin() { return normal.origin(); }
     @Override public boolean isEmpty() { return normal.vertexCount() == 0; }
-    boolean isUploaded() { return buffer != null; }
+    boolean isUploaded() { return buffer != null || initialFailed; }
     @Override public int source() { return TrackRenderStats.NATIVE; }
 
     int upload(ClientLevel level, int budget, TrackRenderStats stats) {
         boolean shader = !IrisCompat.active() && TrackMorphShader.shader() != null;
         if (buffer != null && morph != shader) close();
         boolean first = buffer == null;
-        if (first && budget == 0) return 0;
+        if (first) {
+            if (initialUpload == null && !initialFailed) {
+                float captured = movement;
+                initialUpload = TrackMorphUpload.request(normal, reverse, captured, IrisCompat.active(), shader, lighting);
+                if (initialUpload != null) {
+                    int version = generation;
+                    com.unrealtrainmod.client.ModelUploads.enqueue(() -> {
+                        if (version != generation) return true;
+                        try {
+                            if (!initialUpload.step(level, stats)) return false;
+                            com.unrealtrainmod.client.ModelUploads.commit(() -> {
+                                if (version != generation) return;
+                                buffer = initialUpload.finish(stats); initialUpload.close(); initialUpload = null;
+                                morph = shader; sampledMovement = captured;
+                            });
+                        } catch (RuntimeException exception) {
+                            initialUpload.close(); initialUpload = null; initialFailed = true;
+                            org.slf4j.LoggerFactory.getLogger(TrackMorphMesh.class).warn("Cannot prepare turnout leaf", exception);
+                        }
+                        return true;
+                    });
+                }
+            }
+            return 0;
+        }
         boolean moved = movement != sampledMovement;
-        boolean geometryChanged = first || (!shader && moved);
+        boolean geometryChanged = !shader && moved;
         morph = shader;
         try {
             if (geometryChanged) {
-                if (buffer == null) buffer = new VertexBuffer(VertexBuffer.Usage.DYNAMIC);
                 int size;
                 if (IrisCompat.active()) {
                     var upload = TrackIrisMesh.upload(buffer, normal, reverse, movement, stats);
@@ -61,10 +87,7 @@ final class TrackMorphMesh implements TrackRenderMesh {
                     IrisRenderStats.upload(size);
                 } else size = uploadNative(stats);
                 lighting.attach(buffer);
-                if (stats != null) {
-                    if (first) stats.uploaded(size, 0, size);
-                    else stats.activeUpload(size);
-                }
+                if (stats != null) stats.activeUpload(size);
             } else if (moved) {
                 // Native morph movement changes sampling positions, never the endpoint VBO.
                 var samples = new long[normal.vertexCount()];
@@ -73,11 +96,11 @@ final class TrackMorphMesh implements TrackRenderMesh {
             }
             sampledMovement = movement;
             boolean changed = lighting.refresh(level, stats);
-            if (changed && (first || moved || budget > 0)) {
-                lighting.upload(stats, first, !first && moved);
-                return first || !moved ? 1 : 0;
+            if (changed && (moved || budget > 0)) {
+                lighting.upload(stats, false, moved);
+                return !moved ? 1 : 0;
             }
-            return first ? 1 : 0;
+            return 0;
         } catch (RuntimeException | Error exception) {
             close();
             throw exception;
@@ -126,11 +149,14 @@ final class TrackMorphMesh implements TrackRenderMesh {
     }
 
     void enqueue(TrackDrawQueue queue, Matrix4f modelView, int structure) {
+        if (buffer == null) return;
         if (morph) queue.addMorph(buffer, modelView, structure, normal.vertexCount(), movement);
         else queue.addNative(buffer, modelView, structure, normal.vertexCount());
     }
 
     @Override public void close() {
+        generation++; initialFailed = false;
+        if (initialUpload != null) { initialUpload.close(); initialUpload = null; }
         try { lighting.close(); }
         finally { if (buffer != null) { buffer.close(); buffer = null; } }
         sampledMovement = Float.NaN;

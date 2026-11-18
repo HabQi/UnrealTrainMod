@@ -8,14 +8,27 @@ import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.phys.AABB;
 import static com.unrealtrainmod.track.mesh.NativeRailCurve.*;
 
-/** Source cores over four unchanged routes. Fixed geometry is layout-local; moving layouts retain world anchors. */
-public record NativeScissorsLayout(TrackVector origin, double scale, List<Path> paths, List<NativeTurnoutLayout.Part> fixedRails,
-        List<NativeDiamondLayout.Part> fixedParts, List<NativeScissorsGeometry.Rail> connections, List<Sleeper> sleepers, Map<String, NativeTurnoutLayout> switches,
+/** Shared whole-assembly layout for single and scissors crossovers. Fixed geometry is layout-local; moving layouts retain world anchors. */
+public record NativeCrossoverLayout(Kind kind, TrackVector origin, double scale, List<Path> paths, List<NativeTurnoutLayout.Part> fixedRails,
+        List<NativeDiamondLayout.Part> fixedParts, List<NativeCrossoverGeometry.Rail> connections, List<Sleeper> sleepers, Map<String, NativeTurnoutLayout> switches,
         Set<Long> chunks, AABB bounds, int samples) {
-    public static final List<String> CONTROLS = List.of("switch_one", "switch_two", "switch_three", "switch_four");
-    public static final List<String> PATHS = List.of("first_straight", "second_straight", "first_crossover", "second_crossover");
+    public enum Kind {
+        SINGLE(List.of("first_straight", "second_straight", "crossover"), List.of("switch_one", "switch_two"),
+                List.of(new CoreSpec(0,2,false), new CoreSpec(1,2,true))),
+        SCISSORS(List.of("first_straight", "second_straight", "first_crossover", "second_crossover"),
+                List.of("switch_one", "switch_two", "switch_three", "switch_four"),
+                List.of(new CoreSpec(0,2,false), new CoreSpec(0,3,true), new CoreSpec(1,3,false), new CoreSpec(1,2,true)));
+        final List<String> paths, controls;
+        final List<CoreSpec> cores;
+        Kind(List<String> paths, List<String> controls, List<CoreSpec> cores) {
+            this.paths = paths; this.controls = controls; this.cores = cores;
+        }
+        public List<String> controls() { return controls; }
+        public String label() { return this == SINGLE ? "singleCrossover" : "scissors"; }
+    }
+    record CoreSpec(int main, int branch, boolean reversed) {}
     public static final double RAIL = 0.74875;
-    public NativeScissorsLayout {
+    public NativeCrossoverLayout {
         paths = List.copyOf(paths); fixedRails = List.copyOf(fixedRails); fixedParts = List.copyOf(fixedParts); connections = List.copyOf(connections); sleepers = List.copyOf(sleepers);
         switches = Collections.unmodifiableMap(new LinkedHashMap<>(switches)); chunks = Set.copyOf(chunks);
     }
@@ -53,20 +66,30 @@ public record NativeScissorsLayout(TrackVector origin, double scale, List<Path> 
     private record Hit(double a, double b, TrackVector point, double angle) {}
     public int partCount() { return switches.values().stream().mapToInt(s -> s.parts().size()).sum()+fixedRails.size()+connections.size()+fixedParts.size()+sleepers.size()+paths.stream().mapToInt(p -> p.nodes().size()).sum(); }
 
-    public static NativeScissorsLayout build(TrackAssemblyDefinition.Geometry geometry, double gauge, NativeLayoutProfile profile) {
-        try (var stage = profile == null ? null : profile.open("scissors/layout")) {
+    public static NativeCrossoverLayout build(TrackAssemblyDefinition.Geometry geometry, double gauge, NativeLayoutProfile profile) {
+        try (var stage = profile == null ? null : profile.open(kind(geometry).label()+"/layout")) {
             try { return build(geometry, gauge); }
             catch (RuntimeException | Error failure) { if (stage != null) stage.failure(failure); throw failure; }
         }
     }
-    public static NativeScissorsLayout build(TrackAssemblyDefinition.Geometry geometry, double gauge) {
+    public static NativeCrossoverLayout build(TrackAssemblyDefinition.Geometry geometry, double gauge) {
+        return build(geometry, gauge, true);
+    }
+    public static NativeCrossoverLayout candidate(TrackAssemblyDefinition.Geometry geometry, double gauge) {
+        return build(geometry, gauge, false);
+    }
+    private static Kind kind(TrackAssemblyDefinition.Geometry geometry) {
+        return geometry.paths().containsKey("crossover") ? Kind.SINGLE : Kind.SCISSORS;
+    }
+    private static NativeCrossoverLayout build(TrackAssemblyDefinition.Geometry geometry, double gauge, boolean complete) {
+        var kind = kind(geometry); var names = kind.paths;
         if (!Double.isFinite(gauge) || gauge <= 0) throw new InvalidLayout(Problem.SPACE);
         double scale = gauge/1.435;
-        var first = geometry.paths().get(PATHS.getFirst());
+        var first = geometry.paths().get(names.getFirst());
         if (first == null || first.size() != 1) throw new InvalidLayout(Problem.INTERSECTION);
         var origin = first.getFirst().sample(0).position(); var paths = new ArrayList<Path>();
-        try (var stage = NativeLayoutProfile.stage("scissors/pathSamplingAndIntersections")) {
-            for (String name : PATHS) {
+        try (var stage = NativeLayoutProfile.stage(kind.label()+"/pathSamplingAndIntersections")) {
+            for (String name : names) {
                 var items = geometry.paths().get(name);
                 if (items == null || items.size() != 1) throw new InvalidLayout(Problem.INTERSECTION);
                 var curve = items.getFirst(); var nodes = new ArrayList<Node>(); nodes.add(sample(curve,0,origin,gauge));
@@ -81,19 +104,19 @@ public record NativeScissorsLayout(TrackVector origin, double scale, List<Path> 
                     fail(Problem.SPACE,"offset_cusp",name,0,node.station(),node.station(),(RAIL+0.075)*scale,"layout");
                 paths.add(path);
             }
-            for (int a = 0; a < 4; a++) for (int b = a+1; b < 4; b++) {
+            for (int a = 0; a < paths.size(); a++) for (int b = a+1; b < paths.size(); b++) {
                 var intersections = hits(paths.get(a),paths.get(b),0,0,false);
-                if (a == 2 && b == 3) {
-                    if (intersections.size() != 1) fail(Problem.INTERSECTION,"central_crossing",PATHS.get(a)+"|"+PATHS.get(b),0,0,intersections.size(),1,"diamond");
-                    angle(intersections.getFirst(),"diamond",PATHS.get(a)+"|"+PATHS.get(b));
-                } else if (!intersections.isEmpty()) fail(Problem.INTERSECTION,"route_intersection",PATHS.get(a)+"|"+PATHS.get(b),0,0,intersections.size(),0,"layout");
+                if (kind == Kind.SCISSORS && a == 2 && b == 3) {
+                    if (intersections.size() != 1) fail(Problem.INTERSECTION,"central_crossing",names.get(a)+"|"+names.get(b),0,0,intersections.size(),1,"diamond");
+                    angle(intersections.getFirst(),"diamond",names.get(a)+"|"+names.get(b));
+                } else if (!intersections.isEmpty()) fail(Problem.INTERSECTION,"route_intersection",names.get(a)+"|"+names.get(b),0,0,intersections.size(),0,"layout");
             }
         }
-        var solution = NativeScissorsParts.build(geometry,paths,origin,gauge);
+        var solution = NativeCrossoverParts.build(kind,geometry,paths,origin,gauge,complete);
         var fixedParts = solution.parts(); var fixedRails = solution.rails(); var switches = solution.switches();
         List<Sleeper> sleepers;
-        try (var stage = NativeLayoutProfile.stage("scissors/sleepers")) {
-            sleepers = NativeScissorsSleepers.build(paths,solution.zones(),scale);
+        try (var stage = NativeLayoutProfile.stage(kind.label()+"/sleepers")) {
+            sleepers = complete ? NativeCrossoverSleepers.build(paths,solution.zones(),scale) : List.of();
             if (stage != null) stage.value("sleepers", sleepers.size());
         }
         AABB bounds = null;
@@ -108,7 +131,7 @@ public record NativeScissorsLayout(TrackVector origin, double scale, List<Path> 
                 for (int z = (int)Math.floor((p.z()-radius)/16); z <= (int)Math.floor((p.z()+radius)/16); z++) chunks.add(ChunkPos.asLong(x,z));
         }
         for (var part : fixedParts) {
-            var footprint = NativeScissorsParts.footprint(part,scale);
+            var footprint = NativeCrossoverParts.footprint(part,scale);
             double minX = footprint.stream().mapToDouble(TrackVector::x).min().orElseThrow()+origin.x();
             double maxX = footprint.stream().mapToDouble(TrackVector::x).max().orElseThrow()+origin.x();
             double minZ = footprint.stream().mapToDouble(TrackVector::z).min().orElseThrow()+origin.z();
@@ -118,7 +141,7 @@ public record NativeScissorsLayout(TrackVector origin, double scale, List<Path> 
             for (int x = (int)Math.floor(minX/16); x <= (int)Math.floor(maxX/16); x++)
                 for (int z = (int)Math.floor(minZ/16); z <= (int)Math.floor(maxZ/16); z++) chunks.add(ChunkPos.asLong(x,z));
         }
-        return new NativeScissorsLayout(origin,scale,paths,fixedRails,fixedParts,solution.connections(),sleepers,switches,chunks,bounds,paths.stream().mapToInt(p -> p.nodes().size()).sum());
+        return new NativeCrossoverLayout(kind,origin,scale,paths,fixedRails,fixedParts,solution.connections(),sleepers,switches,chunks,bounds,paths.stream().mapToInt(p -> p.nodes().size()).sum());
     }
     static double[] referenceRange(List<Path> paths) {
         var reference = paths.getFirst(); double first = 0, last = reference.length();
@@ -178,10 +201,12 @@ public record NativeScissorsLayout(TrackVector origin, double scale, List<Path> 
     private static void fail(Problem p, String stage, String path, int side, double from, double to, double required, String control) {
         throw new InvalidLayout(p,NativeLayoutDiagnostic.at(stage,path,side,from,to,required).in(control,path));
     }
-    public static NativeScissorsLayout example() {
+    public static NativeCrossoverLayout example() { return example(Kind.SCISSORS); }
+    public static NativeCrossoverLayout example(Kind kind) {
+        var names = kind.paths;
         var paths = new LinkedHashMap<String,List<TrackGeometry>>();
         double[][][] points = {{{0,0},{0,32},{0,64},{0,96}},{{12,0},{12,32},{12,64},{12,96}},{{0,0},{0,32},{12,64},{12,96}},{{12,0},{12,32},{0,64},{0,96}}};
-        for (int i = 0; i < 4; i++) { var p = points[i]; paths.put(PATHS.get(i),List.of(new BezierTrackGeometry(
+        for (int i = 0; i < names.size(); i++) { var p = points[i]; paths.put(names.get(i),List.of(new BezierTrackGeometry(
                 new TrackPoint(p[0][0],p[0][1]),new TrackPoint(p[1][0],p[1][1]),new TrackPoint(p[2][0],p[2][1]),new TrackPoint(p[3][0],p[3][1]),new LinearGrade(0,0),1.435))); }
         return build(new TrackAssemblyDefinition.Geometry(Map.of(),paths),1.435);
     }

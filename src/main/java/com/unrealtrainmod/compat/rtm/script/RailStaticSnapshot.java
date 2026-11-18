@@ -16,19 +16,25 @@ public final class RailStaticSnapshot {
     private final TrackGeometry geometry;
     private final BlockPos start;
     private final double scale, period;
+    private final boolean preview;
     private final List<Consumer<RailScriptDrawContext>> commands;
 
     RailStaticSnapshot(TrackGeometry geometry, BlockPos start, double scale, double period,
                        List<Consumer<RailScriptDrawContext>> commands) {
+        this(geometry, start, scale, period, commands, false);
+    }
+    RailStaticSnapshot(TrackGeometry geometry, BlockPos start, double scale, double period,
+                       List<Consumer<RailScriptDrawContext>> commands, boolean preview) {
         this.geometry = geometry;
         this.start = start;
         this.scale = scale;
         this.period = period;
+        this.preview = preview;
         this.commands = List.copyOf(commands);
     }
 
     public RailTrackMeshData build(int chunkX, int chunkZ) {
-        var context = new RailScriptDrawContext(geometry, start, chunkX, chunkZ, scale, period, false,
+        var context = new RailScriptDrawContext(geometry, start, chunkX, chunkZ, scale, period, preview,
                 RailTrackMeshBuilder.Filter.ALL);
         try {
             for (var command : commands) command.accept(context);

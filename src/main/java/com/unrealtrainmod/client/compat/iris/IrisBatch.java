@@ -17,6 +17,7 @@ import net.minecraft.client.renderer.RenderType;
 /** Resource-local alpha decisions, shared by entities, cameras and frames. */
 final class IrisBatch {
     private static final IdentityHashMap<RenderBatch, IrisBatch[]> BATCHES = new IdentityHashMap<>();
+    private static final IdentityHashMap<RenderBatch, com.unrealtrainmod.client.ModelPreparation.Ticket<IrisBatch[]>> PENDING = new IdentityHashMap<>();
     final RenderBatch batch;
     private final boolean emissive;
     final IndexedMesh solidMesh;
@@ -29,12 +30,49 @@ final class IrisBatch {
 
     static IrisBatch get(RenderBatch batch) { return get(batch, false); }
     static IrisBatch get(RenderBatch batch, boolean emissive) {
-        var variants = BATCHES.computeIfAbsent(batch, ignored -> new IrisBatch[2]);
-        int index = emissive ? 1 : 0;
-        if (variants[index] == null) variants[index] = new IrisBatch(batch, emissive);
-        return variants[index];
+        return BATCHES.get(batch)[emissive ? 1 : 0];
     }
-    static void clear() { BATCHES.clear(); }
+    static boolean prepare(RenderBatch batch) {
+        if (BATCHES.containsKey(batch)) return true;
+        var ticket = PENDING.get(batch);
+        if (ticket == null) {
+            ticket = com.unrealtrainmod.client.ModelPreparation.geometry(() -> {
+                var base = new IrisBatch(batch, false);
+                return new IrisBatch[] {base, new IrisBatch(base)};
+            }, values -> (long)(values[0].solidCount + values[0].clippedCount) * Integer.BYTES, ignored -> {});
+            if (ticket == null) return false;
+            PENDING.put(batch, ticket);
+        }
+        if (!ticket.ready()) return false;
+        try { BATCHES.put(batch, ticket.take()); }
+        catch (RuntimeException exception) {
+            ticket.close();
+            var fallback = new IrisBatch(batch);
+            BATCHES.put(batch, new IrisBatch[] {fallback, new IrisBatch(fallback)});
+            org.slf4j.LoggerFactory.getLogger(IrisBatch.class).warn("Cannot split Iris material; using complete material ranges", exception);
+        }
+        PENDING.remove(batch);
+        return true;
+    }
+    static void clear() {
+        PENDING.values().forEach(com.unrealtrainmod.client.ModelPreparation.Ticket::close); PENDING.clear(); BATCHES.clear();
+    }
+    static void publish() {
+        for (var batch : new java.util.ArrayList<>(PENDING.keySet())) if (PENDING.get(batch).ready()) prepare(batch);
+    }
+
+    private IrisBatch(IrisBatch base) {
+        batch = base.batch; emissive = true; forceOpaque = base.forceOpaque;
+        solidMesh = base.solidMesh; firstSolid = base.firstSolid; solidCount = base.solidCount;
+        clippedMesh = base.clippedMesh; firstClipped = base.firstClipped; clippedCount = base.clippedCount;
+        split.or(base.split);
+    }
+    private IrisBatch(RenderBatch batch) {
+        this.batch = batch; emissive = false; forceOpaque = batch.mode() == MaterialRenderMode.OPAQUE;
+        solidMesh = clippedMesh = batch.mesh();
+        firstSolid = batch.firstIndex(); solidCount = batch.category() == RenderCategory.CUTOUT ? batch.indexCount() : 0;
+        firstClipped = batch.firstIndex(); clippedCount = batch.category() == RenderCategory.CUTOUT ? 0 : batch.indexCount();
+    }
 
     private IrisBatch(RenderBatch batch, boolean emissive) {
         this.batch = batch;

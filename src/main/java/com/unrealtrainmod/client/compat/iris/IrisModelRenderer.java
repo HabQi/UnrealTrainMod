@@ -446,6 +446,11 @@ public final class IrisModelRenderer {
         }
     }
     private static final IdentityHashMap<Entity, Snapshot> ENTITIES = new IdentityHashMap<>();
+    private static final class BatchReadiness {
+        long frame = -1;
+        boolean ready;
+    }
+    private static final IdentityHashMap<RenderBatch, BatchReadiness> BATCH_READINESS = new IdentityHashMap<>();
     private IrisModelRenderer() {}
 
     public static VehiclePose vehiclePose(TrainEntity entity, float partialTick) {
@@ -459,6 +464,7 @@ public final class IrisModelRenderer {
 
     public static void render(Entity identity, LoadedModel model, VehiclePose vehiclePose, TrainEntity train,
                               float partialTick, PoseStack viewPose, MultiBufferSource buffers, int light) {
+        if (!com.unrealtrainmod.compat.rtm.script.VehicleScriptManager.ready(model)) return;
         boolean shadow = IrisCompat.shadowPass();
         try (var metrics = IrisRenderStats.begin(IrisRenderStats.VEHICLE, shadow)) {
             long start = IrisRenderStats.clock();
@@ -467,6 +473,7 @@ public final class IrisModelRenderer {
                 TrainModelRenderer.submit(snapshot, model, vehiclePose, train, partialTick, new PoseStack(), light);
                 snapshot.ready = true;
             }
+            if (!ready(snapshot)) return;
             prepare(snapshot, viewPose, shadow);
             IrisRenderStats.prepare(start);
             int temporal = IrisVehicleReprojection.capture(train, viewPose, shadow);
@@ -482,11 +489,51 @@ public final class IrisModelRenderer {
         try (var metrics = IrisRenderStats.begin(IrisRenderStats.VEHICLE, shadow); var snapshot = new Snapshot()) {
             long start = IrisRenderStats.clock();
             snapshot.submit(instance, selection, new PoseStack(), light);
+            if (!ready(snapshot)) return true;
             prepare(snapshot, pose, shadow);
             IrisRenderStats.prepare(start);
             draw(snapshot, buffers, shadow, 0, null);
         }
         return true;
+    }
+
+    private static boolean ready(Snapshot snapshot) {
+        boolean ready = true;
+        for (var command : snapshot.commands) {
+            var batch = command.batch();
+            var state = BATCH_READINESS.computeIfAbsent(batch, ignored -> new BatchReadiness());
+            long frame = com.unrealtrainmod.client.ModelUploads.frame();
+            if (state.frame != frame) {
+                state.frame = frame;
+                state.ready = prepareBatch(batch);
+            }
+            ready &= state.ready;
+        }
+        return ready;
+    }
+
+    private static boolean prepareBatch(RenderBatch batch) {
+        boolean ready = com.unrealtrainmod.client.texture.MaterialTexture.ready(batch.texture());
+        if (!IrisBatch.prepare(batch)) return false;
+        var material = IrisBatch.get(batch);
+        if (material.solidCount != 0) {
+            var gpu = IrisGeometryCache.requestVehicleOpaque(material.solidMesh, material.firstSolid, material.solidCount, material.forceOpaque);
+            ready &= IrisGeometryCache.acceptedOpaque(gpu, material.solidMesh, material.forceOpaque);
+            if (material.forceOpaque) ready &= IrisMaterials.ready(batch.texture(), IrisMaterials.Mask.OPAQUE);
+            else if (batch.category() == RenderCategory.MIXED) ready &= IrisMaterials.ready(batch.texture(), IrisMaterials.Mask.SOLID);
+        }
+        if (batch.isLightLayer()) {
+            var gpu = IrisGeometryCache.requestVehicleLight(batch.mesh(), batch.firstIndex(), batch.indexCount());
+            ready &= IrisGeometryCache.accepted(gpu, batch.mesh(), batch.firstIndex(), batch.indexCount(), false, true);
+        } else if (material.clippedCount != 0) {
+            ready &= IrisMaterials.ready(batch.texture(), IrisMaterials.Mask.CLIPPED);
+            if (batch.category() == RenderCategory.MIXED) ready &= IrisMaterials.ready(batch.texture(), IrisMaterials.Mask.BLEND);
+            if (ClientConfig.TRANSLUCENT_RENDER_MODE.get() == ClientConfig.TranslucentRenderMode.PERFORMANCE) {
+                var gpu = IrisGeometryCache.requestVehicle(material.clippedMesh, material.firstClipped, material.clippedCount, false);
+                ready &= IrisGeometryCache.accepted(gpu, material.clippedMesh, material.firstClipped, material.clippedCount, false, false);
+            }
+        }
+        return ready;
     }
 
     private static void prepare(Snapshot snapshot, PoseStack viewPose, boolean shadow) {
@@ -509,6 +556,7 @@ public final class IrisModelRenderer {
             }
             var solidGpu = material.solidCount == 0 || !supported ? null : IrisGeometryCache.requestVehicleOpaque(
                     material.solidMesh, material.firstSolid, material.solidCount, material.forceOpaque);
+            if (solidGpu != null && !solidGpu.ready()) solidGpu = null;
             var lightGpu = material.batch.isLightLayer() && supported ? IrisGeometryCache.requestVehicleLight(
                     material.batch.mesh(), material.batch.firstIndex(), material.batch.indexCount()) : null;
             var clippedGpu = staticTransparency && supported && !material.batch.isLightLayer() && material.clippedCount != 0
@@ -521,14 +569,6 @@ public final class IrisModelRenderer {
             localPose.last().pose().set(viewPose.last().pose()).mul(flare.pose().pose());
             IrFlareRenderer.enqueue(flare.definition(), flare.texture(), localPose.last(), RenderSystem.getModelViewMatrix(),
                     RenderSystem.getProjectionMatrix(), flare.color(), flare.strength());
-        }
-        if (!IrisGeometryCache.uploadVehicleOpaque()) {
-            for (int i = 0; i < snapshot.prepared.size(); i++) {
-                var draw = snapshot.prepared.get(i);
-                if (draw.solidGpu() != null && !draw.solidGpu().ready()) {
-                    draw.solidGpu = null;
-                }
-            }
         }
     }
 
@@ -720,6 +760,7 @@ public final class IrisModelRenderer {
     }
 
     public static void clear() {
+        BATCH_READINESS.clear();
         IrFlareRenderer.release();
         IrisVehicleReprojection.reset();
         ENTITIES.values().forEach(Snapshot::close);

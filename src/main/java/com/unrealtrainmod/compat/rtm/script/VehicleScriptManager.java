@@ -68,31 +68,23 @@ public final class VehicleScriptManager {
         }
     }
 
-    /** Compilation is indivisible; start at most one shared program in each frame. */
+    /** Queue one program per frame; source parsing and compilation never run in the frame callback. */
     private static void prewarmOne() {
         if (PREWARM.isEmpty()) return;
         var iterator = PREWARM.iterator();
         var script = iterator.next();
-        iterator.remove();
-        long start = System.nanoTime();
-        Throwable failure = null;
-        try {
-            PROGRAMS.program(script);
-        } catch (IOException | RuntimeException | LinkageError exception) {
-            failure = exception;
-            prewarmFailures++;
+        if (PROGRAMS.request(script)) { iterator.remove(); prewarmCalls++; }
+    }
+
+    public static boolean ready(LoadedModel model) {
+        boolean ready = true;
+        for (var instance : model.instances()) {
+            var script = instance.definition().source().rendererPath();
+            if (script == null) continue;
+            PROGRAMS.request(script);
+            ready &= PROGRAMS.isReady(script) || PROGRAMS.isFailed(script);
         }
-        long nanos = System.nanoTime() - start;
-        prewarmCalls++;
-        prewarmNanos += nanos;
-        if (failure == null) {
-            LOGGER.info("Vehicle script prewarm {}!{} completed in {}ms; pending={}",
-                    script.archive(), script.entry(), nanos / 1_000_000.0, PREWARM.size());
-        } else {
-            LOGGER.warn("Cannot prewarm vehicle script {}!{} after {}ms; using static models: {}",
-                    script.archive(), script.entry(), nanos / 1_000_000.0, failure.getMessage());
-            LOGGER.debug("Vehicle script prewarm failure", failure);
-        }
+        return ready;
     }
 
     public static boolean render(ModelDrawSink queue, TrainEntity entity, VehiclePose vehiclePose,

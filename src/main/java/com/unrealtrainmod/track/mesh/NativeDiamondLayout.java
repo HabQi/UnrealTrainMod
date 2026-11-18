@@ -156,6 +156,60 @@ public record NativeDiamondLayout(TrackVector origin, double scale, List<Part> p
     public record SleeperGroup(Part part, boolean second, double distance, TrackVector rowOrigin) {}
     public record Core(NativeDiamondLayout layout, List<RailEnd> first, List<RailEnd> second,
                        boolean secondReversed, double firstCenter, double secondCenter, List<SleeperGroup> sleepers) {}
+
+    /** The two acute working-face intersections bound the inner slip, independently of hardware preparation. */
+    public record SlipEnd(TrackVector workingPoint, double firstStation, double secondStation) {}
+    public record SlipEnds(SlipEnd entrance, SlipEnd exit, int firstInnerSide, List<TrackVector> boundary) {
+        public SlipEnds { boundary = List.copyOf(boundary); }
+    }
+
+    public static SlipEnds slipEnds(TrackGeometry first, TrackGeometry second, double gauge) {
+        if (!Double.isFinite(gauge) || gauge <= 0) throw new InvalidLayout(Problem.SPACE);
+        var a = new Path(first); var b = new Path(second);
+        double scale = gauge / 1.435;
+        var center = crossing(a, b, 0, 0, scale);
+        var ca = a.at(center.first()); var cb = b.at(center.second());
+        angle(ca, cb);
+        // Port order is significant: A/C must enter and B/D must leave the same crossing direction.
+        if (dot(ca.tangent(), cb.tangent()) <= 0) throw new InvalidLayout(Problem.INTERSECTION);
+        int inner = dot(cb.tangent(), ca.lateral()) > 0 ? -1 : 1;
+        double offset = inner * NativeTurnoutLayout.RAIL_WORK_X * scale;
+        var entrance = crossing(a, b, offset, -offset, scale);
+        var exit = crossing(a, b, -offset, offset, scale);
+        var upper = crossing(a, b, offset, offset, scale);
+        var lower = crossing(a, b, -offset, -offset, scale);
+        if (entrance.first() >= center.first() || entrance.second() >= center.second()
+                || exit.first() <= center.first() || exit.second() <= center.second()) throw new InvalidLayout(Problem.INTERSECTION);
+        for (var joint : List.of(upper, lower)) {
+            if (joint.first() <= entrance.first() || joint.first() >= exit.first()
+                    || joint.second() <= entrance.second() || joint.second() >= exit.second()) throw new InvalidLayout(Problem.INTERSECTION);
+        }
+        for (var joint : List.of(entrance, exit, upper, lower)) {
+            var pa = a.at(joint.first()); var pb = b.at(joint.second());
+            angle(pa, pb);
+            if (Math.abs(offset * pa.curvature()) >= 1 || Math.abs(offset * pb.curvature()) >= 1) throw new InvalidLayout(Problem.SPACE);
+        }
+        var boundary = new ArrayList<TrackVector>();
+        slipBoundary(boundary, a, offset, entrance.first(), upper.first(), scale);
+        slipBoundary(boundary, b, offset, upper.second(), exit.second(), scale);
+        slipBoundary(boundary, a, -offset, exit.first(), lower.first(), scale);
+        slipBoundary(boundary, b, -offset, lower.second(), entrance.second(), scale);
+        return new SlipEnds(new SlipEnd(entrance.point(), entrance.first(), entrance.second()),
+                new SlipEnd(exit.point(), exit.first(), exit.second()), inner, boundary);
+    }
+
+    private static void slipBoundary(List<TrackVector> result, Path path, double offset, double from, double to, double scale) {
+        result.add(path.edge(from, offset));
+        var edges = flatten(path, offset, scale);
+        if (from < to) {
+            for (var edge : edges) if (edge.distance() > from && edge.distance() < to) result.add(edge.point());
+        } else {
+            for (int i = edges.size() - 1; i >= 0; i--) {
+                var edge = edges.get(i);
+                if (edge.distance() < from && edge.distance() > to) result.add(edge.point());
+            }
+        }
+    }
     public static Core core(TrackGeometry first, TrackGeometry second, double gauge) {
         var result = new ArrayList<Core>();
         build(first, second, gauge, result);

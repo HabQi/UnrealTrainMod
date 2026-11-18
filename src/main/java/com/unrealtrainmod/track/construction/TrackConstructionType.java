@@ -4,9 +4,9 @@
  */
 package com.unrealtrainmod.track.construction;
 
-/** The five independent construction tools; only implemented types create drafts. */
+/** The five independent construction tools; point counts describe draft support, not model availability. */
 public enum TrackConstructionType {
-    SIMPLE_TURNOUT(3), DIAMOND_CROSSING(4), SINGLE_CROSSOVER(4), SCISSORS_CROSSOVER(4), DOUBLE_SLIP(0);
+    SIMPLE_TURNOUT(3), DIAMOND_CROSSING(4), SINGLE_CROSSOVER(4), SCISSORS_CROSSOVER(4), DOUBLE_SLIP(4);
 
     private final int pointCount;
 

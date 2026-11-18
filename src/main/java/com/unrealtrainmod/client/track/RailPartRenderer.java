@@ -67,6 +67,8 @@ final class RailPartRenderer implements AutoCloseable {
         final List<PreparedPart> members = new ArrayList<>();
         List<IrisFixedMember> captured = List.of();
         RailTrackGpuMesh mesh;
+        boolean failed;
+        com.unrealtrainmod.client.ModelPreparation.Ticket<com.unrealtrainmod.track.mesh.RailTrackMeshData> pending;
 
         boolean matches() {
             if (captured.size() != members.size()) return false;
@@ -78,32 +80,45 @@ final class RailPartRenderer implements AutoCloseable {
         }
 
         void build(long chunk, TrackVector anchor, double originY) {
-            var origin = new TrackVector((double)ChunkPos.getX(chunk) * 16, originY, (double)ChunkPos.getZ(chunk) * 16);
-            var output = new RailMeshAccumulator(origin);
-            var identities = new ArrayList<IrisFixedMember>();
-            var position = new Vector3f(); var normal = new Vector3f();
-            for (var member : members) {
-                var source = member.part.source();
-                var pose = member.pose;
-                output.append(source.texture(), source.doubleSided(), source.mesh(), (index, vertices) -> {
-                    int v = index * 8;
-                    var data = source.mesh().vertices();
-                    pose.pose().transformPosition(position.set(data[v], data[v + 1], data[v + 2]));
-                    pose.normal().transform(normal.set(data[v + 5], data[v + 6], data[v + 7]));
-                    if (normal.lengthSquared() > 0) normal.normalize();
-                    vertices.add((float)(position.x + anchor.x() - origin.x()));
-                    vertices.add((float)(position.y + anchor.y() - origin.y()));
-                    vertices.add((float)(position.z + anchor.z() - origin.z()));
-                    vertices.add(data[v + 3]); vertices.add(data[v + 4]);
-                    vertices.add(normal.x); vertices.add(normal.y); vertices.add(normal.z);
-                });
-                identities.add(new IrisFixedMember(source, new Matrix4f(pose.pose())));
-            }
-            mesh = new RailTrackGpuMesh(output.finish());
-            captured = List.copyOf(identities);
+            if (pending != null || failed) return;
+            var identities = members.stream().map(member -> new IrisFixedMember(member.part.source(), new Matrix4f(member.pose.pose()))).toList();
+            identities.forEach(member -> NativeTurnoutModels.retain(member.source()));
+            var ticket = com.unrealtrainmod.client.ModelPreparation.geometry(() -> {
+                var origin = new TrackVector((double)ChunkPos.getX(chunk) * 16, originY, (double)ChunkPos.getZ(chunk) * 16);
+                var output = new RailMeshAccumulator(origin);
+                var position = new Vector3f(); var normal = new Vector3f();
+                for (var member : identities) {
+                    var source = member.source(); var transform = member.pose();
+                    var normals = transform.normal(new org.joml.Matrix3f());
+                    output.append(source.texture(), source.doubleSided(), source.mesh(), (index, vertices) -> {
+                        int v = index * 8; var data = source.mesh().vertices();
+                        transform.transformPosition(position.set(data[v], data[v + 1], data[v + 2]));
+                        normals.transform(normal.set(data[v + 5], data[v + 6], data[v + 7]));
+                        if (normal.lengthSquared() > 0) normal.normalize();
+                        vertices.add((float)(position.x + anchor.x() - origin.x()));
+                        vertices.add((float)(position.y + anchor.y() - origin.y()));
+                        vertices.add((float)(position.z + anchor.z() - origin.z()));
+                        vertices.add(data[v + 3]); vertices.add(data[v + 4]); vertices.add(normal.x); vertices.add(normal.y); vertices.add(normal.z);
+                    });
+                }
+                return output.finish();
+            }, TrackPreparation::size, ignored -> {});
+            if (ticket == null) { identities.forEach(member -> NativeTurnoutModels.release(member.source())); return; }
+            captured = identities; pending = ticket;
+            ticket.onRelease(() -> identities.forEach(member -> NativeTurnoutModels.release(member.source())));
+            ticket.whenReady(() -> {
+                try { mesh = new RailTrackGpuMesh(ticket.take()); }
+                catch (RuntimeException exception) {
+                    failed = true; ticket.close();
+                    org.slf4j.LoggerFactory.getLogger(RailPartRenderer.class).warn("Cannot merge fixed Iris parts; retaining shared part draws", exception);
+                }
+                finally { pending = null; }
+            });
         }
 
         @Override public void close() {
+            failed = false;
+            if (pending != null) { pending.close(); pending = null; }
             if (mesh != null) mesh.close();
             mesh = null;
             captured = List.of();
@@ -142,24 +157,20 @@ final class RailPartRenderer implements AutoCloseable {
     }
 
     /** Warm shared native sources before replacing the complete parent appearance. */
-    int prepareSources(TrackPartSnapshot snapshot, int uploads, TrackRenderStats stats) {
-        if (StaticModelShader.state() == null) return uploads;
+    boolean ready(TrackPartSnapshot snapshot, boolean iris, TrackRenderStats stats) {
+        if (snapshot == null) return false;
+        boolean ready = true;
         for (var part : snapshot.parts()) {
-            if (uploads == 0) break;
-            if (part.source().mesh().indices().length == 0) continue;
-            var shared = ClientRailModelManager.INSTANCE.sharedPart(part.source().mesh());
-            if (shared.gpu == null) { shared.upload(stats); uploads--; }
+            var source = part.source();
+            if (source.mesh().indices().length == 0) continue;
+            ready &= com.unrealtrainmod.client.texture.MaterialTexture.ready(source.texture());
+            if (iris && IrisGeometryCache.supportsPose(part.transform())) {
+                ready &= ClientRailModelManager.INSTANCE.sharedPart(source.mesh()).boundsReady();
+                var cached = IrisGeometryCache.request(source.mesh(), 0, source.mesh().indices().length, false);
+                ready &= cached != null || !IrisGeometryCache.waiting(source.mesh(), 0, source.mesh().indices().length, false);
+            } else ready &= ClientRailModelManager.INSTANCE.sharedPart(source.mesh()).ready(stats);
         }
-        return uploads;
-    }
-
-    boolean sourcesReady(TrackPartSnapshot snapshot) {
-        if (StaticModelShader.state() == null) return true;
-        for (var part : snapshot.parts()) {
-            if (part.source().mesh().indices().length != 0
-                    && ClientRailModelManager.INSTANCE.sharedPart(part.source().mesh()).gpu == null) return false;
-        }
-        return true;
+        return ready;
     }
 
     int draw(TrackRenderState state, TrackPartSnapshot snapshot, TrackPartSnapshot before, float fraction,
@@ -284,6 +295,7 @@ final class RailPartRenderer implements AutoCloseable {
             int light = lighting.sample(level, local.m30(), local.m31(), local.m32(), 0, 1, 0);
             var gpu = prepared.supported
                     ? IrisGeometryCache.request(source.mesh(), 0, source.mesh().indices().length, false) : null;
+            if (gpu == null && prepared.supported && IrisGeometryCache.waiting(source.mesh(), 0, source.mesh().indices().length, false)) continue;
             var type = IrisRenderTypes.get(source.texture(), source.doubleSided(), false, false);
             if (gpu != null) {
                 var posedView = new Matrix4f(modelView).mul(local);
@@ -363,15 +375,14 @@ final class RailPartRenderer implements AutoCloseable {
                 continue;
             }
             // Drop stale geometry immediately; pending replacement sources use individual cached draws.
-            if (group.mesh != null && !group.matches()) group.close();
+            if ((group.mesh != null || group.pending != null || group.failed) && !group.matches()) group.close();
             boolean visible = group.mesh != null ? event.getFrustum().isVisible(group.mesh.bounds())
                     : group.members.stream().anyMatch(member -> event.getFrustum().isVisible(member.bounds));
             if (!visible) { group.members.forEach(member -> member.batched = true); continue; }
-            if (group.mesh == null && !shadow && budget.available()) {
+            if (group.mesh == null && !shadow && group.pending == null && !group.failed) {
                 long start = System.nanoTime();
-                try (var operation = NativeTurnoutLoading.open(loading, "render/irisFixedGroup")) { group.build(entry.getKey(), anchor, meshOriginY); NativeTurnoutLoading.associate(group.mesh, loading); }
+                try (var operation = NativeTurnoutLoading.open(loading, "render/irisFixedGroup")) { group.build(entry.getKey(), anchor, meshOriginY); }
                 finally {
-                    budget.pageFinished(start);
                     if (stats != null) stats.built(System.nanoTime() - start);
                 }
             }

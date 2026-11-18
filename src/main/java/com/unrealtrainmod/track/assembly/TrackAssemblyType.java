@@ -4,4 +4,4 @@
  */
 package com.unrealtrainmod.track.assembly;
 
-public enum TrackAssemblyType { SIMPLE_TURNOUT, DIAMOND_CROSSING, SINGLE_CROSSOVER, SCISSORS_CROSSOVER }
+public enum TrackAssemblyType { SIMPLE_TURNOUT, DIAMOND_CROSSING, SINGLE_CROSSOVER, SCISSORS_CROSSOVER, DOUBLE_SLIP }

@@ -7,23 +7,21 @@ package com.unrealtrainmod.client.compat.iris;
 import com.unrealtrainmod.client.track.NativeTurnoutLoading;
 import com.mojang.blaze3d.platform.GlStateManager;
 import com.mojang.blaze3d.vertex.BufferBuilder;
-import com.mojang.blaze3d.vertex.BufferUploader;
 import com.mojang.blaze3d.vertex.ByteBufferBuilder;
 import com.mojang.blaze3d.vertex.DefaultVertexFormat;
 import com.mojang.blaze3d.vertex.VertexBuffer;
 import com.mojang.blaze3d.vertex.VertexFormat;
 import com.unrealtrainmod.client.ClientConfig;
+import com.unrealtrainmod.client.ModelPreparation;
+import com.unrealtrainmod.client.ModelUploads;
+import com.unrealtrainmod.client.StagedVertexBuffer;
 import com.unrealtrainmod.model.IndexedMesh;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
-import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import net.minecraft.client.renderer.texture.OverlayTexture;
-import org.lwjgl.opengl.GL11;
-import org.lwjgl.opengl.GL15;
-import org.lwjgl.opengl.GL30;
 import org.slf4j.LoggerFactory;
 import org.joml.Matrix4f;
 
@@ -46,7 +44,10 @@ public final class IrisGeometryCache {
         Layout layout;
         long requestedFrame = -1;
         long requestedNanos;
-        boolean dirty;
+        boolean dirty, failed;
+        int version;
+        ModelPreparation.Ticket<Layout> pending;
+        ExtendedUpload upload;
         SharedEntry(SharedKey key) { this.key = key; }
     }
     private static final class Entry {
@@ -54,6 +55,8 @@ public final class IrisGeometryCache {
         long requestedFrame;
         long requestedNanos;
         Mesh gpu;
+        boolean failed, closed;
+        ExtendedUpload upload;
         NativeTurnoutLoading.Trace loading;
         Entry(Key key) {
             this.key = key;
@@ -72,7 +75,6 @@ public final class IrisGeometryCache {
             var names = buffer.getFormat().getElementAttributeNames();
             lightAttribute = names.indexOf("UV2");
             identityAttribute = names.indexOf("iris_Entity");
-            if (lightAttribute < 0 || identityAttribute < 0) throw new IllegalStateException("Iris entity format was not extended");
             // These arrays are intentionally disabled only on our private VAO.
             GlStateManager._disableVertexAttribArray(lightAttribute);
             GlStateManager._disableVertexAttribArray(identityAttribute);
@@ -99,13 +101,11 @@ public final class IrisGeometryCache {
             this.vertices = vertices;
             this.shared = shared;
         }
-        boolean ready() { return firstVertex >= 0; }
+        public boolean ready() { return firstVertex >= 0 && storage.buffer != null; }
     }
 
     private static final LinkedHashMap<Key, Entry> ENTRIES = new LinkedHashMap<>(64, 0.75f, true);
-    private static final ArrayDeque<Entry> PENDING = new ArrayDeque<>();
     private static final LinkedHashMap<SharedKey, SharedEntry> SHARED = new LinkedHashMap<>(64, 0.75f, true);
-    private static final ArrayDeque<SharedEntry> DIRTY = new ArrayDeque<>();
     private static long frame, bytes, lightBytes, peakBytes, windowBytes, windowBuilds, windowNanos,
             windowMaxBuildNanos, windowBaseEvictions, windowEvictedBytes, windowLightEvictions,
             lastLog = System.nanoTime(), frameNanos = lastLog;
@@ -118,7 +118,12 @@ public final class IrisGeometryCache {
     public static long bytes() { return bytes; }
     public static long lightBytes() { return lightBytes; }
     public static long peakBytes() { return peakBytes; }
-    public static int pending() { return PENDING.size() + DIRTY.size(); }
+    public static int pending() {
+        int count = 0;
+        for (var entry : ENTRIES.values()) if (entry.gpu == null && !entry.failed) count++;
+        for (var entry : SHARED.values()) if (entry.dirty) count++;
+        return count;
+    }
 
     public static void beginFrame() {
         frame++;
@@ -142,12 +147,12 @@ public final class IrisGeometryCache {
     }
 
     public static Mesh request(IndexedMesh mesh, int first, int count, boolean opaque) {
-        return request(mesh, first, count, opaque, false, false);
+        return request(mesh, first, count, opaque, false);
     }
 
-    /** A vehicle miss builds once now, avoiding repeated full CPU submissions in both views while queued. */
+    /** First use queues bounded uploads; a pending vehicle never substitutes repeated CPU submissions. */
     public static Mesh requestVehicle(IndexedMesh mesh, int first, int count, boolean opaque) {
-        return request(mesh, first, count, opaque, true, false);
+        return request(mesh, first, count, opaque, false);
     }
 
     /** Register all ranges for a prepared source before uploading, including menu-known CUTOUT selections. */
@@ -161,63 +166,71 @@ public final class IrisGeometryCache {
         long rangeKey = ((long) first << 32) | (count & 0xffffffffL);
         if (!entry.ranges.containsKey(rangeKey)) {
             entry.ranges.put(rangeKey, new Range(first, new Mesh(entry.storage, -1, count, true)));
-            entry.layout = null;
+            entry.layout = null; entry.version++;
+            if (entry.pending != null) { entry.pending.close(); entry.pending = null; }
+            if (entry.upload != null) { entry.upload.close(); entry.upload = null; }
+            entry.dirty = false; entry.failed = false;
             sharedRanges++;
         }
         return entry;
     }
 
-    /** Returned views become ready after uploadVehicleOpaque(), once the submission registered all ranges. */
+    /** Range views become ready at the frame boundary after the complete shared upload. */
     static Mesh requestVehicleOpaque(IndexedMesh mesh, int first, int count, boolean opaque) {
         var entry = registerOpaque(mesh, first, count, opaque);
         var view = entry.ranges.get(((long) first << 32) | (count & 0xffffffffL)).mesh;
         entry.requestedFrame = frame;
         entry.requestedNanos = frameNanos;
         IrisRenderStats.cache(view.ready());
-        if (!view.ready() && !entry.dirty) {
+        if (!view.ready() && !entry.dirty && !entry.failed) {
             entry.dirty = true;
-            DIRTY.addLast(entry);
+            schedule(entry);
         }
         return view;
     }
 
-    static boolean uploadVehicleOpaque() {
-        boolean complete = true;
-        while (!DIRTY.isEmpty()) {
-            var entry = DIRTY.removeFirst();
-            entry.dirty = false;
-            long begun = System.nanoTime();
+    private static void schedule(SharedEntry entry) {
+        var ranges = new ArrayList<>(entry.ranges.values());
+        int version = entry.version;
+        ModelUploads.enqueue(() -> {
+            if (entry.version != version) return true;
             try {
-                var layout = layout(entry);
-                var uploaded = upload(entry.key.mesh, layout.spans, layout.vertices, entry.key.opaque, false);
-                int previous = entry.storage.bytes;
-                boolean replacing = entry.storage.buffer != null;
-                entry.storage.replace(uploaded);
-                for (int i = 0; i < layout.ranges.size(); i++) layout.ranges.get(i).mesh.firstVertex = layout.offsets[i];
-                long added = (long) uploaded.bytes - previous;
-                bytes += added;
-                sharedBytes += added;
-                if (!replacing) sharedBuffers++;
-                else sharedRebuilds++;
-                sharedBuilds++;
-                sharedUploads += uploaded.bytes;
-                sharedAdded += added;
-                windowBytes += uploaded.bytes;
-                peakBytes = Math.max(peakBytes, bytes);
-                IrisRenderStats.upload(uploaded.bytes);
+                if (entry.pending == null) {
+                    entry.pending = ModelPreparation.geometry(() -> layout(ranges), ignored -> (long)ranges.size() * 32, ignored -> {});
+                    if (entry.pending == null) return false;
+                }
+                if (!entry.pending.ready()) return false;
+                var layout = entry.pending.value();
+                if (entry.upload == null) entry.upload = new ExtendedUpload(entry.key.mesh, layout.spans, layout.vertices, entry.key.opaque, false);
+                if (!entry.upload.step()) return false;
+                ModelUploads.commit(() -> {
+                    if (entry.version != version) return;
+                    var uploaded = entry.upload.finish(); entry.upload = null;
+                    entry.pending.close(); entry.pending = null;
+                    int previous = entry.storage.bytes;
+                    boolean replacing = entry.storage.buffer != null;
+                    entry.storage.replace(uploaded);
+                    for (int i = 0; i < layout.ranges.size(); i++) layout.ranges.get(i).mesh.firstVertex = layout.offsets[i];
+                    long added = (long)uploaded.bytes - previous;
+                    bytes += added; sharedBytes += added;
+                    if (!replacing) sharedBuffers++; else sharedRebuilds++;
+                    sharedBuilds++; sharedUploads += uploaded.bytes; sharedAdded += added;
+                    windowBytes += uploaded.bytes; peakBytes = Math.max(peakBytes, bytes);
+                    IrisRenderStats.upload(uploaded.bytes);
+                    entry.layout = layout; entry.dirty = false;
+                });
             } catch (RuntimeException exception) {
-                complete = false;
-                LoggerFactory.getLogger(IrisGeometryCache.class).warn("Cannot cache shared Iris opaque geometry; keeping CPU submission", exception);
+                entry.failed = true; entry.dirty = false;
+                if (entry.pending != null) { entry.pending.close(); entry.pending = null; }
+                if (entry.upload != null) { entry.upload.close(); entry.upload = null; }
+                LoggerFactory.getLogger(IrisGeometryCache.class).warn("Cannot cache shared Iris geometry; using CPU submission", exception);
             }
-            recordBuild(begun);
-        }
-        return complete;
+            return true;
+        });
     }
 
     /** Pack the union of source-index ranges. Overlapping requests share storage but remain separate draws. */
-    private static Layout layout(SharedEntry entry) {
-        if (entry.layout != null) return entry.layout;
-        var ranges = new ArrayList<>(entry.ranges.values());
+    private static Layout layout(ArrayList<Range> ranges) {
         ranges.sort(RANGE_ORDER);
         var spans = new ArrayList<Span>();
         int[] offsets = new int[ranges.size()];
@@ -240,8 +253,7 @@ public final class IrisGeometryCache {
                 }
             }
         }
-        entry.layout = new Layout(ranges, spans, offsets, vertices);
-        return entry.layout;
+        return new Layout(List.copyOf(ranges), List.copyOf(spans), offsets, vertices);
     }
 
     /** Static items share local geometry across hand, entity and shadow views. */
@@ -249,9 +261,9 @@ public final class IrisGeometryCache {
         return requestStatic(mesh, first, count);
     }
 
-    /** Static baked models and previews use the same synchronous, pose-independent cache. */
+    /** Static baked models and previews share the budgeted, pose-independent cache. */
     public static Mesh requestStatic(IndexedMesh mesh, int first, int count) {
-        return request(mesh, first, count, false, true, false);
+        return request(mesh, first, count, false, false);
     }
 
     public static void releaseMesh(IndexedMesh mesh) {
@@ -259,7 +271,7 @@ public final class IrisGeometryCache {
         while (iterator.hasNext()) {
             var entry = iterator.next();
             if (entry.key.mesh != mesh) continue;
-            PENDING.remove(entry);
+            entry.closed = true; if (entry.upload != null) entry.upload.close();
             if (entry.gpu != null) {
                 bytes -= entry.gpu.storage.bytes;
                 if (entry.key.light) lightBytes -= entry.gpu.storage.bytes;
@@ -271,7 +283,6 @@ public final class IrisGeometryCache {
         while (shared.hasNext()) {
             var entry = shared.next();
             if (entry.key.mesh != mesh) continue;
-            DIRTY.remove(entry);
             releaseShared(entry);
             shared.remove();
         }
@@ -279,10 +290,10 @@ public final class IrisGeometryCache {
 
     /** Lights have their own soft budget; the active working set must not fall back to CPU for lack of space. */
     public static Mesh requestVehicleLight(IndexedMesh mesh, int first, int count) {
-        return request(mesh, first, count, false, true, true);
+        return request(mesh, first, count, false, true);
     }
 
-    private static Mesh request(IndexedMesh mesh, int first, int count, boolean opaque, boolean immediate, boolean light) {
+    private static Mesh request(IndexedMesh mesh, int first, int count, boolean opaque, boolean light) {
         var key = new Key(mesh, first, count, opaque, light);
         var entry = ENTRIES.get(key);
         boolean hit = entry != null && entry.gpu != null;
@@ -290,10 +301,8 @@ public final class IrisGeometryCache {
             entry = new Entry(key);
             entry.loading = NativeTurnoutLoading.current();
             ENTRIES.put(key, entry);
-            if (immediate) {
-                if (light) trimLights((long)count * IrisCompat.entityVertexSize());
-                build(entry);
-            } else PENDING.addLast(entry);
+            if (light) trimLights((long)count * IrisCompat.entityVertexSize());
+            schedule(entry);
         }
         entry.requestedFrame = frame;
         entry.requestedNanos = frameNanos;
@@ -301,21 +310,42 @@ public final class IrisGeometryCache {
         return entry.gpu;
     }
 
-    private static void build(Entry entry) {
-        long begun = System.nanoTime();
-        try (var stage = NativeTurnoutLoading.gpu(entry.loading, "render/irisGeometryBuildUpload")) {
-            entry.gpu = upload(entry.key);
-            if (stage != null) { stage.value("vertices", entry.key.count); stage.value("bytes", entry.gpu.storage.bytes); }
-            bytes += entry.gpu.storage.bytes;
-            if (entry.key.light) lightBytes += entry.gpu.storage.bytes;
-            peakBytes = Math.max(peakBytes, bytes);
-            windowBytes += entry.gpu.storage.bytes;
-            IrisRenderStats.upload(entry.gpu.storage.bytes, entry.key.light);
-        } catch (RuntimeException exception) {
-            NativeTurnoutLoading.failure(entry.loading, exception);
-            LoggerFactory.getLogger(IrisGeometryCache.class).warn("Cannot cache Iris geometry; keeping CPU submission", exception);
-        } finally { entry.loading = null; }
-        recordBuild(begun);
+    private static void schedule(Entry entry) {
+        ModelUploads.enqueue(() -> {
+            if (entry.closed) return true;
+            try {
+                if (entry.upload == null) entry.upload = new ExtendedUpload(entry.key.mesh,
+                        List.of(new Span(entry.key.first, entry.key.count)), entry.key.count, entry.key.opaque, entry.key.light);
+                if (!entry.upload.step()) return false;
+                ModelUploads.commit(() -> {
+                    if (entry.closed) return;
+                    entry.gpu = new Mesh(entry.upload.finish(), 0, entry.key.count, false); entry.upload = null;
+                    bytes += entry.gpu.storage.bytes;
+                    if (entry.key.light) lightBytes += entry.gpu.storage.bytes;
+                    peakBytes = Math.max(peakBytes, bytes); windowBytes += entry.gpu.storage.bytes;
+                    IrisRenderStats.upload(entry.gpu.storage.bytes, entry.key.light);
+                });
+            } catch (RuntimeException exception) {
+                entry.failed = true;
+                if (entry.upload != null) { entry.upload.close(); entry.upload = null; }
+                LoggerFactory.getLogger(IrisGeometryCache.class).warn("Cannot cache Iris geometry; using CPU submission", exception);
+            }
+            return true;
+        });
+    }
+
+    public static boolean waiting(IndexedMesh mesh, int first, int count, boolean opaque) {
+        var entry = ENTRIES.get(new Key(mesh, first, count, opaque, false));
+        return entry != null && entry.gpu == null && !entry.failed;
+    }
+    static boolean accepted(Mesh mesh, IndexedMesh source, int first, int count, boolean opaque, boolean light) {
+        if (mesh != null) return mesh.ready();
+        var entry = ENTRIES.get(new Key(source, first, count, opaque, light));
+        return entry != null && entry.failed;
+    }
+    static boolean acceptedOpaque(Mesh mesh, IndexedMesh source, boolean opaque) {
+        var entry = SHARED.get(new SharedKey(source, opaque));
+        return mesh != null && mesh.ready() || entry != null && entry.failed;
     }
 
     private static void recordBuild(long begun) {
@@ -325,16 +355,8 @@ public final class IrisGeometryCache {
         windowBuilds++;
     }
 
-    /** Runs after world submission for queued rigid track parts; their CPU fallback remains until ready. */
+    /** Frame-end eviction never invalidates buffers still referenced by the current view. */
     public static void endFrame() {
-        long start = System.nanoTime();
-        int built = 0;
-        while (!PENDING.isEmpty() && built < 4 && System.nanoTime() - start < 2_000_000L) {
-            var entry = PENDING.removeFirst();
-            if (entry.requestedFrame < frame - 1) { ENTRIES.remove(entry.key); continue; }
-            build(entry);
-            built++;
-        }
         long baseBytes = bytes - lightBytes;
         long limit = limitBytes();
         double retentionSeconds = ClientConfig.IRIS_GEOMETRY_CACHE_RETENTION_SECONDS.get();
@@ -362,8 +384,7 @@ public final class IrisGeometryCache {
                 baseBytes -= entry.storage.bytes;
                 windowBaseEvictions++;
                 windowEvictedBytes += entry.storage.bytes;
-                DIRTY.remove(entry);
-                entry.dirty = false;
+                    entry.dirty = false;
                 // Keep registered ranges/layout so the next use restores this source in one upload.
                 releaseSharedStorage(entry);
             }
@@ -388,42 +409,64 @@ public final class IrisGeometryCache {
         }
     }
 
-    private static Mesh upload(Key key) {
-        return new Mesh(upload(key.mesh, List.of(new Span(key.first, key.count)), key.count, key.opaque, key.light),
-                0, key.count, false);
-    }
-
-    private static Storage upload(IndexedMesh mesh, List<Span> spans, int count, boolean opaque, boolean light) {
-        int oldVao = GL11.glGetInteger(GL30.GL_VERTEX_ARRAY_BINDING);
-        int oldArray = GL11.glGetInteger(GL15.GL_ARRAY_BUFFER_BINDING);
-        int[] identity = IrisCompat.currentIdentity();
-        var buffer = new VertexBuffer(VertexBuffer.Usage.STATIC);
-        try (var storage = new ByteBufferBuilder(Math.max(256,
-                Math.multiplyExact(count, IrisCompat.entityVertexSize())))) {
-            IrisCompat.restoreTrackIdentity(new int[3]);
-            var builder = new BufferBuilder(storage, VertexFormat.Mode.TRIANGLES, DefaultVertexFormat.NEW_ENTITY);
-            var v = mesh.vertices(); var colors = mesh.colors(); var indices = mesh.indices();
-            for (var span : spans) for (int i = span.first; i < span.first + span.count; i++) {
-                int index = indices[i], offset = index * 8;
-                int color = light ? scaleRgb(colors[index]) : colors[index];
-                builder.addVertex(v[offset], v[offset + 1], v[offset + 2], opaque ? color | 0xff000000 : color,
-                        v[offset + 3], v[offset + 4], OverlayTexture.NO_OVERLAY, 0,
-                        v[offset + 5], v[offset + 6], v[offset + 7]);
-            }
-            buffer.bind();
-            var data = builder.buildOrThrow();
-            int size = data.vertexBuffer().remaining();
-            buffer.upload(data);
-            return new Storage(buffer, size);
-        } catch (RuntimeException | Error exception) {
-            buffer.close();
-            throw exception;
-        } finally {
-            BufferUploader.invalidate();
-            GlStateManager._glBindVertexArray(oldVao);
-            GlStateManager._glBindBuffer(GL15.GL_ARRAY_BUFFER, oldArray);
-            IrisCompat.restoreTrackIdentity(identity);
+    /** Iris extension and tangent generation stay on the render thread, at most 512 KiB per step. */
+    private static final class ExtendedUpload implements AutoCloseable {
+        final IndexedMesh mesh;
+        final List<Span> spans;
+        final int count;
+        final boolean opaque, light;
+        long nanos;
+        StagedVertexBuffer buffer;
+        int span, reference, written;
+        ExtendedUpload(IndexedMesh mesh, List<Span> spans, int count, boolean opaque, boolean light) {
+            this.mesh = mesh; this.spans = spans; this.count = count; this.opaque = opaque; this.light = light;
         }
+        boolean step() {
+            if (written == count) return true;
+            int stride = IrisCompat.entityVertexSize();
+            int amount = Math.min(count - written, ModelUploads.SLICE_BYTES / stride / 3 * 3);
+            return ModelUploads.run(amount * stride, () -> {
+                int[] identity = IrisCompat.currentIdentity();
+                long packStart = System.nanoTime();
+                try (var binding = new StagedVertexBuffer.Binding();
+                     var storage = new ByteBufferBuilder(Math.max(256, amount * stride))) {
+                    IrisCompat.restoreTrackIdentity(new int[3]);
+                    if (buffer == null) {
+                        buffer = new StagedVertexBuffer(count);
+                        try (var tiny = new ByteBufferBuilder(3 * stride)) {
+                            var builder = new BufferBuilder(tiny, VertexFormat.Mode.TRIANGLES, DefaultVertexFormat.NEW_ENTITY);
+                            for (int i = 0; i < 3; i++) emit(builder, mesh.indices()[spans.getFirst().first + i]);
+                            buffer.allocate(builder.buildOrThrow(), Math.multiplyExact(count, stride));
+                            IrisCompat.requireEntityFormat(buffer);
+                        }
+                    }
+                    var builder = new BufferBuilder(storage, VertexFormat.Mode.TRIANGLES, DefaultVertexFormat.NEW_ENTITY);
+                    for (int i = 0; i < amount; i++) {
+                        var range = spans.get(span);
+                        emit(builder, mesh.indices()[range.first + reference]);
+                        if (++reference == range.count) { span++; reference = 0; }
+                    }
+                    ModelUploads.packed(System.nanoTime() - packStart);
+                    try (var data = builder.buildOrThrow()) { buffer.write(data.vertexBuffer(), written * stride); }
+                    written += amount;
+                } finally { IrisCompat.restoreTrackIdentity(identity); nanos += System.nanoTime() - packStart; }
+            }) && written == count;
+        }
+        private void emit(BufferBuilder builder, int index) {
+            var v = mesh.vertices(); int i = index * 8;
+            int color = light ? scaleRgb(mesh.colors()[index]) : mesh.colors()[index];
+            builder.addVertex(v[i], v[i + 1], v[i + 2], opaque ? color | 0xff000000 : color,
+                    v[i + 3], v[i + 4], OverlayTexture.NO_OVERLAY, 0, v[i + 5], v[i + 6], v[i + 7]);
+        }
+        Storage finish() {
+            try (var binding = new StagedVertexBuffer.Binding()) {
+                buffer.bind();
+                var result = new Storage(buffer, count * IrisCompat.entityVertexSize()); buffer = null;
+                recordBuild(System.nanoTime() - nanos);
+                return result;
+            }
+        }
+        @Override public void close() { if (buffer != null) { buffer.close(); buffer = null; } }
     }
 
     /** Evict idle lights in LRU order; current/previous-frame meshes may exceed the soft budget. */
@@ -442,6 +485,9 @@ public final class IrisGeometryCache {
     }
 
     private static void releaseShared(SharedEntry entry) {
+        entry.version++;
+        if (entry.pending != null) { entry.pending.close(); entry.pending = null; }
+        if (entry.upload != null) { entry.upload.close(); entry.upload = null; }
         releaseSharedStorage(entry);
         sharedRanges -= entry.ranges.size();
     }
@@ -464,10 +510,10 @@ public final class IrisGeometryCache {
 
     public static void clear() {
         IrisTranslucentQueue.release();
-        ENTRIES.values().forEach(entry -> { if (entry.gpu != null) entry.gpu.storage.close(); });
-        ENTRIES.clear(); PENDING.clear();
-        SHARED.values().forEach(entry -> entry.storage.close());
-        SHARED.clear(); DIRTY.clear();
+        ENTRIES.values().forEach(entry -> { entry.closed = true; if (entry.upload != null) entry.upload.close(); if (entry.gpu != null) entry.gpu.storage.close(); });
+        ENTRIES.clear();
+        SHARED.values().forEach(IrisGeometryCache::releaseShared);
+        SHARED.clear();
         bytes = lightBytes = peakBytes = windowBytes = windowBuilds = windowNanos = windowLightEvictions = 0;
         windowMaxBuildNanos = windowBaseEvictions = windowEvictedBytes = 0;
         sharedBytes = sharedBuilds = sharedRebuilds = sharedUploads = sharedAdded = 0;

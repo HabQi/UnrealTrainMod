@@ -28,6 +28,11 @@ final class RailTrackGpuMesh extends TrackStaticMesh {
     @Override public TrackVector origin() { return data.origin(); }
     @Override public boolean isEmpty() { return data.batches().isEmpty(); }
     @Override public int source() { return TrackRenderStats.RAIL_MODEL; }
+    @Override public boolean texturesReady() {
+        boolean ready = true;
+        for (var batch : data.batches()) ready &= com.unrealtrainmod.client.texture.MaterialTexture.ready(batch.texture());
+        return ready;
+    }
     @Override PageDomain pageDomain() { return pageDomain; }
     @Override void register(TrackStaticBuffers buffers, int structure) { buffers.add(this, data, structure); }
 }

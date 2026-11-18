@@ -14,7 +14,6 @@ import java.util.function.Supplier;
 import javax.script.ScriptException;
 import com.unrealtrainmod.track.geometry.TrackGeometry;
 import com.unrealtrainmod.track.mesh.RailTrackMeshBuilder;
-import com.unrealtrainmod.track.mesh.RailTrackMeshData;
 import java.io.IOException;
 import java.util.List;
 import net.minecraft.core.BlockPos;
@@ -207,24 +206,18 @@ public final class RailScriptRuntime implements AutoCloseable {
         }
     }
 
-    /** A null result means failure; discard the whole build and use the complete static model. */
-    public RailTrackMeshData buildStatic(TrackGeometry geometry, BlockPos startPoint, int chunkX, int chunkZ,
-                                         double scale, double period, boolean preview) {
-        if (failed) return null;
-        var context = new RailScriptDrawContext(geometry, startPoint, chunkX, chunkZ, scale, period,
-                preview, this::shouldRender);
-        return evaluateStatic(geometry, startPoint, context, preview, context::finish);
-    }
-
     /** One normal track owns the commands and frozen filter decisions for all of its chunks. */
     public RailStaticSnapshot captureStatic(TrackGeometry geometry, BlockPos startPoint, double scale, double period) {
+        return captureStatic(geometry, startPoint, scale, period, false);
+    }
+    public RailStaticSnapshot captureStatic(TrackGeometry geometry, BlockPos startPoint, double scale, double period, boolean preview) {
         if (failed) return null;
         var commands = new ArrayList<Consumer<RailScriptDrawContext>>();
         var context = new RailScriptDrawContext(geometry, startPoint, 0, 0, scale, period,
-                false, this::shouldRender);
+                preview, this::shouldRender);
         context.captureStatic(commands);
-        return evaluateStatic(geometry, startPoint, context, false,
-                () -> new RailStaticSnapshot(geometry, startPoint, scale, period, commands));
+        return evaluateStatic(geometry, startPoint, context, preview,
+                () -> new RailStaticSnapshot(geometry, startPoint, scale, period, commands, preview));
     }
 
     private <T> T evaluateStatic(TrackGeometry geometry, BlockPos startPoint, RailScriptDrawContext context,

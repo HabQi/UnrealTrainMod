@@ -152,7 +152,7 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
                 if (entry.script.parts != null) entry.script.parts.removeChunk(chunk);
             }
             if (entry.nativeState != null) entry.nativeState.removeChunk(chunk);
-            if (entry.scissorsState != null) entry.scissorsState.removeChunk(chunk);
+            if (entry.crossoverState != null) entry.crossoverState.removeChunk(chunk);
 
             if (entry.chunks.isEmpty()) { entry.close(); iterator.remove(); }
         }
@@ -163,6 +163,7 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
             entry.chunks.remove(chunk);
             TrackRenderMesh mesh = entry.meshes.remove(chunk);
             if (mesh != null) mesh.close();
+            var retired = entry.retired.remove(chunk); if (retired != null) retired.close();
             if (entry.chunks.isEmpty()) {
                 entry.close();
                 entries.remove(id);
@@ -213,7 +214,7 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
             entry.meshes.values().forEach(group -> group.forEach(TrackRenderMesh::close));
             entry.tongues.values().forEach(group -> group.forEach(TrackRenderMesh::close));
             if (entry.nativeState != null) entry.nativeState.invalidateGpu();
-            if (entry.scissorsState != null) entry.scissorsState.invalidateGpu();
+            if (entry.crossoverState != null) entry.crossoverState.invalidateGpu();
             if (entry.loading != null) for (var group : entry.meshes.values()) for (var mesh : group)
                 NativeTurnoutLoading.associate(mesh, entry.loading);
             if (entry.script != null) {
@@ -285,6 +286,10 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
     }
 
     static final class AssemblyEntry implements AutoCloseable {
+        com.unrealtrainmod.client.ModelPreparation.Ticket<TrackPreparation.Result> preparation;
+        long visibilityFrame = -1;
+        boolean visible;
+        int generation;
         TrackAssemblyInstance data;
         final List<TrackGeometry> geometries;
         final Set<Long> chunks = new LinkedHashSet<>();
@@ -294,10 +299,10 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
         final TurnoutEntry script;
         NativeTurnoutRenderState nativeState;
         NativeDiamondRenderState diamondState;
-        NativeScissorsRenderState scissorsState;
+        NativeCrossoverRenderState crossoverState;
         NativeTurnoutLoading.Trace loading;
         boolean nativeFailed;
-        boolean scriptFailed, scriptActive, missingReported;
+        boolean scriptFailed, scriptActive, scriptActivating, missingReported;
         long scriptPrepareFrame = -1;
 
         AssemblyEntry(TrackAssemblyInstance data) {
@@ -330,7 +335,7 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
         }
 
         AABB broadBounds() {
-            if (scissorsState != null) return scissorsState.layout.bounds();
+            if (crossoverState != null) return crossoverState.layout.bounds();
             if (diamondState != null) return diamondState.layout.bounds();
             var model = ClientRailModelManager.INSTANCE.model(data.modelId());
             return model == null ? data.bounds() : data.bounds().inflate(model.padding() * model.scaleForGauge(data.gauge()));
@@ -345,7 +350,7 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
         }
 
         boolean moving(double time) {
-            return rendersModel() && (nativeState != null || scissorsState != null || scriptActive || data.definition() == TrackAssemblyDefinition.CUSTOM)
+            return rendersModel() && (nativeState != null || crossoverState != null || scriptActive || data.definition() == TrackAssemblyDefinition.CUSTOM)
                     && animations.values().stream().anyMatch(animation -> animation.moving(time));
         }
 
@@ -373,14 +378,17 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
         }
 
         @Override public void close() {
+            generation++;
+            if (preparation != null) { preparation.close(); preparation = null; }
+            visibilityFrame = -1; visible = false;
             clearFallback();
             diamondState = null;
-            if (scissorsState != null) { scissorsState.close(); scissorsState = null; }
+            if (crossoverState != null) { crossoverState.close(); crossoverState = null; }
             if (nativeState != null) { nativeState.close(); nativeState = null; }
             if (loading != null) { loading.close(); loading = null; }
             nativeFailed = false;
             if (script != null) script.close();
-            scriptFailed = scriptActive = missingReported = false;
+            scriptFailed = scriptActive = scriptActivating = missingReported = false;
             scriptPrepareFrame = -1;
         }
 
@@ -392,6 +400,7 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
 
     /** A single ordinary-turnout script; the parent owns its control timeline and chunk lifetime. */
     static final class TurnoutEntry implements AutoCloseable {
+        com.unrealtrainmod.client.ModelPreparation.Ticket<Map<Long, com.unrealtrainmod.track.mesh.RailTrackMeshData>> preparation;
         final AssemblyEntry owner;
         final RailTurnoutView view;
         final Set<Long> chunks;
@@ -458,6 +467,7 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
         }
 
         @Override public void close() {
+            if (preparation != null) { preparation.close(); preparation = null; }
             meshes.values().forEach(TrackRenderMesh::close);
             meshes.clear();
             staticSnapshot = null;
@@ -472,10 +482,14 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
     }
 
     static final class Entry implements AutoCloseable {
+        com.unrealtrainmod.client.ModelPreparation.Ticket<TrackPreparation.Result> preparation;
+        long visibilityFrame = -1;
+        boolean visible;
         TrackSegmentData data;
         TrackGeometry geometry;
         final Set<Long> chunks = new HashSet<>();
         final Map<Long, TrackRenderMesh> meshes = new HashMap<>();
+        final Map<Long, TrackRenderMesh> retired = new HashMap<>();
         RailStaticSnapshot staticSnapshot;
         boolean missingReported;
 
@@ -486,7 +500,15 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
 
         private void replace(TrackSegmentData data) {
             TrackGeometry updated = data.createGeometry();
+            var previous = new HashMap<>(retired);
+            for (var value : meshes.entrySet()) {
+                if (previous.containsKey(value.getKey())) value.getValue().close();
+                else previous.put(value.getKey(), value.getValue());
+            }
+            retired.clear();
+            meshes.clear();
             close();
+            retired.putAll(previous);
             this.data = data;
             geometry = updated;
             missingReported = false;
@@ -510,7 +532,10 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
 
         @Override
         public void close() {
+            if (preparation != null) { preparation.close(); preparation = null; }
+            visibilityFrame = -1; visible = false;
             for (TrackRenderMesh mesh : meshes.values()) mesh.close();
+            retired.values().forEach(TrackRenderMesh::close); retired.clear();
             meshes.clear();
             staticSnapshot = null;
         }

@@ -7,6 +7,12 @@ package com.unrealtrainmod.track.construction;
 import com.unrealtrainmod.track.model.RailCatalog;
 import com.unrealtrainmod.track.model.NativeTurnoutCatalog;
 import com.unrealtrainmod.track.mesh.NativeDiamondLayout;
+import com.unrealtrainmod.track.mesh.NativeSingleCrossoverSolver;
+import com.unrealtrainmod.track.mesh.NativeDoubleSlipSolver;
+import com.unrealtrainmod.network.payload.ConfirmSingleCrossoverPayload;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import com.unrealtrainmod.UnrealTrainMod;
 import com.unrealtrainmod.item.TurnoutBuilderItem;
 import com.unrealtrainmod.network.payload.OpenTrackCurvePayload;
@@ -107,6 +113,7 @@ public final class TurnoutConstructionManager {
             Set<UUID> external = connections(graph, selected);
             boolean newDraft = s == null || s.kind != kind;
             if (newDraft) {
+                if (s != null) s.cancelSolve();
                 s = new Session(player, kind);
             } else {
                 Feedback stale = refresh(graph, s);
@@ -201,15 +208,25 @@ public final class TurnoutConstructionManager {
     private static Feedback validate(ServerPlayer player, Session s) {
         try {
             var selectedModel = NativeTurnoutCatalog.constructionModel(player);
+            if (!Objects.equals(s.selectedModel, selectedModel)) s.changed();
             s.selectedModel = selectedModel;
             var blocks = TrackBlockManager.get(player.serverLevel()); var graph = blocks.graph();
             Feedback stale = refresh(graph, s);
-            if (stale != null) return s.validation = stale;
+            if (stale != null) { s.cancelSolve(); return s.validation = stale; }
             updateDefaults(graph, s);
             if (s.points.size() == s.kind.pointCount()) {
                 if (s.kind == TrackConstructionType.SCISSORS_CROSSOVER && !NativeTurnoutCatalog.SCISSORS_R11.equals(selectedModel))
                     return s.validation = selectedModel == null ? Feedback.SELECT_MODEL : Feedback.MODEL_UNSUPPORTED;
-                if (NativeTurnoutCatalog.contains(selectedModel)) {
+                if (nativeSingle(s)) {
+                    var solved = solve(graph, s);
+                    if (solved != Feedback.READY) return s.validation = solved;
+                    var prepared = graph.prepareAssembly(s.kind, s.points, s.gauge, s.solution.curves(), s.edited,
+                            s.yaw, selectedModel.toString(), s.solution.geometry());
+                    blocks.validatePlacement(prepared.segments());
+                    return s.validation = Feedback.READY;
+                }
+                // Double slips validate their paths and footprint without borrowing another native layout.
+                if (s.kind != TrackConstructionType.DOUBLE_SLIP && NativeTurnoutCatalog.contains(selectedModel)) {
                     if (!NativeTurnoutCatalog.supports(selectedModel, s.kind)) return s.validation = Feedback.MODEL_UNSUPPORTED;
                     if (!s.revision.equals(s.nativeRevision) || !selectedModel.equals(s.nativeModel) || s.nativeGauge != s.gauge) {
                         s.nativeRevision = s.revision;
@@ -219,11 +236,11 @@ public final class TurnoutConstructionManager {
                             var nativeGeometry = AssemblyPlacementGeometry.create(s.kind,
                                     s.points.stream().map(TrackPlacementEndpoint::position).toList(), s.gauge, s.curves, s.yaw);
                             if (NativeTurnoutCatalog.SCISSORS_R11.equals(selectedModel)) {
-                                com.unrealtrainmod.track.mesh.NativeScissorsLayout.build(nativeGeometry, s.gauge);
+                                com.unrealtrainmod.track.mesh.NativeCrossoverLayout.build(nativeGeometry, s.gauge);
                             } else if (NativeTurnoutCatalog.DIAMOND_R11.equals(selectedModel)) {
                                 NativeDiamondLayout.build(nativeGeometry, s.gauge);
                             } else com.unrealtrainmod.track.mesh.NativeTurnoutLayout.build(nativeGeometry, s.gauge);
-                        } catch (com.unrealtrainmod.track.mesh.NativeScissorsLayout.InvalidLayout exception) {
+                        } catch (com.unrealtrainmod.track.mesh.NativeCrossoverLayout.InvalidLayout exception) {
                             LOGGER.warn("Native construction rejected player={} revision={}: {}", player.getUUID(), s.revision, exception.getMessage());
                             s.nativeFeedback = switch (exception.problem()) {
                                 case INTERSECTION -> Feedback.NATIVE_SCISSORS_INTERSECTION;
@@ -246,7 +263,8 @@ public final class TurnoutConstructionManager {
                 }
                 var prepared = graph.prepareAssembly(s.kind, s.points, s.gauge, s.curves, s.edited, s.yaw, null);
                 blocks.validatePlacement(prepared.segments());
-                return s.validation = Feedback.READY;
+                return s.validation = s.kind == TrackConstructionType.DOUBLE_SLIP
+                        ? Feedback.NATIVE_DOUBLE_SLIP_PENDING : Feedback.READY;
             }
             AssemblyPlacementGeometry.create(s.kind, s.points.stream().map(TrackPlacementEndpoint::position).toList(),
                     s.gauge, s.curves, s.yaw);
@@ -254,11 +272,68 @@ public final class TurnoutConstructionManager {
                 case DIAMOND_CROSSING -> Feedback.CROSSING_POINT;
                 case SINGLE_CROSSOVER -> Feedback.CROSSOVER_POINT;
                 case SCISSORS_CROSSOVER -> Feedback.SCISSORS_POINT;
+                case DOUBLE_SLIP -> Feedback.DOUBLE_SLIP_POINT;
                 default -> s.points.size() == 2 ? Feedback.TURNOUT_B : Feedback.TURNOUT_A;
             };
+        } catch (NativeDoubleSlipSolver.InvalidLayout exception) {
+            LOGGER.warn("Native double slip rejected player={} revision={} gauge={} points={} curves={}: {}",
+                    player.getUUID(), s.revision, s.gauge,
+                    s.points.stream().map(TrackPlacementEndpoint::position).toList(), s.curves, exception.getMessage());
+            return s.validation = switch (exception.problem()) {
+                case INTERSECTION -> Feedback.NATIVE_DOUBLE_SLIP_INTERSECTION;
+                case ANGLE -> Feedback.NATIVE_DOUBLE_SLIP_ANGLE;
+                case SPACE -> Feedback.NATIVE_DOUBLE_SLIP_SPACE;
+            };
         } catch (TrackGraphException exception) { return s.validation = failure(exception); }
-        catch (IllegalArgumentException exception) { return s.validation = Feedback.INVALID_GEOMETRY; }
+        catch (IllegalArgumentException exception) { s.cancelSolve(); return s.validation = Feedback.INVALID_GEOMETRY; }
         catch (IllegalStateException exception) { LOGGER.error("Cannot validate turnout", exception); return s.validation = Feedback.STORAGE; }
+    }
+
+    private static boolean nativeSingle(Session s) {
+        return s.kind == TrackConstructionType.SINGLE_CROSSOVER && NativeTurnoutCatalog.SINGLE_CROSSOVER_R11.equals(s.selectedModel);
+    }
+
+    private static Feedback solve(TrackGraph graph, Session s) {
+        var requested = new ArrayList<>(s.curves);
+        var constraints = new ArrayList<NativeSingleCrossoverSolver.Constraint>();
+        for (int i = 0; i < s.points.size(); i++) {
+            boolean manual = s.edited.get(i) && s.curves.get(i) != null;
+            var outward = TrackConstructionManager.outwardHorizontal(graph, s.points.get(i));
+            if (outward != null) {
+                double angle = Math.toDegrees(Math.atan2(-outward.x(), outward.z()));
+                if (manual && Math.cos(Math.toRadians(s.curves.get(i).angle()-angle)) < 1-1e-6)
+                    throw new IllegalArgumentException("Manual handle must preserve the existing rail direction");
+                if (!manual) requested.set(i, new TrackCurveParameters(angle, s.defaults.get(i).length()));
+            } else if (!manual && s.points.get(i).nodeId() != null) {
+                // A multi-connection port has no unique outward vector; retain its selected draft direction.
+                requested.set(i, s.defaults.get(i));
+            }
+            constraints.add(new NativeSingleCrossoverSolver.Constraint(manual || s.points.get(i).nodeId() != null, manual));
+        }
+        var input = new NativeSingleCrossoverSolver.Input(s.points.stream().map(TrackPlacementEndpoint::position).toList(),
+                s.gauge, requested, constraints, s.yaw);
+        if (!input.equals(s.solveInput)) {
+            if (s.solveInput != null) s.changed();
+            s.solveInput = input;
+            var cancelled = new AtomicBoolean(); s.solveCancelled = cancelled;
+            s.pendingSolve = CompletableFuture.supplyAsync(() -> NativeSingleCrossoverSolver.solve(input, cancelled::get),
+                    net.minecraft.Util.backgroundExecutor());
+        }
+        if (s.pendingSolve != null) {
+            if (!s.pendingSolve.isDone()) return Feedback.NATIVE_CROSSOVER_SOLVING;
+            try {
+                s.solution = s.pendingSolve.join();
+                // A click sent while solving must never confirm a result the client has not seen.
+                s.revision = UUID.randomUUID(); s.editorId = null;
+                if (!s.solution.found()) LOGGER.warn("Native single crossover search exhausted player={} revision={} candidates={} complete={} diagnostic={}",
+                        s.player.getUUID(), s.revision, s.solution.candidates(), s.solution.complete(), s.solution.diagnostic());
+            } catch (CompletionException failure) {
+                s.solveFailed = true;
+                LOGGER.warn("Cannot solve native single crossover player={} revision={}", s.player.getUUID(), s.revision, failure.getCause());
+            }
+            s.pendingSolve = null;
+        }
+        return !s.solveFailed && s.solution != null && s.solution.found() ? Feedback.READY : Feedback.NATIVE_CROSSOVER_NO_SOLUTION;
     }
 
     public static void edit(ServerPlayer player) {
@@ -281,9 +356,10 @@ public final class TurnoutConstructionManager {
         if (!TrackConstructionManager.canEditPoint(player, s.points.get(selected))) { publish(player, s, Feedback.INVALID_POINT); return; }
         s.editorId = UUID.randomUUID(); s.editPoint = selected;
         publish(player, s, s.validation);
-        var initial = s.defaults.get(selected);
+        var initial = s.solution != null && s.solution.found() ? s.solution.curves().get(selected) : s.defaults.get(selected);
         PacketDistributor.sendToPlayer(player, new OpenTrackCurvePayload(s.dimension(), s.revision, s.editorId,
-                ConstructionKind.TURNOUT, selected, s.curves.get(selected) == null,
+                ConstructionKind.TURNOUT, selected, nativeSingle(s)
+                        ? !(s.edited.get(selected) && s.curves.get(selected) != null) : s.curves.get(selected) == null,
                 initial, true, true, new TrackVerticalCurveParameters(0, 1, 0)));
     }
 
@@ -296,7 +372,8 @@ public final class TurnoutConstructionManager {
                 || payload.endpoint() != s.editPoint || payload.endpoint() < 0 || payload.endpoint() >= s.points.size()) error = Feedback.STALE_EDIT;
         if (error == null) {
             validate(player, s);
-            if (s.validation == Feedback.INVALID_NODE || s.validation == Feedback.INVALID_POINT
+            if (!s.revision.equals(payload.revision()) || !payload.editorId().equals(s.editorId)) error = Feedback.STALE_EDIT;
+            else if (s.validation == Feedback.INVALID_NODE || s.validation == Feedback.INVALID_POINT
                     || s.validation == Feedback.NON_HORIZONTAL || s.validation == Feedback.STORAGE) error = s.validation;
             else if (!TrackConstructionManager.canEditPoint(player, s.points.get(s.editPoint))) error = Feedback.INVALID_POINT;
             else if (payload.verticalEdited()) error = Feedback.INVALID_PARAMETERS;
@@ -317,14 +394,32 @@ public final class TurnoutConstructionManager {
         PacketDistributor.sendToPlayer(player, new TrackCurveResultPayload(payload.editorId(), true, feedback));
     }
 
-    public static void place(ServerPlayer player) {
+    public static void place(ServerPlayer player) { place(player, null); }
+
+    public static void confirm(ServerPlayer player, ConfirmSingleCrossoverPayload payload) {
+        var s = SESSIONS.get(player.getUUID());
+        if (s == null || s.kind != TrackConstructionType.SINGLE_CROSSOVER || !s.dimension().equals(payload.dimension())
+                || !NativeTurnoutCatalog.SINGLE_CROSSOVER_R11.equals(player.getMainHandItem().get(ModDataComponents.SELECTED_RAIL_MODEL.get()))) return;
+        if (!player.canInteractWithBlock(payload.clicked(), 0) || !player.serverLevel().hasChunkAt(payload.clicked())) {
+            publish(player, s, Feedback.INVALID_POINT); return;
+        }
+        place(player, payload.revision());
+    }
+
+    private static void place(ServerPlayer player, UUID expectedRevision) {
         var s = SESSIONS.get(player.getUUID());
         if (s == null) return;
         if (!s.matches(player)) { clear(player, Feedback.NO_PERMISSION); return; }
         if (!player.getMainHandItem().is(UnrealTrainMod.RAIL_PLACER.get())) { publish(player, s, Feedback.INVALID_ITEM); return; }
         if (player.isShiftKeyDown()) { cancel(player); return; }
+        boolean wasNativeSingle = nativeSingle(s);
+        var previousRevision = s.revision;
         Feedback feedback = validate(player, s);
         if (feedback != Feedback.READY) { publish(player, s, feedback); return; }
+        if (wasNativeSingle && !previousRevision.equals(s.revision)) { publish(player, s, Feedback.READY); return; }
+        if (nativeSingle(s) && (expectedRevision == null || !s.revision.equals(expectedRevision))) {
+            publish(player, s, Feedback.READY); return;
+        }
         var model = player.getMainHandItem().get(ModDataComponents.SELECTED_RAIL_MODEL.get());
         if (model == null || !RailCatalog.contains(model)) {
             publish(player, s, model == null ? Feedback.SELECT_MODEL : Feedback.MISSING_MODEL); return;
@@ -334,7 +429,9 @@ public final class TurnoutConstructionManager {
         }
         try {
             var graph = TrackBlockManager.get(player.serverLevel()).graph();
-            var assembly = graph.createAssembly(s.kind, s.points, s.gauge, s.curves, s.edited, s.yaw, model.toString());
+            var assembly = nativeSingle(s)
+                    ? graph.createAssembly(s.kind, s.points, s.gauge, s.solution.curves(), s.edited, s.yaw, model.toString(), s.solution.geometry())
+                    : graph.createAssembly(s.kind, s.points, s.gauge, s.curves, s.edited, s.yaw, model.toString());
             clear(player, Feedback.CREATED);
             player.sendSystemMessage(Component.translatable("item.unrealtrainmod." + builderKey(s.kind) + ".created",
                     assembly.id().toString()));
@@ -414,6 +511,7 @@ public final class TurnoutConstructionManager {
             case DIAMOND_CROSSING -> "diamond_crossing_builder";
             case SINGLE_CROSSOVER -> "single_crossover_builder";
             case SCISSORS_CROSSOVER -> "scissors_crossover_builder";
+            case DOUBLE_SLIP -> "double_slip_builder";
             default -> "turnout_builder";
         };
     }
@@ -422,32 +520,44 @@ public final class TurnoutConstructionManager {
         player.displayClientMessage(Component.translatable(feedback.translationKey(), detail).withStyle(ChatFormatting.RED), true);
     }
     private static void publish(ServerPlayer player, Session s, Feedback feedback) {
+        if (s != null && feedback == Feedback.READY && s.solution != null && s.solution.found() && s.solution.adjusted())
+            feedback = Feedback.NATIVE_CROSSOVER_ADJUSTED;
         PacketDistributor.sendToPlayer(player, new TurnoutConstructionPayload(player.serverLevel().dimension().location(),
                 s == null ? new UUID(0, 0) : s.revision, s == null ? TrackConstructionType.SIMPLE_TURNOUT : s.kind,
                 s == null ? List.of() : List.copyOf(s.points), s == null ? 1.435 : s.gauge,
-                s == null ? List.of() : new ArrayList<>(s.curves), s == null ? 0 : s.yaw, feedback, s == null ? Feedback.START : s.validation));
+                s == null ? List.of() : new ArrayList<>(s.curves),
+                s != null && nativeSingle(s) && s.solution != null && s.solution.found() ? s.solution.curves() : List.of(),
+                s == null ? 0 : s.yaw, feedback, s == null ? Feedback.START : s.validation));
     }
     private static void clear(ServerPlayer player, Feedback feedback) {
-        if (SESSIONS.remove(player.getUUID()) != null || feedback != Feedback.CANCELLED) publish(player, null, feedback);
+        var removed = SESSIONS.remove(player.getUUID());
+        if (removed != null) removed.cancelSolve();
+        if (removed != null || feedback != Feedback.CANCELLED) publish(player, null, feedback);
     }
     private static void tick(PlayerTickEvent.Post event) {
         if (event.getEntity() instanceof ServerPlayer player) {
             var s = SESSIONS.get(player.getUUID());
             if (s != null && !s.matches(player)) clear(player, Feedback.CLEARED);
-            else if (s != null && !Objects.equals(s.selectedModel, NativeTurnoutCatalog.constructionModel(player))) {
+            else if (s != null && (!Objects.equals(s.selectedModel, NativeTurnoutCatalog.constructionModel(player))
+                    || s.pendingSolve != null && s.pendingSolve.isDone())) {
                 publish(player, s, validate(player, s));
             }
         }
     }
-    private static void logout(PlayerEvent.PlayerLoggedOutEvent event) { SESSIONS.remove(event.getEntity().getUUID()); }
-    private static void clonePlayer(PlayerEvent.Clone event) { SESSIONS.remove(event.getOriginal().getUUID()); }
+    private static void discard(UUID id) {
+        var removed = SESSIONS.remove(id); if (removed != null) removed.cancelSolve();
+    }
+    private static void logout(PlayerEvent.PlayerLoggedOutEvent event) { discard(event.getEntity().getUUID()); }
+    private static void clonePlayer(PlayerEvent.Clone event) { discard(event.getOriginal().getUUID()); }
     private static void dimensionChanged(PlayerEvent.PlayerChangedDimensionEvent event) {
         if (event.getEntity() instanceof ServerPlayer player) clear(player, Feedback.CLEARED);
     }
     private static void unload(LevelEvent.Unload event) {
-        if (event.getLevel() instanceof ServerLevel level) SESSIONS.values().removeIf(s -> s.level == level);
+        if (event.getLevel() instanceof ServerLevel level) SESSIONS.values().removeIf(s -> {
+            if (s.level != level) return false; s.cancelSolve(); return true;
+        });
     }
-    private static void stop(ServerStoppedEvent event) { SESSIONS.clear(); }
+    private static void stop(ServerStoppedEvent event) { SESSIONS.values().forEach(Session::cancelSolve); SESSIONS.clear(); }
 
     private static final class Session {
         final ServerPlayer player;
@@ -466,10 +576,23 @@ public final class TurnoutConstructionManager {
         ResourceLocation selectedModel, nativeModel;
         double nativeGauge = Double.NaN;
         Feedback nativeFeedback;
+        NativeSingleCrossoverSolver.Input solveInput;
+        NativeSingleCrossoverSolver.Result solution;
+        CompletableFuture<NativeSingleCrossoverSolver.Result> pendingSolve;
+        AtomicBoolean solveCancelled;
+        boolean solveFailed;
         Session(ServerPlayer player, TrackConstructionType kind) {
             this.player = player; this.kind = kind; level = player.serverLevel(); yaw = player.getYRot();
         }
-        void changed() { revision = UUID.randomUUID(); editorId = null; }
+        void cancelSolve() {
+            if (solveCancelled != null) solveCancelled.set(true);
+            if (pendingSolve != null) pendingSolve.cancel(false);
+            pendingSolve = null; solveInput = null; solution = null; solveFailed = false;
+        }
+        void changed() {
+            cancelSolve();
+            revision = UUID.randomUUID(); editorId = null;
+        }
         ResourceLocation dimension() { return level.dimension().location(); }
         boolean matches(ServerPlayer p) {
             return p == player && p.isAlive() && p.hasPermissions(2) && level == p.serverLevel();

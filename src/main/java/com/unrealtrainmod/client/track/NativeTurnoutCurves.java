@@ -55,7 +55,12 @@ final class NativeTurnoutCurves {
             return a.getKey().equals(b.getKey()) ? value : value+(b.getValue()-value)*(key-a.getKey())/(b.getKey()-a.getKey());
         }
     }
-    static void clearProfiles() { PROFILES.clear(); }
+    static void clearProfiles() { synchronized (PROFILES) { PROFILES.clear(); } }
+    private static Profile profile(IndexedMesh mesh) {
+        synchronized (PROFILES) { var cached = PROFILES.get(mesh); if (cached != null) return cached; }
+        var built = new Profile(mesh);
+        synchronized (PROFILES) { return PROFILES.computeIfAbsent(mesh, ignored -> built); }
+    }
     private record BladeSection(double weight, double tailSlope, double upper, double upperSlope,
                                 double lower, double lowerSlope, double heightOffset, double heightSlope) {}
     private static BladeSection section(float z, double tip, float length, BladeContact contact) {
@@ -82,7 +87,7 @@ final class NativeTurnoutCurves {
 
     static IndexedMesh blade(IndexedMesh source, IndexedMesh rail, float length, BladeContact contact) {
         var vertices = source.vertices().clone(); double factor = length / (0.65 + 1.572079);
-        var profile = PROFILES.computeIfAbsent(rail, Profile::new);
+        var profile = profile(rail);
         var parameters = PARAMETERS.get(source);
         for (int i = 0; i < vertices.length; i += 8) {
             vertices[i + 2] = (float)(0.65 + (vertices[i + 2] - 0.65) * factor);

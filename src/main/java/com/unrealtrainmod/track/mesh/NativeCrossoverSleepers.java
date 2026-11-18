@@ -7,20 +7,20 @@ import java.util.List;
 import static com.unrealtrainmod.track.mesh.NativeRailCurve.*;
 
 /** One global two-sleeper phase, with the turnout/diamond's authored support parts. */
-final class NativeScissorsSleepers {
+final class NativeCrossoverSleepers {
     private static final double HALF_WIDTH = 1.23913071;
-    private NativeScissorsSleepers() {}
-    private record Placement(int path, NativeScissorsLayout.Node node) {}
+    private NativeCrossoverSleepers() {}
+    private record Placement(int path, NativeCrossoverLayout.Node node) {}
 
-    static List<NativeScissorsLayout.Sleeper> build(List<NativeScissorsLayout.Path> paths,
-                                                  List<NativeScissorsLayout.SleeperZone> zones, double scale) {
-        var reference = paths.getFirst(); var output = new ArrayList<NativeScissorsLayout.Sleeper>();
-        var range = NativeScissorsLayout.referenceRange(paths); double first = range[0], last = range[1];
+    static List<NativeCrossoverLayout.Sleeper> build(List<NativeCrossoverLayout.Path> paths,
+                                                  List<NativeCrossoverLayout.SleeperZone> zones, double scale) {
+        var reference = paths.getFirst(); var output = new ArrayList<NativeCrossoverLayout.Sleeper>();
+        var range = NativeCrossoverLayout.referenceRange(paths); double first = range[0], last = range[1];
         // Each source contains two sleepers at Z=0 and Z=0.5, placed by their midpoint.
         for (double s = Math.floor(first/scale)*scale-.25*scale; s-.25*scale < last; s += scale) {
             var row = reference.extended(s); var pending = new ArrayList<Placement>();
             for (int p = 0; p < paths.size(); p++) {
-                var path = paths.get(p); double station = NativeScissorsLayout.station(path,row.point(),row.tangent());
+                var path = paths.get(p); double station = NativeCrossoverLayout.station(path,row.point(),row.tangent());
                 var node = path.at(station);
                 station += dot(add(row.point(),node.point(),-1),row.tangent())/dot(node.tangent(),row.tangent());
                 if (onPath(path,station,scale)) pending.add(new Placement(p,path.extended(station)));
@@ -58,7 +58,7 @@ final class NativeScissorsSleepers {
                 var delta = add(other.node().point(),own.node().point(),-1); double across = dot(delta,lateral);
                 var residual = add(delta,lateral,-across);
                 if (dot(own.node().tangent(),other.node().tangent()) < .5 || dot(residual,residual) > 1e-10*scale*scale)
-                    throw new NativeScissorsLayout.InvalidLayout(NativeScissorsLayout.Problem.SPACE,
+                    throw new NativeCrossoverLayout.InvalidLayout(NativeCrossoverLayout.Problem.SPACE,
                             NativeLayoutDiagnostic.at("sleeper_pair",paths.get(own.path()).name(),0,own.node().station(),station,1e-5*scale));
                 place(output,own,yaw,other.path(),across,paths,zones,scale);
                 place(output,other,yaw,own.path(),-across,paths,zones,scale);
@@ -66,18 +66,18 @@ final class NativeScissorsSleepers {
         }
         return List.copyOf(output);
     }
-    private static boolean onPath(NativeScissorsLayout.Path path, double station, double scale) {
+    private static boolean onPath(NativeCrossoverLayout.Path path, double station, double scale) {
         return station+.25*scale >= -1e-5*scale && station-.25*scale < path.length();
     }
-    private static void place(List<NativeScissorsLayout.Sleeper> output, Placement item, double yaw, int partner,
-                              double across, List<NativeScissorsLayout.Path> paths,
-                              List<NativeScissorsLayout.SleeperZone> zones, double scale) {
+    private static void place(List<NativeCrossoverLayout.Sleeper> output, Placement item, double yaw, int partner,
+                              double across, List<NativeCrossoverLayout.Path> paths,
+                              List<NativeCrossoverLayout.SleeperZone> zones, double scale) {
         double length = paths.get(item.path()).length(), station = item.node().station();
         for (var zone : zones) if (zone.path() == item.path()) {
             double directed = zone.reversed() ? length-station : station;
             var reference = paths.get(zone.reference());
             var forward = new TrackVector(Math.sin(yaw),0,Math.cos(yaw));
-            double referenceStation = NativeScissorsLayout.station(reference,item.node().point(),forward);
+            double referenceStation = NativeCrossoverLayout.station(reference,item.node().point(),forward);
             var frame = reference.at(referenceStation);
             referenceStation += dot(add(item.node().point(),frame.point(),-1),forward)/dot(frame.tangent(),forward);
             double directedReference = zone.reversed() ? reference.length()-referenceStation : referenceStation;
@@ -85,7 +85,7 @@ final class NativeScissorsSleepers {
             double row = Math.floor((directedReference+(.25+1e-5)*scale)/(2*scale))*2*scale;
             String kind = NativeTurnoutLayout.sleeperKind(row,zone.frog(),directed,zone.tip(),zone.heel(),scale);
             if (!kind.endsWith("01")) {
-                output.add(new NativeScissorsLayout.Sleeper(kind+(zone.inner() > 0 ? "R" : "L"),
+                output.add(new NativeCrossoverLayout.Sleeper(kind+(zone.inner() > 0 ? "R" : "L"),
                         item.node().point(),yaw+(zone.reversed() ? Math.PI : 0)));
                 return;
             }
@@ -94,6 +94,6 @@ final class NativeScissorsSleepers {
         // Coincident rows use the same stable path order as NativeDiamondLayout.
         boolean right = across > 1e-5*scale || Math.abs(across) <= 1e-5*scale && item.path() < partner;
         String name = diamond ? "sleeper_point02"+(right ? "R" : "L") : "sleeper_point01";
-        output.add(new NativeScissorsLayout.Sleeper(name,item.node().point(),yaw));
+        output.add(new NativeCrossoverLayout.Sleeper(name,item.node().point(),yaw));
     }
 }

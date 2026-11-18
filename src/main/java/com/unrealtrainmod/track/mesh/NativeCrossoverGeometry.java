@@ -11,8 +11,8 @@ import static com.unrealtrainmod.track.mesh.NativeRailCurve.*;
 import static com.unrealtrainmod.track.mesh.NativePlanarGeometry.*;
 
 /** Source-profile rail connections between the ordinary turnout and diamond's actual end sections. */
-public final class NativeScissorsGeometry {
-    private NativeScissorsGeometry() {}
+public final class NativeCrossoverGeometry {
+    private NativeCrossoverGeometry() {}
     public record Result(Map<String,IndexedMesh> fixed, Map<String,IndexedMesh> blades) {
         public Result { fixed = Collections.unmodifiableMap(new LinkedHashMap<>(fixed)); blades = Map.copyOf(blades); }
     }
@@ -21,7 +21,7 @@ public final class NativeScissorsGeometry {
 
     static List<Rail> connect(TrackGeometry path, NativeDiamondLayout.RailEnd start, NativeDiamondLayout.RailEnd end,
                               TrackVector origin, double scale) {
-        double from = start.distance(), to = end.distance(), offset = start.side()*NativeScissorsLayout.RAIL*scale;
+        double from = start.distance(), to = end.distance(), offset = start.side()*NativeCrossoverLayout.RAIL*scale;
         var reference = NativeFixedRails.reference(path,from,to,offset,start.point(),end.point(),start.yaw(),end.yaw(),scale);
         var cuts = NativeFixedRails.cuts(reference,scale,start.miterSlope(),end.miterSlope()); var result = new ArrayList<Rail>();
         for (int part = 1; part < cuts.size(); part++) {
@@ -36,6 +36,7 @@ public final class NativeScissorsGeometry {
 
     /** Check actual ordinary-turnout links, including their moving connector rails, against foreign controls and hardware. */
     static void validateMotion(Map<String,NativeTurnoutLayout> switches, List<NativeDiamondLayout.Part> parts, TrackVector origin, double scale, Map<NativeDiamondLayout.Part,Integer> owners) {
+        var controls = List.copyOf(switches.keySet());
         var envelopes = new ArrayList<Area>();
         for (var layout : switches.values()) {
             var areas = new ArrayList<Area>(); var vertex = new Vector3f();
@@ -57,19 +58,33 @@ public final class NativeScissorsGeometry {
         }
         for (int a = 0; a < envelopes.size(); a++) for (int b = a+1; b < envelopes.size(); b++) {
             var overlap = new Area(envelopes.get(a)); overlap.intersect(envelopes.get(b));
-            if (!overlap.isEmpty()) throw new NativeScissorsLayout.InvalidLayout(NativeScissorsLayout.Problem.SPACE,
+            if (!overlap.isEmpty()) throw new NativeCrossoverLayout.InvalidLayout(NativeCrossoverLayout.Problem.SPACE,
                     NativeLayoutDiagnostic.at("blade_motion_interference","links",0,0,0,0)
-                            .in(NativeScissorsLayout.CONTROLS.get(a),NativeScissorsLayout.CONTROLS.get(b)));
+                            .in(controls.get(a),controls.get(b)));
         }
         for (var part : parts) if (part.name().startsWith("wing") || part.name().startsWith("guard") || part.name().startsWith("nose")) {
-            var footprint = polygon(NativeScissorsParts.footprint(part,scale).stream().map(p -> new Point(p.x(),p.z())).toList());
+            var footprint = polygon(NativeCrossoverParts.footprint(part,scale).stream().map(p -> new Point(p.x(),p.z())).toList());
             for (int control = 0; control < envelopes.size(); control++) {
                 if (owners.getOrDefault(part,-1) == control) continue;
                 var overlap = new Area(envelopes.get(control)); overlap.intersect(footprint);
-                if (!overlap.isEmpty()) throw new NativeScissorsLayout.InvalidLayout(NativeScissorsLayout.Problem.SPACE,
+                if (!overlap.isEmpty()) throw new NativeCrossoverLayout.InvalidLayout(NativeCrossoverLayout.Problem.SPACE,
                         NativeLayoutDiagnostic.at("blade_hardware_interference",part.name(),0,0,0,0)
-                                .in(NativeScissorsLayout.CONTROLS.get(control),part.name()));
+                                .in(controls.get(control),part.name()));
             }
+        }
+    }
+    /** Single crossovers have no central crossing hardware that can legitimately overlap two cores. */
+    static void validateHardware(List<NativeDiamondLayout.Part> parts, double scale,
+                                 Map<NativeDiamondLayout.Part,Integer> owners, List<String> controls) {
+        var footprints = parts.stream().map(part -> polygon(NativeCrossoverParts.footprint(part,scale)
+                .stream().map(p -> new Point(p.x(),p.z())).toList())).toList();
+        for (int a = 0; a < parts.size(); a++) for (int b = a+1; b < parts.size(); b++) {
+            int first = owners.get(parts.get(a)), second = owners.get(parts.get(b));
+            if (first == second || !footprints.get(a).getBounds2D().intersects(footprints.get(b).getBounds2D())) continue;
+            var overlap = new Area(footprints.get(a)); overlap.intersect(footprints.get(b));
+            if (!overlap.isEmpty()) throw new NativeCrossoverLayout.InvalidLayout(NativeCrossoverLayout.Problem.SPACE,
+                    NativeLayoutDiagnostic.at("core_hardware_interference",parts.get(a).name()+"|"+parts.get(b).name(),0,0,0,0)
+                            .in(controls.get(first),controls.get(second)));
         }
     }
     private static List<Point> hull(List<Point> points) {

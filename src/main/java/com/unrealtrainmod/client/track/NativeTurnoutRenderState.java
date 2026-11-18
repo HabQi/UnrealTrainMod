@@ -26,6 +26,8 @@ final class NativeTurnoutRenderState implements AutoCloseable {
         final TrackPartSnapshot snapshot;
         final Map<Long, List<TrackPartSnapshot.Part>> groups = new LinkedHashMap<>();
         final Map<Long, EndpointMesh> meshes = new LinkedHashMap<>();
+        final Map<Long, com.unrealtrainmod.client.ModelPreparation.Ticket<com.unrealtrainmod.track.mesh.RailTrackMeshData>> pending = new LinkedHashMap<>();
+        final Set<Long> failed = new java.util.HashSet<>();
         Endpoint(TrackPartSnapshot snapshot, NativeTurnoutLayout layout) {
             this.snapshot = snapshot;
             for (var part : snapshot.parts()) {
@@ -105,21 +107,35 @@ final class NativeTurnoutRenderState implements AutoCloseable {
             for (var group : endpoint.groups.entrySet()) {
                 long chunk = group.getKey(); if (!loaded(chunk, chunks, level)) continue;
                 var cached = endpoint.meshes.get(chunk);
-                boolean buildEndpoint = cached == null && !shadow && budget.available();
+                boolean buildEndpoint = cached == null && !shadow && !endpoint.failed.contains(chunk);
                 if (cached == null && !shadow && !buildEndpoint) NativeTurnoutLoading.budgetWait(loading);
                 if (buildEndpoint) {
                     long start = System.nanoTime();
                     try (var operation = NativeTurnoutLoading.open(loading, "geometry/endpointCache")) {
                         if (operation != null) { operation.value("endpoint", index); operation.value("chunkX", ChunkPos.getX(chunk)); operation.value("chunkZ", ChunkPos.getZ(chunk)); }
-                        var data = NativeTurnoutMeshes.endpoint(layout, chunk, group.getValue()); long bytes = 0;
-                        for (var batch : data.batches()) bytes += (long)batch.mesh().vertices().length*Float.BYTES
-                                +(long)(batch.mesh().colors().length+batch.mesh().indices().length)*Integer.BYTES;
-                        cached = new EndpointMesh(new RailTrackGpuMesh(data,TrackStaticMesh.PageDomain.ENDPOINT), bytes); endpoint.meshes.put(chunk, cached);
-                        NativeTurnoutLoading.associate(cached.mesh(), loading);
-                        if (operation != null) operation.value("cpuMeshBytes", bytes);
-                        NativeTurnoutLoading.geometry(operation, data);
-                        if (stats != null) stats.nativeEndpointBuilt();
-                    } finally { budget.pageFinished(start); if (stats != null) stats.built(System.nanoTime()-start); }
+                        if (!endpoint.pending.containsKey(chunk)) {
+                            var captured = List.copyOf(group.getValue());
+                            var ticket = com.unrealtrainmod.client.ModelPreparation.geometry(() -> NativeTurnoutMeshes.endpoint(layout, chunk, captured),
+                                    TrackPreparation::size, ignored -> {});
+                            if (ticket != null) {
+                                endpoint.pending.put(chunk, ticket);
+                                ticket.whenReady(() -> {
+                                    try {
+                                        var data = ticket.take();
+                                        endpoint.meshes.put(chunk, new EndpointMesh(new RailTrackGpuMesh(data, TrackStaticMesh.PageDomain.ENDPOINT), TrackPreparation.size(data)));
+                                        NativeTurnoutLoading.associate(endpoint.meshes.get(chunk).mesh(), loading);
+                                    } catch (RuntimeException exception) {
+                                        endpoint.failed.add(chunk); ticket.close();
+                                        org.slf4j.LoggerFactory.getLogger(NativeTurnoutRenderState.class).warn("Cannot prepare turnout endpoint", exception);
+                                    } finally { endpoint.pending.remove(chunk); }
+                                });
+                            }
+                        }
+                    } catch (RuntimeException exception) {
+                        var failed = endpoint.pending.remove(chunk); if (failed != null) failed.close();
+                        endpoint.failed.add(chunk);
+                        org.slf4j.LoggerFactory.getLogger(NativeTurnoutRenderState.class).warn("Cannot prepare turnout endpoint", exception);
+                    }
                 }
                 if (cached != null && !cached.mesh().isEmpty()) buffers.request(cached.mesh(), TrackRenderStats.STRUCTURE_ASSEMBLY);
             }
@@ -134,6 +150,7 @@ final class NativeTurnoutRenderState implements AutoCloseable {
     Map<Long, EndpointMesh> endpointMeshes() { return endpoints[endpointIndex()].meshes; }
     void removeChunk(long chunk) {
         for (var endpoint : endpoints) if (endpoint != null) {
+            var pending = endpoint.pending.remove(chunk); if (pending != null) pending.close();
             var mesh = endpoint.meshes.remove(chunk); if (mesh != null) buffers.remove(mesh.mesh());
         }
         representationFrame = -1; parts.removeChunk(chunk);
@@ -148,6 +165,7 @@ final class NativeTurnoutRenderState implements AutoCloseable {
         closed = true; parts.close(); snapshot = null;
         for (int i = 0; i < endpoints.length; i++) {
             var endpoint = endpoints[i]; if (endpoint == null) continue;
+            endpoint.pending.values().forEach(com.unrealtrainmod.client.ModelPreparation.Ticket::close);
             for (var cached : endpoint.meshes.values()) buffers.remove(cached.mesh());
             endpoints[i] = null;
         }

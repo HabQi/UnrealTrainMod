@@ -23,6 +23,8 @@ public record NativeTurnoutLayout(TrackVector origin, double scale, List<Part> p
     // Connection sections measured from the normalized r11 OBJ, not its object origins.
     private static final double RAIL_X = 0.74875, STOCK_WORK_X = 0.7234168;
     private static final double HEAD_HALF = 0.0354982;
+    /** Inner head face of the authored ordinary rail, relative to its track centreline. */
+    public static final double RAIL_WORK_X = RAIL_X - HEAD_HALF;
     private static final double BLADE_TIP = -1.572079, BLADE_JOIN = 0.65;
     private static final double BLADE_OPENING = 0.12;
     private static final double WING_X = 0.0311652, WING_REAR = -1.000215, NOSE_END = 1.999626;
@@ -229,8 +231,8 @@ public record NativeTurnoutLayout(TrackVector origin, double scale, List<Part> p
         double toe = crossing.main()/8+0.042*main.length();
         double branchToe = transverseStation(branch, main.at(toe));
         var bladeRow = bladeReference(main, branch, toe, scale);
-        var mainTip = edgeOnRow(branch, bladeRow, side*(RAIL_X-HEAD_HALF)*scale, scale);
-        var branchTip = edgeOnRow(main, bladeRow, -side*(RAIL_X-HEAD_HALF)*scale, scale);
+        var mainTip = edgeOnRow(branch, bladeRow, side*RAIL_WORK_X*scale, scale);
+        var branchTip = edgeOnRow(main, bladeRow, -side*RAIL_WORK_X*scale, scale);
         var mainBlade = solveBlade(main, branch, crossing.main(), toe, side, mainFrog,
                 branch.edge(branchToe, side*STOCK_WORK_X*scale), mainTip.point(), scale, "main");
         var branchBlade = solveBlade(branch, main, crossing.branch(), branchToe, -side, branchFrog,
@@ -489,9 +491,9 @@ public record NativeTurnoutLayout(TrackVector origin, double scale, List<Part> p
         double offset = inner*RAIL_X*scale; var pose = path.at(station);
         if (1-offset*pose.curvature() <= 0) throw new InvalidLayout(Problem.SPACE);
         var center = path.edge(station, offset);
-        double stockStation = projectedStation(stock, inner*(RAIL_X-HEAD_HALF)*scale, center,
+        double stockStation = projectedStation(stock, inner*RAIL_WORK_X*scale, center,
                 spineKnot(path, offset, station, scale).first(), 0, stock.length(), SOLVE_TOLERANCE*scale);
-        var point = stock.edge(stockStation, inner*(RAIL_X-HEAD_HALF)*scale);
+        var point = stock.edge(stockStation, inner*RAIL_WORK_X*scale);
         double across = projection(point, center, pose.lateral())/scale;
         return new TipSample(station, across, point, stockStation);
     }
@@ -542,10 +544,10 @@ public record NativeTurnoutLayout(TrackVector origin, double scale, List<Part> p
         int count = Math.max(2, (int)Math.ceil(length/(0.1*scale)));
         for (int i = 0; i <= count; i++) {
             double s = tipStation+(heelStation-tipStation)*i/count; var sample = spine.at(s); var pose = path.at(s);
-            double stockStation = i == 0 ? tip.stockDistance() : projectedStation(stock, inner*(RAIL_X-HEAD_HALF)*scale,
+            double stockStation = i == 0 ? tip.stockDistance() : projectedStation(stock, inner*RAIL_WORK_X*scale,
                     sample.point(), sample.first(), search, stock.length(), tolerance);
             search = Math.max(0, stockStation-tolerance);
-            var edge = i == 0 ? tip.point() : stock.edge(stockStation, inner*(RAIL_X-HEAD_HALF)*scale);
+            var edge = i == 0 ? tip.point() : stock.edge(stockStation, inner*RAIL_WORK_X*scale);
             double across = projection(edge, sample.point(), pose.lateral())/scale;
             double t = (double)i/count, smooth = t*t*t*(10+t*(-15+6*t));
             double lower = -HEAD_HALF+(inner*tip.offset()+HEAD_HALF)*(1-smooth);

@@ -49,7 +49,7 @@ public final class NativeTurnoutLoading {
         } else if (entry.loading == null) {
             entry.loading = start("world", entry.data.modelId(), entry.data.id());
             if (entry.nativeState != null) entry.nativeState.attachLoading(entry.loading);
-            if (entry.scissorsState != null) entry.scissorsState.attachLoading(entry.loading);
+            if (entry.crossoverState != null) entry.crossoverState.attachLoading(entry.loading);
             for (var group : entry.meshes.values()) for (var mesh : group) associate(mesh, entry.loading);
         }
         return entry.loading;

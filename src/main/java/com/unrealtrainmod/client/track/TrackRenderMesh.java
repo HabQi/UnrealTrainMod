@@ -13,5 +13,6 @@ interface TrackRenderMesh extends AutoCloseable {
     TrackVector origin();
     boolean isEmpty();
     int source();
+    default boolean texturesReady() { return true; }
     @Override void close();
 }

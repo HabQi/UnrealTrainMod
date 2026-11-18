@@ -52,6 +52,117 @@ public final class GpuModel implements AutoCloseable {
     public long byteSize() { return (long)vertexCount * StaticModelShader.FORMAT.getVertexSize() + (long)indexCount * Integer.BYTES; }
     public Part part(RenderBatch batch) { return closed ? null : parts.get(batch); }
 
+    private record PackedMesh(ByteBuffer vertices, ByteBuffer indices, Map<RenderBatch, Integer> offsets, int vertexCount) {}
+    public static final class Prepared implements AutoCloseable {
+        private final List<PackedMesh> meshes = new ArrayList<>();
+        public long byteSize() {
+            long bytes = 0;
+            for (var mesh : meshes) bytes += (long)mesh.vertices.capacity() + mesh.indices.capacity();
+            return bytes;
+        }
+        @Override public void close() {
+            for (var mesh : meshes) { MemoryUtil.memFree(mesh.vertices); MemoryUtil.memFree(mesh.indices); }
+            meshes.clear();
+        }
+    }
+
+    /** Canonical indices and native vertex bytes are produced without touching GL or renderer state. */
+    public static Prepared prepare(List<RenderBatch> batches) {
+        var result = new Prepared();
+        var groups = new java.util.LinkedHashMap<VertexSource, List<RenderBatch>>();
+        for (var batch : batches) groups.computeIfAbsent(new VertexSource(batch.mesh().vertices(), batch.mesh().colors()),
+                ignored -> new ArrayList<>()).add(batch);
+        try {
+            for (var group : groups.values()) {
+                var original = group.getFirst().mesh();
+                var offsets = new IdentityHashMap<IndexedMesh, Integer>();
+                var ranges = new IdentityHashMap<RenderBatch, Integer>();
+                int count = 0;
+                for (var batch : group) if (!offsets.containsKey(batch.mesh())) {
+                    offsets.put(batch.mesh(), count); count = Math.addExact(count, batch.mesh().indices().length);
+                }
+                var vertices = MemoryUtil.memAlloc(Math.multiplyExact(original.colors().length, StaticModelShader.FORMAT.getVertexSize()))
+                        .order(ByteOrder.nativeOrder());
+                ByteBuffer indices = null;
+                try {
+                    indices = MemoryUtil.memAlloc(Math.multiplyExact(count, Integer.BYTES)).order(ByteOrder.nativeOrder());
+                    for (int vertex = 0, i = 0; vertex < original.colors().length; vertex++, i += 8) {
+                        var v = original.vertices(); int color = original.colors()[vertex];
+                        vertices.putFloat(v[i]).putFloat(v[i + 1]).putFloat(v[i + 2]);
+                        vertices.put((byte)(color >>> 16)).put((byte)(color >>> 8)).put((byte)color).put((byte)(color >>> 24));
+                        vertices.putFloat(v[i + 3]).putFloat(v[i + 4]);
+                        vertices.put(normalByte(v[i + 5])).put(normalByte(v[i + 6])).put(normalByte(v[i + 7])).put((byte)0);
+                    }
+                    for (var entry : offsets.entrySet()) {
+                        indices.position(entry.getValue() * Integer.BYTES);
+                        indices.asIntBuffer().put(entry.getKey().indices());
+                    }
+                    for (var batch : group) ranges.put(batch, offsets.get(batch.mesh()) + batch.firstIndex());
+                    vertices.clear(); indices.clear();
+                    result.meshes.add(new PackedMesh(vertices, indices, ranges, original.colors().length));
+                } catch (RuntimeException | Error exception) {
+                    MemoryUtil.memFree(vertices); MemoryUtil.memFree(indices); throw exception;
+                }
+            }
+            return result;
+        } catch (RuntimeException | Error exception) { result.close(); throw exception; }
+    }
+
+    /** Private buffers stay unpublished until every source range has been uploaded. */
+    public static final class Upload implements AutoCloseable {
+        private final Prepared prepared;
+        private final List<Mesh> meshes = new ArrayList<>();
+        private final Map<RenderBatch, Part> parts = new IdentityHashMap<>();
+        private int group, offset, vertices, indices;
+        private boolean index, transferred;
+        public Upload(Prepared prepared) { this.prepared = prepared; }
+        public boolean complete() { return group == prepared.meshes.size(); }
+        public boolean step() {
+            if (complete()) return true;
+            var source = prepared.meshes.get(group);
+            var data = index ? source.indices : source.vertices;
+            int count = Math.min(ModelUploads.SLICE_BYTES, data.capacity() - offset);
+            if (!ModelUploads.run(count, () -> {
+                int oldVao = GL11.glGetInteger(GL30.GL_VERTEX_ARRAY_BINDING);
+                int oldArray = GL11.glGetInteger(GL15.GL_ARRAY_BUFFER_BINDING);
+                try {
+                    if (meshes.size() == group) {
+                        var buffer = new RangeVertexBuffer();
+                        meshes.add(new Mesh(buffer));
+                        buffer.initialize(source);
+                    }
+                    var buffer = meshes.get(group).buffer;
+                    buffer.bind();
+                    int target = index ? GL15.GL_ELEMENT_ARRAY_BUFFER : GL15.GL_ARRAY_BUFFER;
+                    GlStateManager._glBindBuffer(target, index ? buffer.canonicalIndexBuffer : buffer.staticVertexBuffer);
+                    var slice = data.duplicate().position(offset).limit(offset + count).slice();
+                    GL15.glBufferSubData(target, offset, slice);
+                } finally {
+                    BufferUploader.invalidate();
+                    GlStateManager._glBindVertexArray(oldVao);
+                    GlStateManager._glBindBuffer(GL15.GL_ARRAY_BUFFER, oldArray);
+                }
+            })) return false;
+            offset += count;
+            if (offset == data.capacity()) {
+                offset = 0;
+                if (!index) index = true;
+                else {
+                    var mesh = meshes.get(group);
+                    source.offsets.forEach((batch, first) -> parts.put(batch, new Part(mesh, first)));
+                    vertices += source.vertexCount; indices += source.indices.capacity() / Integer.BYTES;
+                    group++; index = false;
+                }
+            }
+            return complete();
+        }
+        public GpuModel finish() {
+            transferred = true;
+            return new GpuModel(parts, meshes, vertices, indices);
+        }
+        @Override public void close() { if (!transferred) meshes.forEach(Mesh::close); }
+    }
+
     public static GpuModel upload(List<RenderBatch> prepared) {
         RenderSystem.assertOnRenderThread();
         var groups = new HashMap<VertexSource, List<RenderBatch>>();
@@ -136,12 +247,6 @@ public final class GpuModel implements AutoCloseable {
             GlStateManager._glBindVertexArray(oldVao);
             GlStateManager._glBindBuffer(GL15.GL_ARRAY_BUFFER, oldArray);
         }
-    }
-
-    /** Shared rigid geometry for non-vehicle callers; the owning resource manager closes it. */
-    public static Mesh uploadSharedMesh(IndexedMesh mesh) {
-        RenderSystem.assertOnRenderThread();
-        return new Mesh(uploadMesh(mesh));
     }
 
     private static byte normalByte(float value) { return (byte)(Math.clamp(value, -1f, 1f) * 127f); }
@@ -235,6 +340,22 @@ public final class GpuModel implements AutoCloseable {
         private int instancedArray = -1;
         private int[] instanceAttributes;
         private RangeVertexBuffer() { super(Usage.STATIC); }
+
+        private void initialize(PackedMesh packed) {
+            // Let Minecraft establish its owned VAO/VBO/IBO and format with a tiny placeholder.
+            int size = StaticModelShader.FORMAT.getVertexSize() * 3;
+            try (var vertices = new ByteBufferBuilder(size); var indices = new ByteBufferBuilder(12)) {
+                MemoryUtil.memSet(vertices.reserve(size), 0, size);
+                MemoryUtil.memSet(indices.reserve(12), 0, 12);
+                bind();
+                upload(new IndexedMeshData(vertices.build(), indices.build(), new MeshData.DrawState(
+                        StaticModelShader.FORMAT, 3, 3, VertexFormat.Mode.TRIANGLES, VertexFormat.IndexType.INT)));
+                staticVertexBuffer = GL11.glGetInteger(GL15.GL_ARRAY_BUFFER_BINDING);
+                canonicalIndexBuffer = GL11.glGetInteger(GL15.GL_ELEMENT_ARRAY_BUFFER_BINDING);
+                GL15.glBufferData(GL15.GL_ARRAY_BUFFER, packed.vertices.capacity(), GL15.GL_STATIC_DRAW);
+                GL15.glBufferData(GL15.GL_ELEMENT_ARRAY_BUFFER, packed.indices.capacity(), GL15.GL_STATIC_DRAW);
+            }
+        }
 
         private void bindIndices(boolean sorted) {
             super.bind();

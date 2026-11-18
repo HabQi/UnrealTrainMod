@@ -10,6 +10,7 @@ import com.unrealtrainmod.track.geometry.TrackPoint;
 import com.unrealtrainmod.track.geometry.TrackVector;
 import com.unrealtrainmod.track.geometry.VerticalTrackGeometry;
 import com.unrealtrainmod.track.construction.TrackConstructionType;
+import com.unrealtrainmod.track.assembly.TrackAssemblyDefinition;
 import com.unrealtrainmod.track.assembly.TrackAssemblyInstance;
 import com.unrealtrainmod.track.assembly.TrailingPass;
 import com.unrealtrainmod.track.assembly.JunctionState;
@@ -297,10 +298,17 @@ public final class TrackGraph {
     public PreparedAssembly prepareAssembly(TrackConstructionType kind, List<TrackPlacementEndpoint> endpoints,
                                              double gauge, List<TrackCurveParameters> curves, List<Boolean> edited,
                                              double yaw, String modelId) {
-        if (!kind.implemented() || endpoints.size() != kind.pointCount()) throw new IllegalArgumentException("Incomplete structure");
-        var definition = AssemblyPlacementGeometry.definition(kind);
         var geometry = AssemblyPlacementGeometry.create(kind, endpoints.stream().map(TrackPlacementEndpoint::position).toList(),
                 gauge, curves, yaw);
+        return prepareAssembly(kind, endpoints, gauge, curves, edited, yaw, modelId, geometry);
+    }
+
+    /** The preview's resolved geometry is committed unchanged, rather than inferring automatic handles again. */
+    public PreparedAssembly prepareAssembly(TrackConstructionType kind, List<TrackPlacementEndpoint> endpoints,
+            double gauge, List<TrackCurveParameters> curves, List<Boolean> edited, double yaw, String modelId,
+            TrackAssemblyDefinition.Geometry geometry) {
+        if (!kind.implemented() || endpoints.size() != kind.pointCount()) throw new IllegalArgumentException("Incomplete structure");
+        var definition = AssemblyPlacementGeometry.definition(kind);
         var preparedNodes = new LinkedHashMap<UUID, TrackNode>();
         var ports = new LinkedHashMap<String, TrackPort>();
         var names = List.of("A", "B", "C", "D");
@@ -320,13 +328,21 @@ public final class TrackGraph {
         var paths = new LinkedHashMap<String, TrackPath>();
         for (var entry : geometry.paths().entrySet()) {
             var route = definition.routes().get(entry.getKey());
-            var part = entry.getValue().getFirst();
-            var curve = part instanceof BezierTrackGeometry bezier ? bezier : null;
-            var segment = prepareSegment(UUID.randomUUID(), preparedNodes.get(ports.get(route.entrance()).nodeId()),
-                    preparedNodes.get(ports.get(route.exit()).nodeId()), curve == null ? null : curve.control1(),
-                    curve == null ? null : curve.control2(), modelId, part);
-            batch.add(segment);
-            paths.put(entry.getKey(), new TrackPath(List.of(new TrackConnection(segment.id(), true))));
+            var steps = new ArrayList<TrackConnection>();
+            var start = preparedNodes.get(ports.get(route.entrance()).nodeId());
+            var parts = entry.getValue();
+            for (int i = 0; i < parts.size(); i++) {
+                var part = parts.get(i);
+                var end = i == parts.size() - 1 ? preparedNodes.get(ports.get(route.exit()).nodeId())
+                        : new TrackNode(UUID.randomUUID(), part.sample(part.getLength()).position(), gauge);
+                if (i < parts.size() - 1) preparedNodes.put(end.id(), end);
+                var curve = part instanceof BezierTrackGeometry bezier ? bezier : null;
+                var segment = prepareSegment(UUID.randomUUID(), start, end, curve == null ? null : curve.control1(),
+                        curve == null ? null : curve.control2(), modelId, part);
+                batch.add(segment); steps.add(new TrackConnection(segment.id(), true));
+                start = end;
+            }
+            paths.put(entry.getKey(), new TrackPath(steps));
         }
         var instance = new TrackAssemblyInstance(UUID.randomUUID(), definition, ports, paths, endpoints.getFirst().position(),
                 geometry.ports().get("A").outwardYaw() + 180, gauge, definition.initialState(), 0, null, geometry, modelId);
@@ -339,6 +355,12 @@ public final class TrackGraph {
                                                  double gauge, List<TrackCurveParameters> curves, List<Boolean> edited,
                                                  double yaw, String modelId) {
         return commitAssembly(prepareAssembly(kind, endpoints, gauge, curves, edited, yaw, modelId));
+    }
+
+    public TrackAssemblyInstance createAssembly(TrackConstructionType kind, List<TrackPlacementEndpoint> endpoints,
+            double gauge, List<TrackCurveParameters> curves, List<Boolean> edited, double yaw, String modelId,
+            TrackAssemblyDefinition.Geometry geometry) {
+        return commitAssembly(prepareAssembly(kind, endpoints, gauge, curves, edited, yaw, modelId, geometry));
     }
 
     private TrackAssemblyInstance commitAssembly(PreparedAssembly prepared) {

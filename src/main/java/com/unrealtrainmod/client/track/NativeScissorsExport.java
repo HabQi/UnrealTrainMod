@@ -22,10 +22,11 @@ public final class NativeScissorsExport {
     }
     private static int export() {
         var mc = Minecraft.getInstance(); if (mc.player == null) return 0;
-        NativeScissorsRenderState state = null; String name = null;
+        NativeCrossoverRenderState state = null; String name = null;
         double nearest = Double.POSITIVE_INFINITY;
         for (var entry : ClientTrackCache.INSTANCE.assemblies.entrySet()) {
-            var value = entry.getValue().scissorsState; if (value == null) continue;
+            var value = entry.getValue().crossoverState;
+            if (value == null || value.layout.kind() != com.unrealtrainmod.track.mesh.NativeCrossoverLayout.Kind.SCISSORS) continue;
             var bounds = value.layout.bounds(); var center = bounds.getCenter();
             double distance = mc.player.position().distanceToSqr(center);
             if (distance < nearest) { nearest = distance; state = value; name = entry.getKey().toString(); }
@@ -40,7 +41,7 @@ public final class NativeScissorsExport {
             mc.player.displayClientMessage(Component.literal("Scissors export failed: "+failure.getMessage()),false); return 0;
         }
     }
-    private static void write(NativeScissorsRenderState state, Path root) throws IOException {
+    private static void write(NativeCrossoverRenderState state, Path root) throws IOException {
         Files.createDirectories(root); var manifest = new LinkedHashMap<String,Object>(); var meshes = new ArrayList<Object>();
         try (var stream = Minecraft.getInstance().getResourceManager().getResourceOrThrow(NativeTurnoutModels.TEXTURE).open()) {
             Files.copy(stream,root.resolve("r11.png"),java.nio.file.StandardCopyOption.REPLACE_EXISTING);
@@ -49,14 +50,14 @@ public final class NativeScissorsExport {
         for (var entry : geometry.fixed().entrySet()) meshes.add(mesh(root,entry.getKey(),entry.getValue(),null));
         var switches = state.meshes().switches();
         for (int control = 0; control < 4; control++) {
-            for (var part : switches.get(com.unrealtrainmod.track.mesh.NativeScissorsLayout.CONTROLS.get(control)).parts()) {
+            for (var part : switches.get(state.layout.kind().controls().get(control)).parts()) {
                 var matrices = new ArrayList<Object>();
                 for (float movement : new float[]{0,.5f,1}) matrices.add(Map.of("movement",movement,"matrix",part.transform(state.layout.origin(),state.layout.scale(),movement).get(new float[16])));
                 meshes.add(mesh(root,part.name(),geometry.blades().get(part.name()),Map.of("control",control,"poses",matrices)));
             }
         }
         manifest.put("qualification","Actual runtime CPU geometry; big-endian int vertexCount/indexCount, float XYZ/UV/normal, int indices. Does not validate GPU or shader output.");
-        manifest.put("recipe",NativeScissorsModels.RECIPE); manifest.put("origin",state.layout.origin()); manifest.put("scale",state.layout.scale());
+        manifest.put("recipe",NativeCrossoverModels.RECIPE); manifest.put("origin",state.layout.origin()); manifest.put("scale",state.layout.scale());
         manifest.put("paths",state.layout.paths()); manifest.put("connections",state.layout.connections());
         manifest.put("fixedRails",state.layout.fixedRails());
         manifest.put("sleepers",state.meshes().sleepers()); manifest.put("fixedParts",state.layout.fixedParts()); manifest.put("meshes",meshes);

@@ -15,6 +15,7 @@ import com.unrealtrainmod.track.geometry.BezierTrackGeometry;
 import com.unrealtrainmod.track.geometry.TrackGeometry;
 import com.unrealtrainmod.track.geometry.TrackPose;
 import com.unrealtrainmod.track.geometry.TrackVector;
+import com.unrealtrainmod.track.mesh.NativeDoubleSlipSolver;
 import java.util.ArrayList;
 import java.util.Locale;
 import net.minecraft.client.Minecraft;
@@ -39,7 +40,9 @@ public final class TurnoutConstructionRenderer {
         int color = feedback == Feedback.READY ? 0xFF50E070
                 : (feedback == Feedback.START || feedback == Feedback.TURNOUT_A
                         || feedback == Feedback.TURNOUT_B || feedback == Feedback.CROSSING_POINT
-                        || feedback == Feedback.CROSSOVER_POINT || feedback == Feedback.SCISSORS_POINT) ? 0xFFFFCC55 : 0xFFFF5555;
+                        || feedback == Feedback.CROSSOVER_POINT || feedback == Feedback.SCISSORS_POINT
+                        || feedback == Feedback.DOUBLE_SLIP_POINT || feedback == Feedback.NATIVE_DOUBLE_SLIP_PENDING
+                        || feedback == Feedback.NATIVE_CROSSOVER_SOLVING) ? 0xFFFFCC55 : 0xFFFF5555;
         var previousShader = RenderSystem.getShader();
         float[] previousColor = RenderSystem.getShaderColor().clone();
         var view = RenderSystem.getModelViewStack();
@@ -56,13 +59,27 @@ public final class TurnoutConstructionRenderer {
             TotalStationRenderer.render(stations, camera, buffers);
             var lines = buffers.getBuffer(TrackRenderTypes.PREVIEW);
             for (var station : stations) TotalStationRenderer.beam(station, camera, lines, color);
+            double railOffset = draft.kind() == TrackConstructionType.DOUBLE_SLIP
+                    ? NativeDoubleSlipSolver.workingOffset(draft.gauge()) : draft.gauge() / 2;
             if (geometry != null) for (var parts : geometry.paths().values()) {
                 for (var part : parts) {
-                    path(lines, part, draft.gauge(), camera, color);
+                    path(lines, part, railOffset, camera, color);
                     if (part instanceof BezierTrackGeometry bezier) {
                         var start = part.sample(0).position(); var end = part.sample(part.getLength()).position();
                         line(lines, start, new TrackVector(bezier.control1().x(), start.y(), bezier.control1().z()), camera, 0xFF70C8FF);
                         line(lines, end, new TrackVector(bezier.control2().x(), end.y(), bezier.control2().z()), camera, 0xFF70C8FF);
+                    }
+                }
+                if (draft.kind() == TrackConstructionType.DOUBLE_SLIP && parts.size() == 3) {
+                    // The inner working edge meets both acute diamond vertices at the bend's ends.
+                    double innerOffset = -Math.signum(parts.get(1).sample(parts.get(1).getLength() / 2).curvature()) * railOffset;
+                    double half = 0.15 * draft.gauge() / 1.435;
+                    for (int i = 0; i <= 1; i++) {
+                        var pose = parts.get(i).sample(parts.get(i).getLength());
+                        line(lines, offset(pose, -railOffset), offset(pose, railOffset), camera, 0xFF70C8FF);
+                        var contact = offset(pose, innerOffset);
+                        line(lines, new TrackVector(contact.x() - pose.tangent().x() * half, contact.y(), contact.z() - pose.tangent().z() * half),
+                                new TrackVector(contact.x() + pose.tangent().x() * half, contact.y(), contact.z() + pose.tangent().z() * half), camera, 0xFF70C8FF);
                     }
                 }
             }
@@ -95,14 +112,22 @@ public final class TurnoutConstructionRenderer {
                         || feedback == Feedback.NATIVE_DIAMOND_ANGLE || feedback == Feedback.NATIVE_DIAMOND_SPACE
                         || feedback == Feedback.NATIVE_SCISSORS_INTERSECTION
                         || feedback == Feedback.NATIVE_SCISSORS_ANGLE || feedback == Feedback.NATIVE_SCISSORS_SPACE
-                        || feedback == Feedback.MODEL_UNSUPPORTED || feedback == Feedback.MISSING_MODEL)) {
+                        || feedback == Feedback.MODEL_UNSUPPORTED || feedback == Feedback.MISSING_MODEL
+                        || feedback == Feedback.NATIVE_DOUBLE_SLIP_PENDING
+                        || feedback == Feedback.NATIVE_DOUBLE_SLIP_INTERSECTION
+                        || feedback == Feedback.NATIVE_DOUBLE_SLIP_ANGLE || feedback == Feedback.NATIVE_DOUBLE_SLIP_SPACE
+                        || feedback == Feedback.NATIVE_CROSSOVER_SOLVING || feedback == Feedback.NATIVE_CROSSOVER_NO_SOLUTION)) {
                     label += " " + Component.translatable(feedback.translationKey()).getString();
                 }
                 if (draft.kind() == TrackConstructionType.DIAMOND_CROSSING
-                        || draft.kind() == TrackConstructionType.SINGLE_CROSSOVER || draft.kind() == TrackConstructionType.SCISSORS_CROSSOVER) {
-                    String prefix = draft.kind() == TrackConstructionType.SCISSORS_CROSSOVER ? "scissors_crossover_builder"
-                            : draft.kind() == TrackConstructionType.DIAMOND_CROSSING
-                            ? "diamond_crossing_builder" : "single_crossover_builder";
+                        || draft.kind() == TrackConstructionType.SINGLE_CROSSOVER || draft.kind() == TrackConstructionType.SCISSORS_CROSSOVER
+                        || draft.kind() == TrackConstructionType.DOUBLE_SLIP) {
+                    String prefix = switch (draft.kind()) {
+                        case DOUBLE_SLIP -> "double_slip_builder";
+                        case SCISSORS_CROSSOVER -> "scissors_crossover_builder";
+                        case DIAMOND_CROSSING -> "diamond_crossing_builder";
+                        default -> "single_crossover_builder";
+                    };
                     label += " " + net.minecraft.network.chat.Component.translatable("item.unrealtrainmod." + prefix + "."
                             + (i < 2 ? "line_one" : "line_two")).getString();
                 } else {
@@ -118,14 +143,14 @@ public final class TurnoutConstructionRenderer {
             RenderSystem.setShaderColor(previousColor[0], previousColor[1], previousColor[2], previousColor[3]);
         }
     }
-    private static void path(VertexConsumer lines, TrackGeometry geometry, double gauge, Vec3 camera, int color) {
+    private static void path(VertexConsumer lines, TrackGeometry geometry, double railOffset, Vec3 camera, int color) {
         int steps = Math.max(1, (int)Math.ceil(geometry.getLength() / 0.5));
         TrackPose a = geometry.sample(0);
         for (int i = 1; i <= steps; i++) {
             var b = geometry.sample(geometry.getLength() * i / steps);
             line(lines, a.position(), b.position(), camera, color);
-            line(lines, offset(a, -gauge / 2), offset(b, -gauge / 2), camera, color);
-            line(lines, offset(a, gauge / 2), offset(b, gauge / 2), camera, color);
+            line(lines, offset(a, -railOffset), offset(b, -railOffset), camera, color);
+            line(lines, offset(a, railOffset), offset(b, railOffset), camera, color);
             a = b;
         }
     }

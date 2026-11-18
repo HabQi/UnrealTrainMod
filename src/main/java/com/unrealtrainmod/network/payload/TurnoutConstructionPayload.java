@@ -19,7 +19,7 @@ import net.minecraft.resources.ResourceLocation;
 
 /** Private draft with one inward horizontal control per selected port. */
 public record TurnoutConstructionPayload(ResourceLocation dimension, UUID revision, TrackConstructionType kind,
-        List<TrackPlacementEndpoint> points, double gauge, List<TrackCurveParameters> curves,
+        List<TrackPlacementEndpoint> points, double gauge, List<TrackCurveParameters> curves, List<TrackCurveParameters> resolvedCurves,
         double yaw, Feedback feedback, Feedback validation)
         implements CustomPacketPayload {
     public static final Type<TurnoutConstructionPayload> TYPE = new Type<>(
@@ -31,6 +31,8 @@ public record TurnoutConstructionPayload(ResourceLocation dimension, UUID revisi
                     TrackConstructionPayload.writeEndpoint(b, p.points().get(i));
                     TrackPayloadCodec.writeCurve(b, p.curves().get(i));
                 }
+                b.writeBoolean(!p.resolvedCurves().isEmpty());
+                for (var curve : p.resolvedCurves()) TrackPayloadCodec.writeCurve(b, curve);
                 b.writeDouble(p.gauge()); b.writeDouble(p.yaw()); b.writeEnum(p.feedback()); b.writeEnum(p.validation());
             }, b -> {
                 var dimension = b.readResourceLocation(); var revision = b.readUUID(); var kind = b.readEnum(TrackConstructionType.class);
@@ -41,7 +43,13 @@ public record TurnoutConstructionPayload(ResourceLocation dimension, UUID revisi
                     points.add(java.util.Objects.requireNonNull(TrackConstructionPayload.readEndpoint(b)));
                     curves.add(TrackPayloadCodec.readCurve(b));
                 }
-                return new TurnoutConstructionPayload(dimension, revision, kind, points, b.readDouble(), curves,
+                var resolved = new ArrayList<TrackCurveParameters>();
+                if (b.readBoolean()) {
+                    if (kind != TrackConstructionType.SINGLE_CROSSOVER || count != 4)
+                        throw new IllegalArgumentException("Resolved controls require a complete single crossover");
+                    for (int i = 0; i < count; i++) resolved.add(java.util.Objects.requireNonNull(TrackPayloadCodec.readCurve(b)));
+                }
+                return new TurnoutConstructionPayload(dimension, revision, kind, points, b.readDouble(), curves, resolved,
                         b.readDouble(), b.readEnum(Feedback.class), b.readEnum(Feedback.class));
             });
     @Override public Type<TurnoutConstructionPayload> type() { return TYPE; }

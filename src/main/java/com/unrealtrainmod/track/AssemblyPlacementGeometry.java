@@ -11,11 +11,12 @@ import com.unrealtrainmod.track.geometry.LinearGrade;
 import com.unrealtrainmod.track.geometry.TrackGeometry;
 import com.unrealtrainmod.track.geometry.TrackPoint;
 import com.unrealtrainmod.track.geometry.TrackVector;
+import com.unrealtrainmod.track.mesh.NativeDoubleSlipSolver;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 
-/** One inward, directed handle per draft port, shared by all paths incident to that port. */
+/** Port handles define primary lines; all incident routes share their outer endpoint tangents. */
 public final class AssemblyPlacementGeometry {
     private static final List<String> PORTS = List.of("A", "B", "C", "D");
 
@@ -31,7 +32,7 @@ public final class AssemblyPlacementGeometry {
             case DIAMOND_CROSSING -> TrackAssemblyDefinition.DIAMOND_CROSSING;
             case SINGLE_CROSSOVER -> TrackAssemblyDefinition.SINGLE_CROSSOVER;
             case SCISSORS_CROSSOVER -> TrackAssemblyDefinition.SCISSORS_CROSSOVER;
-            default -> throw new IllegalArgumentException("Unimplemented structure");
+            case DOUBLE_SLIP -> TrackAssemblyDefinition.DOUBLE_SLIP;
         };
     }
 
@@ -49,7 +50,7 @@ public final class AssemblyPlacementGeometry {
         return result;
     }
 
-    /** Resolve each primary line once. The crossover borrows A and D without recomputing them. */
+    /** Resolve each primary line once; inner slips derive their approach sections from these curves. */
     private static List<TrackPoint> controls(TrackConstructionType kind, List<TrackVector> points,
                                             List<TrackCurveParameters> curves, double yaw) {
         var result = new ArrayList<TrackPoint>();
@@ -116,6 +117,7 @@ public final class AssemblyPlacementGeometry {
             ports.put(PORTS.get(i), new TrackAssemblyDefinition.PortGeometry(points.get(i), inwardYaw(points.get(i), handles.get(i)) + 180));
         }
         for (var entry : definition(kind).routes().entrySet()) {
+            if (kind == TrackConstructionType.DOUBLE_SLIP && entry.getKey().endsWith("crossover")) continue;
             int start = PORTS.indexOf(entry.getValue().entrance()), end = PORTS.indexOf(entry.getValue().exit());
             if (start >= points.size() || end >= points.size()) continue;
             var a = points.get(start); var b = points.get(end);
@@ -123,6 +125,12 @@ public final class AssemblyPlacementGeometry {
                     new TrackPoint(b.x(), b.z()), new LinearGrade(a.y(), a.y()), gauge);
             if (geometry.getLength() > TrackPlacementGeometry.MAX_LENGTH) throw new IllegalArgumentException("Structure path exceeds 256 blocks");
             paths.put(entry.getKey(), List.of(geometry));
+        }
+        if (kind == TrackConstructionType.DOUBLE_SLIP && points.size() == 4) {
+            var slips = NativeDoubleSlipSolver.solve((BezierTrackGeometry) paths.get("first_straight").getFirst(),
+                    (BezierTrackGeometry) paths.get("second_straight").getFirst(), gauge);
+            paths.put("first_crossover", slips.first());
+            paths.put("second_crossover", slips.second());
         }
         return new TrackAssemblyDefinition.Geometry(ports, paths);
     }
@@ -135,10 +143,22 @@ public final class AssemblyPlacementGeometry {
         }
         for (var entry : definition.routes().entrySet()) {
             var parts = geometry.paths().get(entry.getKey());
-            if (parts.size() != 1) throw new IllegalArgumentException("Structure requires one geometry per path");
-            var path = parts.getFirst();
-            if (path.getLength() > TrackPlacementGeometry.MAX_LENGTH) throw new IllegalArgumentException("Structure path exceeds 256 blocks");
+            boolean slip = definition == TrackAssemblyDefinition.DOUBLE_SLIP && entry.getKey().endsWith("crossover");
+            if (parts.size() != (slip ? 3 : 1)) throw new IllegalArgumentException("Unexpected structure path part count");
+            double length = parts.stream().mapToDouble(TrackGeometry::getLength).sum();
+            if (length > TrackPlacementGeometry.MAX_LENGTH) throw new IllegalArgumentException("Structure path exceeds 256 blocks");
+            for (int i = 1; i < parts.size(); i++) {
+                var previous = parts.get(i - 1).sample(parts.get(i - 1).getLength());
+                var next = parts.get(i).sample(0);
+                double distance = Math.hypot(previous.position().x() - next.position().x(), previous.position().z() - next.position().z());
+                double dot = previous.tangent().x() * next.tangent().x() + previous.tangent().z() * next.tangent().z();
+                if (distance > 1e-6 || Math.abs(previous.position().y() - next.position().y()) > 1e-6
+                        || Math.abs(previous.tangent().y()) > 1e-6 || Math.abs(next.tangent().y()) > 1e-6 || dot < 1 - 1e-6) {
+                    throw new IllegalArgumentException("Structure path parts must meet with a shared horizontal tangent");
+                }
+            }
             for (boolean start : List.of(true, false)) {
+                var path = start ? parts.getFirst() : parts.getLast();
                 var pose = path.sample(start ? 0 : path.getLength());
                 var port = geometry.ports().get(start ? entry.getValue().entrance() : entry.getValue().exit());
                 double angle = Math.toRadians(port.outwardYaw());
@@ -150,6 +170,8 @@ public final class AssemblyPlacementGeometry {
         }
         if (definition == TrackAssemblyDefinition.DIAMOND_CROSSING) {
             requireCrossing(geometry.paths().get("line_one").getFirst(), geometry.paths().get("line_two").getFirst());
+        } else if (definition == TrackAssemblyDefinition.DOUBLE_SLIP) {
+            NativeDoubleSlipSolver.validate(geometry);
         }
     }
 

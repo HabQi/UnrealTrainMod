@@ -27,6 +27,20 @@ final class TrackLightBuffer implements AutoCloseable {
     private int handle;
     private boolean samplesChanged, dirty;
 
+    void initial(ClientLevel level, int first, int count, TrackRenderStats stats) {
+        long start = System.nanoTime();
+        for (int i = first; i < first + count; i++) {
+            int value = fullBright ? LightTexture.FULL_BRIGHT : lighting.value(level, samples[i]);
+            staging.putInt(i * Integer.BYTES, value);
+        }
+        GlStateManager._glBindBuffer(GL15.GL_ARRAY_BUFFER, handle);
+        if (first == 0) GL15.glBufferData(GL15.GL_ARRAY_BUFFER, staging.capacity(), GL15.GL_DYNAMIC_DRAW);
+        GL15.glBufferSubData(GL15.GL_ARRAY_BUFFER, (long)first * 4,
+                staging.duplicate().position(first * 4).limit((first + count) * 4).slice());
+        if (first + count == samples.length) { samplesChanged = false; dirty = false; }
+        if (stats != null) { stats.gpuUpload(System.nanoTime() - start); stats.lightUploaded(count * 4, true, false); }
+    }
+
     TrackLightBuffer(boolean fullBright) { this.fullBright = fullBright; }
 
     void samples(long[] samples) {

@@ -25,6 +25,7 @@ public final class RailCatalog {
     }
 
     public static boolean supportsAssembly(ResourceLocation id, TrackConstructionType kind) {
+        if (kind == TrackConstructionType.DOUBLE_SLIP) return false;
         if (kind == TrackConstructionType.SCISSORS_CROSSOVER) return NativeTurnoutCatalog.SCISSORS_R11.equals(id);
         if (NativeTurnoutCatalog.contains(id)) return NativeTurnoutCatalog.supports(id, kind);
         var rail = find(id);

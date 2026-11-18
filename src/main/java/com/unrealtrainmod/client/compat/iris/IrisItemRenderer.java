@@ -25,11 +25,16 @@ public final class IrisItemRenderer {
         IrisCompat.flushItemBuffer(source);
         try (var scope = IrisCompat.handPass() ? IrisDrawScope.hand() : IrisDrawScope.entity()) {
             var meshes = new IrisGeometryCache.Mesh[batches.size()];
+            boolean pending = false;
             for (int i = 0; i < batches.size(); i++) {
                 var batch = batches.get(i);
                 meshes[i] = IrisGeometryCache.requestItem(batch.mesh(), batch.firstIndex(), batch.indexCount());
-                if (meshes[i] == null) return CACHE_UNAVAILABLE;
+                if (meshes[i] == null) {
+                    if (!IrisGeometryCache.waiting(batch.mesh(), batch.firstIndex(), batch.indexCount(), false)) return CACHE_UNAVAILABLE;
+                    pending = true;
+                }
             }
+            if (pending) return 0;
             var view = new Matrix4f(RenderSystem.getModelViewMatrix()).mul(pose.pose());
             var projection = RenderSystem.getProjectionMatrix();
             for (int i = 0; i < batches.size(); i++) {

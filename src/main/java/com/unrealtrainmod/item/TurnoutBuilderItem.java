@@ -47,6 +47,7 @@ public final class TurnoutBuilderItem extends Item {
             case DIAMOND_CROSSING -> "diamond_crossing_builder";
             case SINGLE_CROSSOVER -> "single_crossover_builder";
             case SCISSORS_CROSSOVER -> "scissors_crossover_builder";
+            case DOUBLE_SLIP -> "double_slip_builder";
             default -> "turnout_builder";
         };
         for (String key : List.of("select", "preview", "cancel", "permission")) {

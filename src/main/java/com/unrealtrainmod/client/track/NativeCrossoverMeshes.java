@@ -14,20 +14,20 @@ import org.joml.Matrix4f;
 import org.joml.Vector3f;
 
 /** Shared shape cache and true chunk clipping, independent of vanilla/Iris GPU representations. */
-final class NativeScissorsMeshes implements AutoCloseable {
-    private record Key(double scale, List<NativeScissorsLayout.Path> paths, List<NativeTurnoutLayout.Part> rails, List<NativeScissorsGeometry.Rail> connections,
-                       List<NativeDiamondLayout.Part> fixedParts, List<NativeScissorsLayout.Sleeper> sleepers, List<Source> resources) {}
+final class NativeCrossoverMeshes implements AutoCloseable {
+    private record Key(NativeCrossoverLayout.Kind kind, double scale, List<NativeCrossoverLayout.Path> paths, List<NativeTurnoutLayout.Part> rails, List<NativeCrossoverGeometry.Rail> connections,
+                       List<NativeDiamondLayout.Part> fixedParts, List<NativeCrossoverLayout.Sleeper> sleepers, List<Source> resources) {}
     private static final Map<Key,Shared> SHAPES = new HashMap<>();
     private static final class Shared {
-        final NativeScissorsGeometry.Result geometry;
-        final List<NativeScissorsLayout.Sleeper> sleepers;
+        final NativeCrossoverGeometry.Result geometry;
+        final List<NativeCrossoverLayout.Sleeper> sleepers;
         private record Placement(String source, long x, long y, long z, long yaw) {}
         int references;
-        Shared(NativeScissorsLayout layout, Map<String,List<Source>> originals) {
+        Shared(NativeCrossoverLayout layout, Map<String,List<Source>> originals) {
             var fixed = new LinkedHashMap<String,IndexedMesh>(); var blades = new LinkedHashMap<String,IndexedMesh>();
             var output = new RailMeshAccumulator(layout.origin()); var position = new Vector3f(); var normal = new Vector3f();
-            try (var stage = NativeLayoutProfile.stage("geometry/scissorsSleepers")) {
-                var seen = new HashSet<Placement>(); var kept = new ArrayList<NativeScissorsLayout.Sleeper>();
+            try (var stage = NativeLayoutProfile.stage("geometry/"+layout.kind().label()+"Sleepers")) {
+                var seen = new HashSet<Placement>(); var kept = new ArrayList<NativeCrossoverLayout.Sleeper>();
                 var identities = new HashMap<String,String>(); double unit = 1e-6*layout.scale();
                 for (var sleeper : layout.sleepers()) {
                     var center = sleeper.center(); double scale = layout.scale();
@@ -47,7 +47,7 @@ final class NativeScissorsMeshes implements AutoCloseable {
                 fixed.put("sleepers",NativeTurnoutMeshes.concatenate(output.finish().batches().stream().map(RailTrackMeshData.Batch::mesh).toList()));
             }
             var groups = new LinkedHashMap<String,RailMeshAccumulator>(); var zero = new TrackVector(0,0,0);
-            try (var stage = NativeLayoutProfile.stage("geometry/scissorsFixedHardware")) {
+            try (var stage = NativeLayoutProfile.stage("geometry/"+layout.kind().label()+"FixedHardware")) {
                 for (var part : layout.fixedParts()) {
                     var parts = originals.get(part.name());
                     if (parts == null) throw new IllegalArgumentException("Missing native r11 part: "+part.name());
@@ -66,9 +66,9 @@ final class NativeScissorsMeshes implements AutoCloseable {
                     .batches().stream().map(RailTrackMeshData.Batch::mesh).toList())); }
             finally { NativeTurnoutMeshes.release(prepared); }
             var connections = new RailMeshAccumulator(zero);
-            try (var stage = NativeLayoutProfile.stage("geometry/scissorsConnectionSweep")) {
+            try (var stage = NativeLayoutProfile.stage("geometry/"+layout.kind().label()+"ConnectionSweep")) {
                 for (var rail : layout.connections()) {
-                    double center = rail.side()*NativeScissorsLayout.RAIL, start = -rail.length()/2, end = rail.length()/2;
+                    double center = rail.side()*NativeCrossoverLayout.RAIL, start = -rail.length()/2, end = rail.length()/2;
                     var transform = new Matrix4f().translation((float)rail.position().x(),(float)rail.position().y(),(float)rail.position().z())
                             .rotateY((float)rail.yaw()).translate((float)(-center*layout.scale()),0,(float)(-start*layout.scale())).scale((float)layout.scale());
                     for (var source : originals.get(rail.side() > 0 ? "railL" : "railR")) {
@@ -78,49 +78,58 @@ final class NativeScissorsMeshes implements AutoCloseable {
                 }
                 fixed.put("connections",NativeTurnoutMeshes.concatenate(connections.finish().batches().stream().map(RailTrackMeshData.Batch::mesh).toList()));
             }
-            for (int control = 0; control < NativeScissorsLayout.CONTROLS.size(); control++) {
-                var core = layout.switches().get(NativeScissorsLayout.CONTROLS.get(control));
+            for (int control = 0; control < layout.kind().controls().size(); control++) {
+                var core = layout.switches().get(layout.kind().controls().get(control));
                 var moving = NativeTurnoutMeshes.prepare(core,originals);
                 try {
                     for (int i = 0; i < core.parts().size(); i++) blades.put(bladeName(control,i),
                             NativeTurnoutMeshes.join(moving.get(core.parts().get(i)).stream().map(Source::mesh).toList()));
                 } finally { NativeTurnoutMeshes.release(moving); }
             }
-            geometry = new NativeScissorsGeometry.Result(fixed,blades);
+            geometry = new NativeCrossoverGeometry.Result(fixed,blades);
         }
     }
-    private final NativeScissorsLayout layout;
+    private final NativeCrossoverLayout layout;
     private final Key key;
     private final Shared shared;
     private final Map<String,List<Source>> sources = new LinkedHashMap<>();
     private final Map<Long,RailTrackMeshData> chunks = new LinkedHashMap<>();
     private boolean closed;
-    NativeScissorsMeshes(NativeScissorsLayout layout, ClientRailModelManager.Model model) {
+    NativeCrossoverMeshes(NativeCrossoverLayout layout, ClientRailModelManager.Model model) {
         var originals = NativeTurnoutModels.sources(model.parts());
         var names = new HashSet<String>();
         layout.sleepers().forEach(part -> names.add(part.name())); layout.fixedParts().forEach(part -> names.add(part.name()));
         names.addAll(List.of("railL","railR","L1","R1"));
         var resources = originals.entrySet().stream().filter(entry -> names.contains(entry.getKey()))
                 .sorted(Map.Entry.comparingByKey()).flatMap(entry -> entry.getValue().stream()).toList();
-        this.layout = layout; key = new Key(layout.scale(),layout.paths(),layout.fixedRails(),layout.connections(),layout.fixedParts(),layout.sleepers(),resources);
+        this.layout = layout; key = new Key(layout.kind(),layout.scale(),layout.paths(),layout.fixedRails(),layout.connections(),layout.fixedParts(),layout.sleepers(),resources);
+        Shared cached;
         synchronized (SHAPES) {
-            try (var stage = NativeLayoutProfile.stage("geometry/scissorsShapeCache")) {
-                if (stage != null) stage.value("cacheHit", SHAPES.containsKey(key));
-                shared = SHAPES.computeIfAbsent(key,k -> new Shared(layout,originals)); shared.references++;
+            cached = SHAPES.get(key);
+            if (cached != null) cached.references++;
+        }
+        if (cached == null) {
+            var built = new Shared(layout, originals);
+            synchronized (SHAPES) {
+                cached = SHAPES.get(key);
+                if (cached == null) { cached = built; SHAPES.put(key, cached); }
+                cached.references++;
             }
         }
+        shared = cached;
         try {
             shared.geometry.blades().forEach((name,mesh) -> sources.put(name,List.of(NativeTurnoutModels.generated(name,mesh))));
         } catch (RuntimeException | Error failure) { close(); throw failure; }
     }
     Map<String,List<Source>> sources() { return sources; }
-    NativeScissorsGeometry.Result geometry() { return shared.geometry; }
-    List<NativeScissorsLayout.Sleeper> sleepers() { return shared.sleepers; }
-    private static String bladeName(int control, int part) { return "scissors_blade_"+control+"_part_"+part; }
+    Map<Long,RailTrackMeshData> chunkData() { return Map.copyOf(chunks); }
+    NativeCrossoverGeometry.Result geometry() { return shared.geometry; }
+    List<NativeCrossoverLayout.Sleeper> sleepers() { return shared.sleepers; }
+    private static String bladeName(int control, int part) { return "crossover_blade_"+control+"_part_"+part; }
     Map<String,NativeTurnoutLayout> switches() {
         var result = new LinkedHashMap<String,NativeTurnoutLayout>();
-        for (int control = 0; control < NativeScissorsLayout.CONTROLS.size(); control++) {
-            String name = NativeScissorsLayout.CONTROLS.get(control); var core = layout.switches().get(name);
+        for (int control = 0; control < layout.kind().controls().size(); control++) {
+            String name = layout.kind().controls().get(control); var core = layout.switches().get(name);
             var parts = new ArrayList<NativeTurnoutLayout.Part>();
             for (int i = 0; i < core.parts().size(); i++) {
                 var part = core.parts().get(i);
@@ -165,7 +174,7 @@ final class NativeScissorsMeshes implements AutoCloseable {
     }
     /** World models need chunk ownership; whole-model icons do not. */
     void prepareChunks() {
-        try (var stage = NativeLayoutProfile.stage("geometry/scissorsChunkClipping")) {
+        try (var stage = NativeLayoutProfile.stage("geometry/"+layout.kind().label()+"ChunkClipping")) {
             var builders = new Long2ObjectLinkedOpenHashMap<ChunkData>(); var origin = layout.origin();
             var polygon = List.of(new float[8],new float[8],new float[8]);
             long directTriangles = 0, boundaryTriangles = 0, outputTriangles = 0, maxTriangleChunks = 0;
@@ -224,7 +233,7 @@ final class NativeScissorsMeshes implements AutoCloseable {
         for (int i = 0; i < data.length; i += 8) {
             double x = data[i], y = data[i+1], z = data[i+2];
             if (!Double.isFinite(x) || !Double.isFinite(y) || !Double.isFinite(z) || x < minX || x > maxX || z < minZ || z > maxZ)
-                throw new IllegalArgumentException("Invalid scissors geometry before chunk clipping: group="+group+", vertex="+i/8
+                throw new IllegalArgumentException("Invalid crossover geometry before chunk clipping: group="+group+", vertex="+i/8
                         +", position=["+x+","+y+","+z+"], x=["+minX+","+maxX+"], z=["+minZ+","+maxZ+"]");
         }
     }

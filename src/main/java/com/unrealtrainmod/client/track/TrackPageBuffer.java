@@ -5,43 +5,44 @@
 package com.unrealtrainmod.client.track;
 
 import com.mojang.blaze3d.platform.GlStateManager;
-import com.mojang.blaze3d.vertex.VertexBuffer;
-import java.nio.ByteOrder;
 import java.nio.IntBuffer;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL14;
 import org.lwjgl.opengl.GL15;
-import org.lwjgl.system.MemoryUtil;
 
 /** Minecraft owns the static VBO/VAO; this class owns the explicit native index buffer. */
-final class TrackPageBuffer extends VertexBuffer {
+final class TrackPageBuffer extends com.unrealtrainmod.client.StagedVertexBuffer {
     private int indexBuffer, indexType, indexSize;
     private final boolean arrays;
+    private final int drawCount;
 
     TrackPageBuffer(boolean arrays) {
-        super(Usage.STATIC);
+        this(arrays, 0);
+    }
+    TrackPageBuffer(boolean arrays, int vertices) {
+        super(vertices);
         this.arrays = arrays;
+        drawCount = vertices / 4 * 6;
+    }
+    @Override public void draw() {
+        if (arrays) super.draw();
+        else {
+            GlStateManager._glBindBuffer(GL15.GL_ELEMENT_ARRAY_BUFFER, indexBuffer);
+            GL11.glDrawElements(GL11.GL_TRIANGLES, drawCount, indexType, 0L);
+        }
     }
 
-    int uploadIndices(int[] indices, int vertices) {
-        boolean shorts = vertices <= 65_536;
-        indexType = shorts ? GL11.GL_UNSIGNED_SHORT : GL11.GL_UNSIGNED_INT;
-        indexSize = shorts ? Short.BYTES : Integer.BYTES;
-        int size = indices.length * indexSize;
-        var data = MemoryUtil.memAlloc(size).order(ByteOrder.nativeOrder());
-        try {
-            for (int index : indices) {
-                if (shorts) data.putShort((short)index);
-                else data.putInt(index);
-            }
-            data.flip();
-            indexBuffer = GlStateManager._glGenBuffers();
-            bind();
-            GlStateManager._glBindBuffer(GL15.GL_ELEMENT_ARRAY_BUFFER, indexBuffer);
-            GL15.glBufferData(GL15.GL_ELEMENT_ARRAY_BUFFER, data, GL15.GL_STATIC_DRAW);
-        } finally { MemoryUtil.memFree(data); }
-        return size;
+    void allocateIndices(int bytes, int vertices) {
+        indexType = vertices <= 65_536 ? GL11.GL_UNSIGNED_SHORT : GL11.GL_UNSIGNED_INT;
+        indexSize = vertices <= 65_536 ? Short.BYTES : Integer.BYTES;
+        indexBuffer = GlStateManager._glGenBuffers();
+        bind(); GlStateManager._glBindBuffer(GL15.GL_ELEMENT_ARRAY_BUFFER, indexBuffer);
+        GL15.glBufferData(GL15.GL_ELEMENT_ARRAY_BUFFER, bytes, GL15.GL_STATIC_DRAW);
+    }
+    void writeIndices(java.nio.ByteBuffer bytes, int offset) {
+        bind(); GlStateManager._glBindBuffer(GL15.GL_ELEMENT_ARRAY_BUFFER, indexBuffer);
+        GL15.glBufferSubData(GL15.GL_ELEMENT_ARRAY_BUFFER, offset, bytes);
     }
 
     void drawRanges(IntBuffer first, IntBuffer counts, PointerBuffer offsets, int rangeCount) {

@@ -7,6 +7,7 @@ package com.unrealtrainmod.client.compat.iris;
 import com.unrealtrainmod.client.track.ClientTrackCache;
 import com.unrealtrainmod.client.track.TrackWorldRenderer;
 import com.mojang.blaze3d.vertex.VertexFormat;
+import com.mojang.blaze3d.vertex.VertexBuffer;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import net.minecraft.client.Minecraft;
@@ -98,7 +99,10 @@ public final class IrisCompat {
         if (source != null) flushItemBuffer(source);
     }
 
-    static int entityVertexSize() { return entityFormat.getVertexSize(); }
+    public static int entityVertexSize() { return entityFormat.getVertexSize(); }
+    public static void requireEntityFormat(VertexBuffer buffer) {
+        if (buffer.getFormat() != entityFormat) throw new IllegalStateException("Iris entity format was not extended");
+    }
 
     public static int[] currentIdentity() {
         int[] previous = new int[3];
@@ -156,6 +160,9 @@ public final class IrisCompat {
         }
         IrisVehicleReprojection.beginFrame();
         IrisGeometryCache.beginFrame();
+        com.unrealtrainmod.client.ModelUploads.beginFrame();
+        IrisBatch.publish();
+        IrisMaterials.publish();
         if (active) com.unrealtrainmod.client.ClientModelManager.INSTANCE.prewarmIris();
         IrisRenderStats.beginFrame();
         TrackWorldRenderer.beginFrame();

@@ -4,13 +4,19 @@
  */
 package com.unrealtrainmod.client.track;
 
-import com.unrealtrainmod.track.mesh.NativeLayoutProfile;
 import com.mojang.blaze3d.vertex.BufferBuilder;
 import com.mojang.blaze3d.vertex.ByteBufferBuilder;
 import com.mojang.blaze3d.vertex.DefaultVertexFormat;
-import com.mojang.blaze3d.vertex.VertexBuffer;
 import com.mojang.blaze3d.vertex.VertexFormat;
 import com.unrealtrainmod.client.ClientModelManager;
+import com.unrealtrainmod.client.ModelPreparation;
+import com.unrealtrainmod.client.ModelUploads;
+import com.unrealtrainmod.client.StagedVertexBuffer;
+import com.mojang.blaze3d.vertex.MeshData;
+import it.unimi.dsi.fastutil.floats.FloatArrayList;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import org.lwjgl.system.MemoryUtil;
 import com.unrealtrainmod.client.compat.iris.IrisCompat;
 import com.unrealtrainmod.client.compat.iris.IrisRenderStats;
 import com.unrealtrainmod.client.compat.iris.IrisRenderTypes;
@@ -84,7 +90,7 @@ final class TrackStaticBuffers implements AutoCloseable {
             return rail == null ? reference / 6 * 4 + (iris ? IRIS_CORNERS : QUAD_INDICES)[reference % 6]
                     : rail.indices()[reference];
         }
-        void emit(BufferBuilder builder, int vertex, boolean iris, TrackVector origin, LongArrayList samples) {
+        void collect(int vertex, boolean iris, TrackVector origin, FloatArrayList output, IntArrayList colors, LongArrayList samples) {
             double x, y, z;
             float u, v;
             int color;
@@ -121,9 +127,8 @@ final class TrackStaticBuffers implements AutoCloseable {
             x += sourceOrigin.x(); y += sourceOrigin.y(); z += sourceOrigin.z();
             samples.add(TrackLighting.key(x, y, z, nx, ny, nz));
             float localX = (float)(x - origin.x()), localY = (float)y, localZ = (float)(z - origin.z());
-            if (rail != null || iris) {
-                builder.addVertex(localX, localY, localZ, color, u, v, OverlayTexture.NO_OVERLAY, 0, nx, ny, nz);
-            } else builder.addVertex(localX, localY, localZ).setColor(color).setLight(0);
+            output.add(localX); output.add(localY); output.add(localZ); output.add(u); output.add(v);
+            output.add(nx); output.add(ny); output.add(nz); colors.add(color);
         }
     }
 
@@ -133,7 +138,7 @@ final class TrackStaticBuffers implements AutoCloseable {
         final List<Part> parts = new ArrayList<>();
         List<Page> pages = List.of();
         Build pending;
-        boolean dirty = true;
+        boolean dirty = true, failed;
         long requested;
         Group(Key key) {
             this.key = key;
@@ -141,7 +146,7 @@ final class TrackStaticBuffers implements AutoCloseable {
                     (double)ChunkPos.getZ(key.chunk()) * 16);
         }
         void changed() {
-            dirty = true;
+            dirty = true; failed = false;
             if (pending != null) { pending.close(); pending = null; }
         }
         @Override public void close() {
@@ -153,121 +158,201 @@ final class TrackStaticBuffers implements AutoCloseable {
         }
     }
 
-    /** Builds complete pages incrementally; old pages remain usable until every replacement page is ready. */
+    /** A page's topology, transforms and native packing are produced from a fixed source snapshot. */
+    private static final class PreparedPage implements AutoCloseable {
+        final float[] vertices;
+        final int[] colors;
+        final long[] samples;
+        final ByteBuffer nativeVertices, indices;
+        final List<Fragment> fragments;
+        final int nextPart, nextReference;
+        PreparedPage(List<Part> parts, int partIndex, int reference, boolean iris, boolean textured, TrackVector origin) {
+            var data = new FloatArrayList(); var colors = new IntArrayList();
+            var samples = new LongArrayList(); var indices = new IntArrayList(); var fragments = new ArrayList<Fragment>();
+            var remap = new Int2IntOpenHashMap(); remap.defaultReturnValue(-1);
+            int references = 0;
+            while (partIndex < parts.size() && references < MAX_REFERENCES) {
+                var part = parts.get(partIndex);
+                int count = Math.min(part.count() - reference, MAX_REFERENCES - references);
+                int first = references, stored = samples.size(); remap.clear();
+                for (int end = reference + count; reference < end; reference++) {
+                    int original = part.index(reference, iris);
+                    if (iris) part.collect(original, true, origin, data, colors, samples);
+                    else {
+                        int mapped = remap.get(original);
+                        if (mapped == -1) {
+                            mapped = samples.size(); remap.put(original, mapped);
+                            part.collect(original, false, origin, data, colors, samples);
+                        }
+                        indices.add(mapped);
+                    }
+                }
+                references += count;
+                fragments.add(new Fragment(part, first, count, samples.size() - stored));
+                if (reference == part.count()) { partIndex++; reference = 0; }
+            }
+            this.vertices = data.toFloatArray(); this.colors = colors.toIntArray(); this.samples = samples.toLongArray();
+            this.fragments = List.copyOf(fragments); nextPart = partIndex; nextReference = reference;
+            ByteBuffer packed = null, elements = null;
+            try {
+                if (!iris) {
+                    packed = MemoryUtil.memAlloc(Math.multiplyExact(this.colors.length, textured ? 36 : 20)).order(ByteOrder.nativeOrder());
+                    for (int i = 0; i < this.colors.length; i++) {
+                        int v = i * 8, color = this.colors[i];
+                        packed.putFloat(vertices[v]).putFloat(vertices[v + 1]).putFloat(vertices[v + 2]);
+                        packed.put((byte)(color >>> 16)).put((byte)(color >>> 8)).put((byte)color).put((byte)(color >>> 24));
+                        if (textured) packed.putFloat(vertices[v + 3]).putFloat(vertices[v + 4])
+                                .putInt(OverlayTexture.NO_OVERLAY);
+                        packed.putInt(0);
+                        if (textured) packed.put(normal(vertices[v + 5])).put(normal(vertices[v + 6])).put(normal(vertices[v + 7])).put((byte)0);
+                    }
+                    packed.flip();
+                    boolean shorts = this.colors.length <= 65_536;
+                    elements = MemoryUtil.memAlloc(Math.multiplyExact(indices.size(), shorts ? 2 : 4)).order(ByteOrder.nativeOrder());
+                    for (int index : indices) { if (shorts) elements.putShort((short)index); else elements.putInt(index); }
+                    elements.flip();
+                }
+            } catch (RuntimeException | Error exception) { MemoryUtil.memFree(packed); MemoryUtil.memFree(elements); throw exception; }
+            nativeVertices = packed; this.indices = elements;
+        }
+        private static byte normal(float value) { return (byte)(Math.clamp(value, -1f, 1f) * 127f); }
+        long bytes() { return (long)vertices.length * 4 + (long)colors.length * 4 + (long)samples.length * 8
+                + (nativeVertices == null ? 0 : nativeVertices.capacity() + (long)indices.capacity()); }
+        @Override public void close() { MemoryUtil.memFree(nativeVertices); MemoryUtil.memFree(indices); }
+    }
+
+    private static final class PageUpload implements AutoCloseable {
+        final PreparedPage prepared;
+        final Group group;
+        final boolean iris, fullBright;
+        TrackPageBuffer buffer;
+        TrackLightBuffer light;
+        int phase, offset, vertexBytes;
+        boolean transferred;
+        PageUpload(PreparedPage prepared, Group group, boolean iris, boolean fullBright) {
+            this.prepared = prepared; this.group = group; this.iris = iris; this.fullBright = fullBright;
+        }
+        boolean step(ClientLevel level, TrackRenderStats stats) {
+            if (phase == 3) return false;
+            int stride = iris ? IrisCompat.entityVertexSize() : prepared.nativeVertices.capacity() / prepared.colors.length;
+            int remaining = phase == 0 ? prepared.colors.length * stride - offset : phase == 1 ? prepared.indices.capacity() - offset : 0;
+            int amount = Math.min(ModelUploads.SLICE_BYTES, remaining);
+            if (iris && phase == 0) amount = Math.min(prepared.colors.length - offset / stride,
+                    ModelUploads.SLICE_BYTES / stride / 3 * 3) * stride;
+            if (phase == 2) amount = Math.min(8192, prepared.colors.length - offset) * 4;
+            final int size = amount;
+            return ModelUploads.run(size, () -> {
+                try (var binding = new StagedVertexBuffer.Binding()) {
+                    if (buffer == null) initialize(stride);
+                    if (phase == 0) {
+                        if (iris) {
+                            int[] identity = IrisCompat.currentIdentity();
+                            long start = System.nanoTime();
+                            try (var bytes = new ByteBufferBuilder(Math.max(256, size))) {
+                                IrisCompat.restoreTrackIdentity(new int[3]);
+                                var builder = new BufferBuilder(bytes, VertexFormat.Mode.TRIANGLES, DefaultVertexFormat.NEW_ENTITY);
+                                for (int i = offset / stride; i < (offset + size) / stride; i++) emit(builder, i);
+                                ModelUploads.packed(System.nanoTime() - start);
+                                try (var data = builder.buildOrThrow()) { buffer.write(data.vertexBuffer(), offset); }
+                            } finally { IrisCompat.restoreTrackIdentity(identity); }
+                        } else buffer.write(prepared.nativeVertices.duplicate().position(offset).limit(offset + size).slice(), offset);
+                        offset += size;
+                        if (offset == vertexBytes) { phase = iris ? 2 : 1; offset = 0; }
+                    } else if (phase == 1) {
+                        buffer.writeIndices(prepared.indices.duplicate().position(offset).limit(offset + size).slice(), offset);
+                        offset += size;
+                        if (offset == prepared.indices.capacity()) { phase = 2; offset = 0; }
+                    } else {
+                        light.initial(level, offset, size / 4, stats);
+                        offset += size / 4;
+                        if (offset == prepared.colors.length) { phase = 3; offset = 0; }
+                    }
+                }
+            });
+        }
+        private void initialize(int stride) {
+            buffer = new TrackPageBuffer(iris);
+            vertexBytes = Math.multiplyExact(prepared.colors.length, stride);
+            if (iris) {
+                int[] identity = IrisCompat.currentIdentity();
+                try (var bytes = new ByteBufferBuilder(stride * 3)) {
+                    IrisCompat.restoreTrackIdentity(new int[3]);
+                    var builder = new BufferBuilder(bytes, VertexFormat.Mode.TRIANGLES, DefaultVertexFormat.NEW_ENTITY);
+                    for (int i = 0; i < 3; i++) emit(builder, i);
+                    buffer.allocate(builder.buildOrThrow(), vertexBytes);
+                    IrisCompat.requireEntityFormat(buffer);
+                } finally { IrisCompat.restoreTrackIdentity(identity); }
+            } else {
+                var format = group.key.source() == TrackRenderStats.NATIVE ? DefaultVertexFormat.POSITION_COLOR_LIGHTMAP : DefaultVertexFormat.NEW_ENTITY;
+                try (var bytes = new ByteBufferBuilder(stride * 3)) {
+                    var slice = MemoryUtil.memByteBuffer(bytes.reserve(stride * 3), stride * 3);
+                    slice.put(prepared.nativeVertices.duplicate().limit(stride * 3));
+                    buffer.allocate(new MeshData(bytes.build(), new MeshData.DrawState(format, 3, 3,
+                            VertexFormat.Mode.TRIANGLES, VertexFormat.IndexType.INT)), vertexBytes);
+                }
+                buffer.allocateIndices(prepared.indices.capacity(), prepared.colors.length);
+            }
+            light = new TrackLightBuffer(fullBright); light.samples(prepared.samples); light.attach(buffer);
+        }
+        private void emit(BufferBuilder builder, int vertex) {
+            int i = vertex * 8; var v = prepared.vertices;
+            builder.addVertex(v[i], v[i + 1], v[i + 2], prepared.colors[vertex], v[i + 3], v[i + 4],
+                    OverlayTexture.NO_OVERLAY, 0, v[i + 5], v[i + 6], v[i + 7]);
+        }
+        Page finish(TrackRenderStats stats) {
+            transferred = true;
+            int indexBytes = iris ? 0 : prepared.indices.capacity();
+            if (stats != null) { stats.uploaded(vertexBytes, indexBytes, vertexBytes + indexBytes); stats.pageDomainUpload(group.key.domain(), vertexBytes + indexBytes); }
+            if (iris) IrisRenderStats.upload(vertexBytes);
+            return new Page(group, vertexBytes, indexBytes, buffer, light);
+        }
+        @Override public void close() {
+            if (!transferred) {
+                if (light != null) light.close();
+                if (buffer != null) buffer.close();
+            }
+        }
+    }
+
+    /** Complete replacements keep their old page ranges until the next frame's atomic commit. */
     private static final class Build implements AutoCloseable {
         final List<Part> parts;
         final List<Page> pages = new ArrayList<>();
         final IdentityHashMap<Part, List<Range>> ranges = new IdentityHashMap<>();
+        ModelPreparation.Ticket<PreparedPage> pending;
+        PageUpload upload;
         int partIndex, reference;
+        boolean committing;
         Build(Group group) { parts = List.copyOf(group.parts); }
-        boolean complete() { return partIndex == parts.size(); }
-
-        void page(Group group, boolean iris, boolean fullBright, ClientLevel level, TrackRenderStats stats) {
-            NativeTurnoutLoading.Trace loading = null;
-            if (NativeTurnoutLoading.enabled()) {
-                var contributors = new java.util.LinkedHashSet<NativeTurnoutLoading.Trace>();
-                int references = 0;
-                for (int i = partIndex; i < parts.size() && references < MAX_REFERENCES; i++) {
-                    var trace = NativeTurnoutLoading.owner(parts.get(i).owner);
-                    if (trace != null) contributors.add(trace);
-                    references += Math.min(parts.get(i).count()-(i == partIndex ? reference : 0), MAX_REFERENCES-references);
-                }
-                loading = NativeTurnoutLoading.page(contributors, group.key.chunk(), group.key.type());
+        boolean complete() { return partIndex == parts.size() && pending == null; }
+        boolean page(Group group, boolean iris, boolean fullBright, ClientLevel level, TrackRenderStats stats) {
+            if (pending == null) {
+                int firstPart = partIndex, firstReference = reference;
+                pending = ModelPreparation.geometry(() -> new PreparedPage(parts, firstPart, firstReference, iris,
+                        group.key.source() != TrackRenderStats.NATIVE, group.origin), PreparedPage::bytes, PreparedPage::close);
             }
-            try (var trace = loading; var operation = NativeTurnoutLoading.open(trace, "page/build")) {
-                try { pageInternal(group, iris, fullBright, level, stats); }
-                catch (RuntimeException | Error failure) { if (operation != null) operation.failure(failure); throw failure; }
+            if (pending == null || !pending.ready()) return false;
+            var data = pending.value();
+            if (upload == null) upload = new PageUpload(data, group, iris, fullBright);
+            if (!upload.step(level, stats)) return false;
+            if (upload.phase == 3) {
+                var page = upload.finish(stats); pages.add(page); upload.close(); upload = null;
+                for (var fragment : data.fragments) ranges.computeIfAbsent(fragment.part(), ignored -> new ArrayList<>())
+                        .add(new Range(page, fragment.first(), fragment.count(), fragment.stored()));
+                partIndex = data.nextPart; reference = data.nextReference;
+                pending.close(); pending = null;
             }
+            return true;
         }
-        private void pageInternal(Group group, boolean iris, boolean fullBright, ClientLevel level, TrackRenderStats stats) {
-            var format = group.key.source() == TrackRenderStats.NATIVE && !iris
-                    ? DefaultVertexFormat.POSITION_COLOR_LIGHTMAP : DefaultVertexFormat.NEW_ENTITY;
-            var indices = new IntArrayList();
-            var samples = new LongArrayList();
-            var fragments = new ArrayList<Fragment>();
-            int references = 0, pageReferences = 0;
-            for (int i = partIndex; i < parts.size() && pageReferences < MAX_REFERENCES; i++) {
-                int remaining = parts.get(i).count() - (i == partIndex ? reference : 0);
-                pageReferences += Math.min(remaining, MAX_REFERENCES - pageReferences);
-            }
-            long packStart = stats == null ? 0 : System.nanoTime();
-            try (var packing = NativeLayoutProfile.stage("page/packing");
-                 var bytes = new ByteBufferBuilder(Math.max(256, pageReferences * format.getVertexSize()))) {
-                var builder = new BufferBuilder(bytes, VertexFormat.Mode.TRIANGLES, format);
-                var remap = new Int2IntOpenHashMap();
-                remap.defaultReturnValue(-1);
-                while (!complete() && references < MAX_REFERENCES) {
-                    var part = parts.get(partIndex);
-                    int count = Math.min(part.count() - reference, MAX_REFERENCES - references);
-                    int first = references, stored = samples.size();
-                    remap.clear();
-                    for (int end = reference + count; reference < end; reference++) {
-                        int original = part.index(reference, iris);
-                        if (iris) part.emit(builder, original, true, group.origin, samples);
-                        else {
-                            int mapped = remap.get(original);
-                            if (mapped == -1) {
-                                mapped = samples.size();
-                                remap.put(original, mapped);
-                                part.emit(builder, original, false, group.origin, samples);
-                            }
-                            indices.add(mapped);
-                        }
-                    }
-                    references += count;
-                    fragments.add(new Fragment(part, first, count, samples.size() - stored));
-                    if (reference == part.count()) { partIndex++; reference = 0; }
-                }
-                try (var mesh = builder.buildOrThrow()) {
-                    var buffer = new TrackPageBuffer(iris);
-                    var light = new TrackLightBuffer(fullBright);
-                    try {
-                        int vertexBytes = mesh.vertexBuffer().remaining();
-                        light.samples(samples.toLongArray());
-                        if (packing != null) { packing.value("references", references); packing.value("storedVertices", samples.size()); packing.value("vertexBytes", vertexBytes); packing.close(); }
-                        if (stats != null) stats.packed(System.nanoTime() - packStart);
-                        long uploadStart = stats == null ? 0 : System.nanoTime();
-                        // upload() consumes MeshData, including on failure.
-                        int indexBytes;
-                        try (var upload = NativeLayoutProfile.stage("page/vertexIndexUpload")) {
-                            buffer.bind();
-                            buffer.upload(mesh);
-                            indexBytes = iris ? 0 : buffer.uploadIndices(indices.toIntArray(), samples.size());
-                            light.attach(buffer);
-                            if (upload != null) { upload.value("vertexBytes", vertexBytes); upload.value("indexBytes", indexBytes); }
-                        }
-                        if (stats != null) {
-                            stats.gpuUpload(System.nanoTime() - uploadStart);
-                            stats.uploaded(vertexBytes, indexBytes, vertexBytes + indexBytes);
-                            stats.pageDomainUpload(group.key.domain(),vertexBytes+indexBytes);
-                        }
-                        try (var lighting = NativeLayoutProfile.stage("page/initialLight")) {
-                            light.refresh(level, stats);
-                            light.upload(stats, true, false);
-                            if (lighting != null) lighting.value("bytes", light.byteSize());
-                        }
-                        if (iris) IrisRenderStats.upload(vertexBytes);
-                        var page = new Page(group, vertexBytes, indexBytes, buffer, light);
-                        pages.add(page);
-                        for (var fragment : fragments) ranges.computeIfAbsent(fragment.part(), ignored -> new ArrayList<>())
-                                .add(new Range(page, fragment.first(), fragment.count(), fragment.stored()));
-                    } catch (RuntimeException | Error exception) {
-                        try { light.close(); } finally { buffer.close(); }
-                        throw exception;
-                    }
-                }
-            } finally { VertexBuffer.unbind(); }
-        }
-
         void commit(Group group) {
             for (var part : parts) part.ranges = List.copyOf(ranges.get(part));
-            var old = group.pages;
-            group.pages = List.copyOf(pages);
-            pages.clear();
-            old.forEach(Page::close);
+            var old = group.pages; group.pages = List.copyOf(pages); pages.clear(); old.forEach(Page::close);
         }
-
-        @Override public void close() { pages.forEach(Page::close); pages.clear(); }
+        @Override public void close() {
+            if (pending != null) { pending.close(); pending = null; }
+            if (upload != null) { upload.close(); upload = null; }
+            pages.forEach(Page::close); pages.clear();
+        }
     }
     private record Fragment(Part part, int first, int count, int stored) {}
 
@@ -339,24 +424,30 @@ final class TrackStaticBuffers implements AutoCloseable {
     }
 
     int prepare(ClientLevel level, TrackWorldRenderer.BuildBudget budget, int uploads, TrackRenderStats stats) {
-        for (var group : requestedGroups) {
-            if (group.dirty) {
+        for (var group : groups.values()) {
+            if (group.requested != view && group.pending == null) continue;
+            if (group.dirty && !group.failed) {
                 if (group.pending == null) group.pending = new Build(group);
                 while (!group.pending.complete() && uploads > 0 && (budget == null || budget.pageAvailable())) {
                     long start = System.nanoTime();
-                    try { group.pending.page(group, iris, fullBright, level, stats); }
-                    catch (RuntimeException | Error exception) { group.changed(); throw exception; }
-                    finally { if (budget != null) budget.pageFinished(start); }
+                    boolean progressed;
+                    try { progressed = group.pending.page(group, iris, fullBright, level, stats); }
+                    catch (RuntimeException exception) {
+                        group.pending.close(); group.pending = null; group.failed = true;
+                        org.slf4j.LoggerFactory.getLogger(TrackStaticBuffers.class).warn("Cannot prepare static track page; retaining previous ranges", exception);
+                        break;
+                    }
+                    if (!progressed) break;
+                    if (budget != null) budget.pageFinished(start);
                     uploads--;
                     if (stats != null) stats.sharedPageBuilt(!group.pages.isEmpty());
                 }
-                if (group.pending.complete()) {
-                    group.pending.commit(group);
-                    group.pending = null;
-                    group.dirty = false;
-                    for (var part : group.parts) if (part.requested == view) {
-                        for (var range : part.ranges) range.page().requested = view;
-                    }
+                if (group.pending != null && group.pending.complete() && !group.pending.committing) {
+                    var completed = group.pending; completed.committing = true;
+                    ModelUploads.commit(() -> {
+                        if (group.pending != completed) return;
+                        completed.commit(group); group.pending = null; group.dirty = false;
+                    });
                 }
             }
             // Pending replacements keep their initial light stream; refresh only pages needed by this view.

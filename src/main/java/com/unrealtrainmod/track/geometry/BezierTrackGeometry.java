@@ -63,6 +63,24 @@ public final class BezierTrackGeometry implements TrackGeometry {
         return p2;
     }
 
+    /** Exact cubic definition of an arc-distance interval, suitable for storage and graph segments. */
+    public BezierTrackGeometry subCurve(double start, double end) {
+        if (!Double.isFinite(start) || !Double.isFinite(end) || start < 0 || end > length || end <= start) {
+            throw new IllegalArgumentException("Invalid Bezier interval");
+        }
+        if (start == 0 && end == length) return this;
+        double from = arcLengths.parameterAt(arcLengths.length() * (start / length));
+        double to = arcLengths.parameterAt(arcLengths.length() * (end / length));
+        var a = pointAt(from); var b = pointAt(to);
+        double span = (to - from) * derivativeScale;
+        return new BezierTrackGeometry(a,
+                new TrackPoint(a.x() + span * derivative(dx0, dx1, dx2, from),
+                        a.z() + span * derivative(dz0, dz1, dz2, from)),
+                new TrackPoint(b.x() - span * derivative(dx0, dx1, dx2, to),
+                        b.z() - span * derivative(dz0, dz1, dz2, to)), b,
+                new LinearGrade(grade.heightAt(start / length), grade.heightAt(end / length)), gauge);
+    }
+
     double distanceAtParameter(double parameter) {
         return arcLengths.distanceAt(parameter) / horizontalScale;
     }

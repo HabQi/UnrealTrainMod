@@ -229,8 +229,15 @@ public final class ClientRailModelManager extends SimplePreparableReloadListener
                 } catch (IllegalArgumentException exception) {
                     LOGGER.error("Cannot prepare native r11 diamond: {}", exception.getMessage(), exception);
                 }
+                try (var stage = NativeLayoutProfile.stage("icon/singleCrossoverModel")) {
+                    models.put(com.unrealtrainmod.track.model.NativeTurnoutCatalog.SINGLE_CROSSOVER_R11,
+                            NativeCrossoverModels.prepare(nativeModel, com.unrealtrainmod.track.mesh.NativeCrossoverLayout.Kind.SINGLE));
+                } catch (IllegalArgumentException exception) {
+                    NativeTurnoutLoading.failure(trace, exception);
+                    LOGGER.error("Cannot prepare native r11 single crossover: {}", exception.getMessage(), exception);
+                }
                 try (var stage = NativeLayoutProfile.stage("icon/scissorsModel")) {
-                    models.put(com.unrealtrainmod.track.model.NativeTurnoutCatalog.SCISSORS_R11, NativeScissorsModels.prepare(nativeModel));
+                    models.put(com.unrealtrainmod.track.model.NativeTurnoutCatalog.SCISSORS_R11, NativeCrossoverModels.prepare(nativeModel));
                 } catch (IllegalArgumentException exception) {
                     NativeTurnoutLoading.failure(trace, exception);
                     LOGGER.error("Cannot prepare native r11 scissors: {}", exception.getMessage(), exception);

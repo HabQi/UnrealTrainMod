@@ -46,6 +46,7 @@ public final class TrainModelRenderer {
 
     public static void submit(ModelDrawSink queue, LoadedModel model, VehiclePose vehiclePose,
                                TrainEntity entity, float partialTick, PoseStack pose, int light) {
+        if (queue instanceof ModelRenderQueue && !ready(model)) return;
         var stats = queue.statistics();
         long submitStart = stats == null ? 0L : System.nanoTime();
         int previousLights = queue.lights();
@@ -90,6 +91,15 @@ public final class TrainModelRenderer {
         }
     }
 
+    public static boolean ready(LoadedModel model) {
+        boolean ready = VehicleScriptManager.ready(model);
+        for (var instance : model.instances()) {
+            ready &= instance.model().texturesReady();
+            ready &= instance.model().nativeReady();
+        }
+        return ready;
+    }
+
     /** Rendering and model picking use the same source-local instance frame. */
     public static void transformInstance(LoadedModel.Instance instance, VehiclePose vehiclePose, PoseStack pose) {
         if (vehiclePose != null) {
@@ -117,6 +127,7 @@ public final class TrainModelRenderer {
                                      String name, PoseStack pose, int light) {
         var selection = instance.model().partsByName().get(name);
         if (selection == null) return false;
+        if (!instance.model().texturesReady() | !instance.model().nativeReady()) return true;
         queue.submit(instance, selection, pose, light);
         return true;
     }
@@ -143,6 +154,9 @@ public final class TrainModelRenderer {
 
     public static void clearWorld() { WORLD.clear(); IrFlareRenderer.clear(); }
     public static void closeWorld() {
+        com.unrealtrainmod.client.ClientModelManager.INSTANCE.releaseGpu();
+        com.unrealtrainmod.client.texture.MaterialTexture.cancelPending();
+        com.unrealtrainmod.client.compat.iris.IrisMaterials.clear();
         WORLD.close();
         IrFlareRenderer.release();
         IrModelRenderer.clear();

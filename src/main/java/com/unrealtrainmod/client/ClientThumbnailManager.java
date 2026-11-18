@@ -136,6 +136,7 @@ public final class ClientThumbnailManager extends SimplePreparableReloadListener
         try {
             var pixels = key.kind() == Kind.VEHICLE ? vehicles.capture(ClientModelManager.INSTANCE.model(key.id()))
                     : rails.capture(ClientRailModelManager.INSTANCE.model(key.id()));
+            if (pixels == null) return;
             if (!ready || generation != current) {
                 pixels.close();
                 return;
@@ -188,8 +189,9 @@ public final class ClientThumbnailManager extends SimplePreparableReloadListener
                 String source = com.unrealtrainmod.client.track.NativeTurnoutModels.fingerprint(resources);
                 for (var id : com.unrealtrainmod.track.model.NativeTurnoutCatalog.all()) {
                     var key = new Key(Kind.RAIL, id);
-                    String layout = com.unrealtrainmod.track.model.NativeTurnoutCatalog.SCISSORS_R11.equals(id)
-                            ? com.unrealtrainmod.client.track.NativeScissorsModels.RECIPE : com.unrealtrainmod.track.model.NativeTurnoutCatalog.DIAMOND_R11.equals(id)
+                    String layout = com.unrealtrainmod.track.model.NativeTurnoutCatalog.SINGLE_CROSSOVER_R11.equals(id)
+                            ? com.unrealtrainmod.client.track.NativeCrossoverModels.SINGLE_RECIPE : com.unrealtrainmod.track.model.NativeTurnoutCatalog.SCISSORS_R11.equals(id)
+                            ? com.unrealtrainmod.client.track.NativeCrossoverModels.RECIPE : com.unrealtrainmod.track.model.NativeTurnoutCatalog.DIAMOND_R11.equals(id)
                             ? com.unrealtrainmod.client.track.NativeDiamondModels.RECIPE : "native-turnout";
                     String digest = ResourceIds.hash(RECIPE + "\n" + layout + "\n" + source);
                     var entry = new Entry(ResourceLocation.fromNamespaceAndPath(UnrealTrainMod.MODID, "thumbnail/" + digest),

@@ -12,7 +12,7 @@ import java.util.Set;
 
 /** Named horizontal paths and their control requirements. */
 public enum TrackAssemblyDefinition {
-    CUSTOM, DIAMOND_CROSSING, SINGLE_CROSSOVER, SCISSORS_CROSSOVER;
+    CUSTOM, DIAMOND_CROSSING, SINGLE_CROSSOVER, SCISSORS_CROSSOVER, DOUBLE_SLIP;
 
     private static final Map<String, TrackRouteDefinition> ROUTES = Map.of(
             "straight", new TrackRouteDefinition("A", "B", Map.of("main", SwitchPosition.NORMAL)),
@@ -42,6 +42,7 @@ public enum TrackAssemblyDefinition {
             case DIAMOND_CROSSING -> TrackAssemblyType.DIAMOND_CROSSING;
             case SINGLE_CROSSOVER -> TrackAssemblyType.SINGLE_CROSSOVER;
             case SCISSORS_CROSSOVER -> TrackAssemblyType.SCISSORS_CROSSOVER;
+            case DOUBLE_SLIP -> TrackAssemblyType.DOUBLE_SLIP;
             default -> TrackAssemblyType.SIMPLE_TURNOUT;
         };
     }
@@ -49,10 +50,20 @@ public enum TrackAssemblyDefinition {
         return this != CUSTOM ? Set.of("A", "B", "C", "D") : Set.of("A", "B", "C");
     }
     public Map<String, TrackRouteDefinition> routes() {
-        return this == SCISSORS_CROSSOVER ? SCISSORS_ROUTES : this == DIAMOND_CROSSING ? CROSSING_ROUTES : this == SINGLE_CROSSOVER ? CROSSOVER_ROUTES : ROUTES;
+        return switch (this) {
+            case SCISSORS_CROSSOVER, DOUBLE_SLIP -> SCISSORS_ROUTES;
+            case DIAMOND_CROSSING -> CROSSING_ROUTES;
+            case SINGLE_CROSSOVER -> CROSSOVER_ROUTES;
+            case CUSTOM -> ROUTES;
+        };
     }
     public JunctionState initialState() {
-        return this == SCISSORS_CROSSOVER ? SCISSORS_STATE : this == DIAMOND_CROSSING ? NO_CONTROLS : this == SINGLE_CROSSOVER ? CROSSOVER_STATE : INITIAL_STATE;
+        return switch (this) {
+            case SCISSORS_CROSSOVER, DOUBLE_SLIP -> SCISSORS_STATE;
+            case DIAMOND_CROSSING -> NO_CONTROLS;
+            case SINGLE_CROSSOVER -> CROSSOVER_STATE;
+            case CUSTOM -> INITIAL_STATE;
+        };
     }
     public boolean supportsTrailingPass() { return type() == TrackAssemblyType.SIMPLE_TURNOUT; }
 

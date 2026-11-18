@@ -43,6 +43,7 @@ final class NativeDiamondRenderState {
         chunks = Map.copyOf(groups);
     }
     TrackStaticMesh build(long chunk) { return new RailTrackGpuMesh(build(layout, sources, chunk, chunks.getOrDefault(chunk, List.of()),fixedRails)); }
+    RailTrackMeshData buildData(long chunk) { return build(layout, sources, chunk, chunks.getOrDefault(chunk, List.of()), fixedRails); }
     static RailTrackMeshData build(NativeDiamondLayout layout, Map<String, List<Source>> sources, Long chunk) {
         var selected = chunk == null ? layout.parts() : layout.parts().stream().filter(part -> part.chunk() == chunk.longValue()).toList();
         return build(layout, sources, chunk, selected,Map.of());

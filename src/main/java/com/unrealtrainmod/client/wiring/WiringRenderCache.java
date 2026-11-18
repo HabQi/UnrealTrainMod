@@ -89,7 +89,10 @@ public final class WiringRenderCache {
                         }
                         var batch = geometry.batch;
                         var mesh = IrisGeometryCache.requestStatic(batch.mesh(), batch.firstIndex(), batch.indexCount());
-                        if (mesh == null) { WiringRenderStats.fallback("cache_unavailable"); cpu(batch, pose, buffers, packed); continue; }
+                        if (mesh == null) {
+                            if (IrisGeometryCache.waiting(batch.mesh(), batch.firstIndex(), batch.indexCount(), false)) continue;
+                            WiringRenderStats.fallback("cache_unavailable"); cpu(batch, pose, buffers, packed); continue;
+                        }
                         scope.drawCached(mesh, IrisRenderTypes.get(batch.texture(), batch.doubleSided(),
                                         batch.category() == RenderCategory.BLEND, false),
                                 new Matrix4f(RenderSystem.getModelViewMatrix()).mul(pose.last().pose()),

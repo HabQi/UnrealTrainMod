@@ -173,18 +173,25 @@ public final class NativeTurnoutModels {
         }
         return source;
     }
-    private static synchronized Source derived(DerivedKey key, Supplier<Source> build) {
-        var entry = DERIVED.get(key);
-        var profile = NativeLayoutProfile.current();
-        if (profile != null) profile.count(entry == null ? "derivedCacheMisses" : "derivedCacheHits");
-        if (entry == null) {
-            try (var stage = NativeLayoutProfile.stage(key.contact() != null ? "geometry/bladeDeformation" : "geometry/railOrGeneratedSource")) {
-                entry = new DerivedSource(key, build.get()); DERIVED.put(key, entry); OWNED.put(entry.source, entry);
-                if (stage != null) { stage.value("part", entry.source.part()); stage.value("length", key.length()); stage.value("fixedStrip",key.fixed()); stage.value("vertices", entry.source.mesh().colors().length); stage.value("triangles", entry.source.mesh().indices().length/3); }
-            }
+    private static Source derived(DerivedKey key, Supplier<Source> build) {
+        synchronized (NativeTurnoutModels.class) {
+            var cached = DERIVED.get(key);
+            if (cached != null) { cached.references++; return cached.source; }
         }
-        entry.references++;
-        return entry.source;
+        // Deformation must never hold the cache monitor needed by a frame-end release.
+        Source source;
+        try (var stage = NativeLayoutProfile.stage(key.contact() != null ? "geometry/bladeDeformation" : "geometry/railOrGeneratedSource")) {
+            source = build.get();
+        }
+        synchronized (NativeTurnoutModels.class) {
+            var entry = DERIVED.get(key);
+            if (entry == null) {
+                entry = new DerivedSource(key, source);
+                DERIVED.put(key, entry); OWNED.put(source, entry);
+            }
+            entry.references++;
+            return entry.source;
+        }
     }
     static void release(Source source) {
         synchronized (NativeTurnoutModels.class) {

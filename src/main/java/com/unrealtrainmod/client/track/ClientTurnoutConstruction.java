@@ -13,9 +13,11 @@ import com.unrealtrainmod.track.TrackCurveParameters;
 import com.unrealtrainmod.track.TrackPlacementEndpoint;
 import com.unrealtrainmod.track.AssemblyPlacementGeometry;
 import com.unrealtrainmod.track.assembly.TrackAssemblyDefinition;
+import com.unrealtrainmod.track.construction.TrackConstructionType;
 import com.unrealtrainmod.track.block.TrackBlockVolume;
 import com.unrealtrainmod.track.geometry.TrackVector;
 import com.unrealtrainmod.track.model.NativeTurnoutCatalog;
+import com.unrealtrainmod.track.mesh.NativeDoubleSlipSolver;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -54,14 +56,16 @@ public final class ClientTurnoutConstruction implements ResourceManagerReloadLis
         }
         if (payload.feedback() == Feedback.CLEARED) return;
         boolean success = switch (payload.feedback()) {
-            case TURNOUT_A, TURNOUT_B, CROSSING_POINT, CROSSOVER_POINT, SCISSORS_POINT, READY, CREATED, CANCELLED -> true;
+            case TURNOUT_A, TURNOUT_B, CROSSING_POINT, CROSSOVER_POINT, SCISSORS_POINT, DOUBLE_SLIP_POINT, READY, CREATED, CANCELLED, NATIVE_CROSSOVER_ADJUSTED -> true;
             default -> false;
         };
-        var message = payload.feedback() == Feedback.CROSSING_POINT || payload.feedback() == Feedback.CROSSOVER_POINT || payload.feedback() == Feedback.SCISSORS_POINT
+        var message = payload.feedback() == Feedback.CROSSING_POINT || payload.feedback() == Feedback.CROSSOVER_POINT
+                || payload.feedback() == Feedback.SCISSORS_POINT || payload.feedback() == Feedback.DOUBLE_SLIP_POINT
                 ? Component.translatable(payload.feedback().translationKey(), payload.points().size(), payload.kind().pointCount())
                 : Component.translatable(payload.feedback().translationKey());
         mc.player.displayClientMessage(message
-                .withStyle(success ? ChatFormatting.GREEN : ChatFormatting.RED), true);
+                .withStyle((payload.feedback() == Feedback.NATIVE_DOUBLE_SLIP_PENDING || payload.feedback() == Feedback.NATIVE_CROSSOVER_SOLVING) ? ChatFormatting.YELLOW
+                        : success ? ChatFormatting.GREEN : ChatFormatting.RED), true);
     }
 
     public boolean matches(ResourceLocation dimension, UUID revision) {
@@ -74,7 +78,7 @@ public final class ClientTurnoutConstruction implements ResourceManagerReloadLis
     public void editPreview(int endpoint, TrackCurveParameters curve, boolean edited) {
         if (draft == null) return;
         geometry = null; volume = Map.of(); feedback = draft.validation(); previewCurves = List.of();
-        var curves = new ArrayList<>(draft.curves());
+        var curves = new ArrayList<>(!edited && !draft.resolvedCurves().isEmpty() ? draft.resolvedCurves() : draft.curves());
         if (edited) curves.set(endpoint, curve);
         var points = draft.points().stream().map(TrackPlacementEndpoint::position).toList();
         previewCurves = AssemblyPlacementGeometry.defaults(draft.kind(), points, curves, draft.yaw());
@@ -85,7 +89,16 @@ public final class ClientTurnoutConstruction implements ResourceManagerReloadLis
                 AssemblyPlacementGeometry.validate(AssemblyPlacementGeometry.definition(draft.kind()), geometry);
             }
             if (edited) feedback = Feedback.START;
-        } catch (IllegalArgumentException exception) { feedback = Feedback.INVALID_GEOMETRY; }
+        } catch (NativeDoubleSlipSolver.InvalidLayout exception) {
+            feedback = switch (exception.problem()) {
+                case INTERSECTION -> Feedback.NATIVE_DOUBLE_SLIP_INTERSECTION;
+                case ANGLE -> Feedback.NATIVE_DOUBLE_SLIP_ANGLE;
+                case SPACE -> Feedback.NATIVE_DOUBLE_SLIP_SPACE;
+            };
+        } catch (IllegalArgumentException exception) {
+            if (edited || feedback != Feedback.NATIVE_CROSSOVER_SOLVING && feedback != Feedback.NATIVE_CROSSOVER_NO_SOLUTION)
+                feedback = Feedback.INVALID_GEOMETRY;
+        }
     }
 
     private static Map<BlockPos, Integer> footprint(TrackAssemblyDefinition.Geometry geometry) {
@@ -112,6 +125,17 @@ public final class ClientTurnoutConstruction implements ResourceManagerReloadLis
                 || player.getMainHandItem().is(UnrealTrainMod.TRACK_WRENCH.get())
                 || player.getMainHandItem().is(UnrealTrainMod.RAIL_PLACER.get()));
     }
+    public void confirmPlacement(net.neoforged.neoforge.event.entity.player.PlayerInteractEvent.RightClickBlock event) {
+        if (!event.getLevel().isClientSide() || event.getHand() != net.minecraft.world.InteractionHand.MAIN_HAND
+                || event.getEntity().isShiftKeyDown() || !event.getItemStack().is(UnrealTrainMod.RAIL_PLACER.get())
+                || draft == null || draft.kind() != TrackConstructionType.SINGLE_CROSSOVER
+                || !NativeTurnoutCatalog.SINGLE_CROSSOVER_R11.equals(NativeTurnoutCatalog.constructionModel(event.getEntity()))) return;
+        event.setCanceled(true);
+        event.setCancellationResult(net.minecraft.world.InteractionResult.SUCCESS);
+        net.neoforged.neoforge.network.PacketDistributor.sendToServer(
+                new com.unrealtrainmod.network.payload.ConfirmSingleCrossoverPayload(draft.dimension(), draft.revision(), event.getPos()));
+    }
+
     public void onTick(ClientTickEvent.Post event) {
         var mc = Minecraft.getInstance();
         if (mc.level != world || mc.player == null || !mc.player.isAlive()) clear();
@@ -128,6 +152,7 @@ public final class ClientTurnoutConstruction implements ResourceManagerReloadLis
     TrackAssemblyDefinition.Geometry geometry() { return geometry; }
     Map<BlockPos, Integer> volume() { return volume; }
     public Feedback previewFeedback() {
+        if (draft != null && draft.kind() == TrackConstructionType.DOUBLE_SLIP) return feedback;
         var player = Minecraft.getInstance().player;
         if (geometry != null && draft.points().size() == draft.kind().pointCount() && player != null) {
             var selected = NativeTurnoutCatalog.constructionModel(player);

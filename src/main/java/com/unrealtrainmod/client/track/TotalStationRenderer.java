@@ -207,6 +207,7 @@ public final class TotalStationRenderer {
         try (var scope = IrisDrawScope.preview()) {
             var baseMeshes = irisMeshes(base);
             var telescopeMeshes = irisMeshes(telescope);
+            if (irisPending(base) || irisPending(telescope)) return;
             var view = RenderSystem.getModelViewMatrix();
             var projection = RenderSystem.getProjectionMatrix();
             for (var draw : draws) {
@@ -253,12 +254,19 @@ public final class TotalStationRenderer {
         if (entry.geometry == null) return null;
         var batches = entry.geometry.batches();
         var meshes = new IrisGeometryCache.Mesh[batches.size()];
+        boolean ready = true;
         for (int i = 0; i < batches.size(); i++) {
             var batch = batches.get(i);
             meshes[i] = IrisGeometryCache.requestStatic(batch.mesh(), batch.firstIndex(), batch.indexCount());
-            if (meshes[i] == null) return null;
+            ready &= meshes[i] != null;
         }
-        return meshes;
+        return ready ? meshes : null;
+    }
+    private static boolean irisPending(Entry entry) {
+        if (entry.geometry == null) return false;
+        for (var batch : entry.geometry.batches())
+            if (IrisGeometryCache.waiting(batch.mesh(), batch.firstIndex(), batch.indexCount(), false)) return true;
+        return false;
     }
 
     static void beam(Placement station, Vec3 camera, VertexConsumer lines, int color) {
