@@ -242,6 +242,13 @@ public final class ClientRailModelManager extends SimplePreparableReloadListener
                     NativeTurnoutLoading.failure(trace, exception);
                     LOGGER.error("Cannot prepare native r11 scissors: {}", exception.getMessage(), exception);
                 }
+                try (var stage = NativeLayoutProfile.stage("icon/doubleSlipModel")) {
+                    models.put(com.unrealtrainmod.track.model.NativeTurnoutCatalog.DOUBLE_SLIP_R11,
+                            NativeDoubleSlipRenderState.model(nativeModel));
+                } catch (IllegalArgumentException exception) {
+                    NativeTurnoutLoading.failure(trace, exception);
+                    LOGGER.error("Cannot prepare native r11 double slip: {}", exception.getMessage(), exception);
+                }
             } catch (IOException | IllegalArgumentException exception) {
                 NativeTurnoutLoading.failure(nativeTrace, exception);
                 LOGGER.error("Cannot prepare native r11 turnout: {}", exception.getMessage(), exception);

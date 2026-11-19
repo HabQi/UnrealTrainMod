@@ -189,7 +189,9 @@ public final class ClientThumbnailManager extends SimplePreparableReloadListener
                 String source = com.unrealtrainmod.client.track.NativeTurnoutModels.fingerprint(resources);
                 for (var id : com.unrealtrainmod.track.model.NativeTurnoutCatalog.all()) {
                     var key = new Key(Kind.RAIL, id);
-                    String layout = com.unrealtrainmod.track.model.NativeTurnoutCatalog.SINGLE_CROSSOVER_R11.equals(id)
+                    String layout = com.unrealtrainmod.track.model.NativeTurnoutCatalog.DOUBLE_SLIP_R11.equals(id)
+                            ? com.unrealtrainmod.client.track.NativeDoubleSlipRenderState.THUMBNAIL_RECIPE
+                            : com.unrealtrainmod.track.model.NativeTurnoutCatalog.SINGLE_CROSSOVER_R11.equals(id)
                             ? com.unrealtrainmod.client.track.NativeCrossoverModels.SINGLE_RECIPE : com.unrealtrainmod.track.model.NativeTurnoutCatalog.SCISSORS_R11.equals(id)
                             ? com.unrealtrainmod.client.track.NativeCrossoverModels.RECIPE : com.unrealtrainmod.track.model.NativeTurnoutCatalog.DIAMOND_R11.equals(id)
                             ? com.unrealtrainmod.client.track.NativeDiamondModels.RECIPE : "native-turnout";

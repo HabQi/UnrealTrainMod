@@ -81,6 +81,11 @@ public record NativeTurnoutLayout(TrackVector origin, double scale, List<Part> p
             offsetX = -localX; offsetY = -localZ * pitchSine; offsetZ = -localZ * pitchCosine;
             this.yaw = yaw; this.travel = travel; this.reverse = reverse;
         }
+
+        public static Motion horizontal(Motion next, TrackVector end, double length, double yaw,
+                                        double travel, boolean opensInNormal) {
+            return new Motion(next, end, length, yaw, 0, travel, opensInNormal, 0, 0);
+        }
         public double direction(float movement) { return yaw + travel * (reverse ? 1 - movement : movement); }
         public TrackVector start(float movement) {
             if (cachedMovement != movement) {

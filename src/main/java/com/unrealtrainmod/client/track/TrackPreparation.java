@@ -5,6 +5,7 @@ import com.unrealtrainmod.client.ModelPreparation;
 import com.unrealtrainmod.compat.rtm.script.RailStaticSnapshot;
 import com.unrealtrainmod.track.geometry.TrackGeometry;
 import com.unrealtrainmod.track.mesh.NativeDiamondLayout;
+import com.unrealtrainmod.track.mesh.NativeDoubleSlipLayout;
 import com.unrealtrainmod.track.mesh.NativeCrossoverLayout;
 import com.unrealtrainmod.track.mesh.NativeTurnoutLayout;
 import com.unrealtrainmod.track.mesh.RailTrackMeshBuilder;
@@ -38,6 +39,7 @@ final class TrackPreparation {
         NativeTurnoutRenderState turnout;
         NativeCrossoverRenderState crossover;
         NativeDiamondRenderState diamond;
+        NativeDoubleSlipRenderState doubleSlip;
         boolean scriptFailed;
         long bytes() {
             long bytes = 0;
@@ -47,6 +49,7 @@ final class TrackPreparation {
         @Override public void close() {
             if (turnout != null) turnout.close();
             if (crossover != null) crossover.close();
+            if (doubleSlip != null) doubleSlip.close();
         }
     }
     private TrackPreparation() {}
@@ -113,6 +116,7 @@ final class TrackPreparation {
             var crossover = entry.crossoverState;
             var crossoverData = crossover == null ? Map.<Long, RailTrackMeshData>of() : crossover.meshes().chunkData();
             var diamond = entry.diamondState;
+            var doubleSlip = entry.doubleSlipState;
             boolean nativeFailed = entry.nativeFailed;
             // Retain the state while the worker reads its immutable fixed geometry.
             entry.preparation = ModelPreparation.geometry(() -> {
@@ -121,7 +125,13 @@ final class TrackPreparation {
                      var operation = NativeTurnoutLoading.open(trace, "geometry/completeAssembly")) {
                     if (!nativeFailed && NativeTurnoutCatalog.contains(data.modelId())) {
                         if (model == null) throw new IllegalArgumentException("native model unavailable");
-                        if (NativeTurnoutCatalog.isCrossover(data.modelId())) {
+                        if (NativeTurnoutCatalog.isDoubleSlip(data.modelId())) {
+                            if (doubleSlip == null) result.doubleSlip = new NativeDoubleSlipRenderState(
+                                    NativeDoubleSlipLayout.build(data.geometry(), data.gauge()), model);
+                            var state = doubleSlip == null ? result.doubleSlip : doubleSlip;
+                            if (doubleSlip == null) missing.addAll(state.fixed.keySet());
+                            for (long chunk : missing) result.meshes.put(chunk, List.of(new Mesh(null, null, state.fixedData(chunk))));
+                        } else if (NativeTurnoutCatalog.isCrossover(data.modelId())) {
                             if (crossover == null) result.crossover = new NativeCrossoverRenderState(
                                     NativeCrossoverLayout.build(data.geometry(), data.gauge()), model, TrackStaticBuffers.WORLD);
                             var state = crossover == null ? result.crossover : crossover;
@@ -167,6 +177,9 @@ final class TrackPreparation {
             if (result.turnout != null) entry.nativeState = result.turnout;
             if (result.crossover != null) { entry.crossoverState = result.crossover; entry.chunks.addAll(result.crossover.layout.chunks()); }
             if (result.diamond != null) { entry.diamondState = result.diamond; entry.chunks.addAll(result.diamond.layout.chunks()); }
+            if (result.doubleSlip != null) {
+                entry.doubleSlipState = result.doubleSlip; entry.chunks.addAll(result.doubleSlip.fixed.keySet());
+            }
             for (var group : result.meshes.entrySet()) if (entry.chunks.contains(group.getKey())) {
                 var meshes = group.getValue().stream().map(Mesh::create).toList();
                 entry.meshes.put(group.getKey(), meshes.stream().filter(mesh -> !(mesh instanceof TrackMorphMesh)).toList());

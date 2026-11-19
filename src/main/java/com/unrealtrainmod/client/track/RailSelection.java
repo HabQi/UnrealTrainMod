@@ -29,7 +29,8 @@ public record RailSelection(ResourceLocation id, RailDefinition rail) {
     public Component name() { return rail == null ? Component.translatable(com.unrealtrainmod.track.model.NativeTurnoutCatalog.nameKey(id)) : Component.literal(rail.railName()); }
     public String group() { return rail == null ? "unrealtrainmod:builtin" : rail.config().archive().toString(); }
     public Component groupName() { return rail == null ? Component.translatable("gui.unrealtrainmod.rail_models.builtin") : Component.literal(rail.packName()); }
-    public String detail() { return rail == null ? Component.translatable(com.unrealtrainmod.track.model.NativeTurnoutCatalog.SCISSORS_R11.equals(id)
+    public String detail() { return rail == null ? Component.translatable(com.unrealtrainmod.track.model.NativeTurnoutCatalog.DOUBLE_SLIP_R11.equals(id)
+            ? "gui.unrealtrainmod.rail_models.native_double_slip_scope" : com.unrealtrainmod.track.model.NativeTurnoutCatalog.SCISSORS_R11.equals(id)
             ? "gui.unrealtrainmod.rail_models.native_scissors_scope" : com.unrealtrainmod.track.model.NativeTurnoutCatalog.DIAMOND_R11.equals(id)
             ? "gui.unrealtrainmod.rail_models.native_diamond_scope" : "gui.unrealtrainmod.rail_models.native_scope").getString()
             : rail.tags() + " · " + id + (rail.source().format() == RailDefinition.Format.MQO

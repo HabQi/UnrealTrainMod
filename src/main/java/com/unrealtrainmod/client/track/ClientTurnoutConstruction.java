@@ -152,7 +152,6 @@ public final class ClientTurnoutConstruction implements ResourceManagerReloadLis
     TrackAssemblyDefinition.Geometry geometry() { return geometry; }
     Map<BlockPos, Integer> volume() { return volume; }
     public Feedback previewFeedback() {
-        if (draft != null && draft.kind() == TrackConstructionType.DOUBLE_SLIP) return feedback;
         var player = Minecraft.getInstance().player;
         if (geometry != null && draft.points().size() == draft.kind().pointCount() && player != null) {
             var selected = NativeTurnoutCatalog.constructionModel(player);

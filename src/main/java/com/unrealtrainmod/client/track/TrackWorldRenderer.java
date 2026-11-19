@@ -177,12 +177,19 @@ public final class TrackWorldRenderer {
                 }
                 var model = ClientRailModelManager.INSTANCE.model(entry.data.modelId());
                 NativeTurnoutLoading.observe(entry);
-                boolean hadNative = entry.nativeState != null || entry.crossoverState != null || entry.diamondState != null;
+                boolean hadNative = entry.nativeState != null || entry.crossoverState != null || entry.diamondState != null
+                        || entry.doubleSlipState != null;
                 boolean complete = entry.scriptActive || TrackPreparation.assembly(entry, model, level);
                 if (!hadNative && stats != null) {
                     if (entry.nativeState != null) stats.nativeLayout(entry.nativeState.layout.samples(), entry.nativeState.layout.parts().size());
                     else if (entry.crossoverState != null) stats.nativeLayout(entry.crossoverState.layout.samples(), entry.crossoverState.layout.partCount());
                     else if (entry.diamondState != null) stats.nativeLayout(entry.diamondState.layout.samples(), entry.diamondState.layout.partCount());
+                    else if (entry.doubleSlipState != null) {
+                        var layout = entry.doubleSlipState.layout;
+                        int parts = layout.fixed().size()+layout.fittings().parts().size();
+                        for (var control : entry.doubleSlipState.switches.values()) parts += control.layout.parts().size();
+                        stats.nativeLayout(parts, parts);
+                    }
                 }
                 var chunks = TrackPreparation.loaded(entry.chunks, level);
                 var natives = new ArrayList<NativeTurnoutRenderState>();
@@ -194,6 +201,13 @@ public final class TrackWorldRenderer {
                 if (entry.crossoverState != null) {
                     if (entry.crossoverState.loading != entry.loading) entry.crossoverState.attachLoading(entry.loading);
                     for (var control : entry.crossoverState.switches.entrySet()) {
+                        control.getValue().movement(entry.animations.get(control.getKey()).position(time));
+                        natives.add(control.getValue());
+                    }
+                }
+                if (entry.doubleSlipState != null) {
+                    if (entry.doubleSlipState.loading != entry.loading) entry.doubleSlipState.attachLoading(entry.loading);
+                    for (var control : entry.doubleSlipState.switches.entrySet()) {
                         control.getValue().movement(entry.animations.get(control.getKey()).position(time));
                         natives.add(control.getValue());
                     }

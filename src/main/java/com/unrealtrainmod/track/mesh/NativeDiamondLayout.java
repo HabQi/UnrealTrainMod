@@ -110,7 +110,7 @@ public record NativeDiamondLayout(TrackVector origin, double scale, List<Part> p
     private record Edge(double distance, TrackVector point) {}
     record Crossing(double first, double second, TrackVector point) {}
     public record RailEnd(int side, double distance, TrackVector point, double yaw, double miterSlope) {}
-    private record SleeperRow(double second, TrackVector a, TrackVector b, double yaw, double across) {}
+    record SleeperRow(double second, TrackVector a, TrackVector b, double yaw, double across) {}
     private record SleeperBoundary(double distance, double yaw) {}
     record Footprint(List<TrackVector> hull, double minX, double minZ, double maxX, double maxZ) {
         boolean intersects(Footprint other) {
@@ -118,7 +118,7 @@ public record NativeDiamondLayout(TrackVector origin, double scale, List<Part> p
                     && !separated(hull, other.hull) && !separated(other.hull, hull);
         }
     }
-    private static final class Path {
+    static final class Path {
         final TrackGeometry geometry;
         final Map<Long, TrackPose> poses = new HashMap<>();
         final Map<Long, List<Edge>> edges = new HashMap<>();
@@ -159,7 +159,8 @@ public record NativeDiamondLayout(TrackVector origin, double scale, List<Part> p
 
     /** The two acute working-face intersections bound the inner slip, independently of hardware preparation. */
     public record SlipEnd(TrackVector workingPoint, double firstStation, double secondStation) {}
-    public record SlipEnds(SlipEnd entrance, SlipEnd exit, int firstInnerSide, List<TrackVector> boundary) {
+    public record SlipEnds(SlipEnd entrance, SlipEnd exit, SlipEnd firstSide, SlipEnd oppositeSide, SlipEnd center,
+                           int firstInnerSide, List<TrackVector> boundary) {
         public SlipEnds { boundary = List.copyOf(boundary); }
     }
 
@@ -195,7 +196,10 @@ public record NativeDiamondLayout(TrackVector origin, double scale, List<Part> p
         slipBoundary(boundary, a, -offset, exit.first(), lower.first(), scale);
         slipBoundary(boundary, b, -offset, lower.second(), entrance.second(), scale);
         return new SlipEnds(new SlipEnd(entrance.point(), entrance.first(), entrance.second()),
-                new SlipEnd(exit.point(), exit.first(), exit.second()), inner, boundary);
+                new SlipEnd(exit.point(), exit.first(), exit.second()),
+                new SlipEnd(upper.point(), upper.first(), upper.second()),
+                new SlipEnd(lower.point(), lower.first(), lower.second()),
+                new SlipEnd(center.point(), center.first(), center.second()), inner, boundary);
     }
 
     private static void slipBoundary(List<TrackVector> result, Path path, double offset, double from, double to, double scale) {
@@ -488,8 +492,6 @@ public record NativeDiamondLayout(TrackVector origin, double scale, List<Part> p
                               int sa, int sb, double degrees, double scale) {
         // The two acute ends point away from the center of the diamond, independent of port order.
         double direction = joint.first() > center.first() ? 1 : -1;
-        double baseA = yaw(a.at(joint.first())) + (direction < 0 ? Math.PI : 0);
-        double baseB = yaw(b.at(joint.second())) + (direction < 0 ? Math.PI : 0);
         double ya = direction(a, joint.first(), joint.first()+direction*2*scale);
         double yb = direction(b, joint.second(), joint.second()+direction*2*scale);
         double noseAngle = Math.abs(Math.toDegrees(Math.atan2(Math.sin(yb-ya), Math.cos(yb-ya))));
@@ -504,15 +506,24 @@ public record NativeDiamondLayout(TrackVector origin, double scale, List<Part> p
         double gap = WING_SETBACK*scale/Math.sin(Math.toRadians(degrees));
         requireSpace(a, joint.first(), 3.5*scale+gap);
         requireSpace(b, joint.second(), 3.5*scale+gap);
-        // As on the ordinary turnout, each rear follows the opposite path into the shared joint.
-        double rearA = direction(a, joint.first()-direction*scale, joint.first());
-        double rearB = direction(b, joint.second()-direction*scale, joint.second());
-        var endB = wing(parts, right ? "R" : "L", shifted(joint.point(), baseB, 0, -gap), ya, rearB, scale);
-        var endA = wing(parts, right ? "L" : "R", shifted(joint.point(), baseA, 0, -gap), yb, rearA, scale);
-        a.wingEnds.put(sa, innerStation(a, sa, endA,
+        var wings = acuteWings(parts,a,b,joint.point(),joint.first(),joint.second(),direction,ya,yb,right,gap,scale);
+        a.wingEnds.put(sa, innerStation(a, sa, wings[0],
                 joint.first()-direction*(gap-WING_REAR_END*scale), scale));
-        b.wingEnds.put(sb, innerStation(b, sb, endB,
+        b.wingEnds.put(sb, innerStation(b, sb, wings[1],
                 joint.second()-direction*(gap-WING_REAR_END*scale), scale));
+    }
+
+    private static TrackVector[] acuteWings(List<Part> parts, Path a, Path b, TrackVector point,
+                                            double first, double second, double direction,
+                                            double ya, double yb, boolean right, double gap, double scale) {
+        double baseA = yaw(a.at(first)) + (direction < 0 ? Math.PI : 0);
+        double baseB = yaw(b.at(second)) + (direction < 0 ? Math.PI : 0);
+        // As on the ordinary turnout, each rear follows the opposite path into the shared joint.
+        double rearA = direction(a, first-direction*scale, first);
+        double rearB = direction(b, second-direction*scale, second);
+        var endB = wing(parts, right ? "R" : "L", shifted(point, baseB, 0, -gap), ya, rearB, scale);
+        var endA = wing(parts, right ? "L" : "R", shifted(point, baseA, 0, -gap), yb, rearA, scale);
+        return new TrackVector[]{endA,endB};
     }
 
     private static void obtuse(List<Part> parts, Path a, Path b, Crossing joint, TrackVector middleAnchor, int side, double scale) {
@@ -557,6 +568,25 @@ public record NativeDiamondLayout(TrackVector origin, double scale, List<Part> p
         addPart(parts, leftWing ? profile.leftName : profile.rightName, wingTarget, wingYaw,
                 (leftWing ? 1 : -1)*ShortWing.TIP_X, profile.tipZ);
         nose(parts, nosePath, side, tip, noseDirection, noseName+noseVariant(degrees), center, scale);
+    }
+
+    static List<Part> slipHardware(Path a, Path b, SlipEnds ends, double scale) {
+        var parts = new ArrayList<Part>();
+        for (var end : List.of(ends.entrance(), ends.exit())) {
+            double direction = end == ends.entrance() ? -1 : 1;
+            double first = end.firstStation(), second = end.secondStation();
+            double ya = direction(a,first,first+direction*2*scale);
+            double yb = direction(b,second,second+direction*2*scale);
+            double degrees = angle(a.at(first),b.at(second));
+            double gap = WING_SETBACK*scale/Math.sin(Math.toRadians(degrees));
+            acuteWings(parts,a,b,end.workingPoint(),first,second,direction,ya,yb,Math.sin(yb-ya)>0,gap,scale);
+        }
+        int side = ends.firstInnerSide();
+        for (var end : List.of(ends.firstSide(), ends.oppositeSide())) {
+            middle(parts,end.workingPoint(),a.at(end.firstStation()),b.at(end.secondStation()),side,scale);
+            side = -side;
+        }
+        return List.copyOf(parts);
     }
 
     private static void nose(List<Part> parts, Path path, int side, double tip, int direction,
@@ -694,7 +724,7 @@ public record NativeDiamondLayout(TrackVector origin, double scale, List<Part> p
         addPart(parts, across >= -0.00001*scale ? "sleeper_point02R" : "sleeper_point02L", pose.position(), yaw(pose), 0, 0.25);
         if (groups != null) groups.add(new SleeperGroup(parts.getLast(), second, s, pose.position()));
     }
-    private static SleeperRow sleeperRow(Path a, Path b, double s, double scale) {
+    static SleeperRow sleeperRow(Path a, Path b, double s, double scale) {
         double tolerance = 0.00001*scale;
         var pa = a.at(s);
         if (sleeperProjection(pa, b.at(0)) > tolerance || sleeperProjection(pa, b.at(b.length())) < -tolerance)

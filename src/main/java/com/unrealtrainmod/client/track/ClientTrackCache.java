@@ -153,6 +153,7 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
             }
             if (entry.nativeState != null) entry.nativeState.removeChunk(chunk);
             if (entry.crossoverState != null) entry.crossoverState.removeChunk(chunk);
+            if (entry.doubleSlipState != null) entry.doubleSlipState.removeChunk(chunk);
 
             if (entry.chunks.isEmpty()) { entry.close(); iterator.remove(); }
         }
@@ -215,6 +216,7 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
             entry.tongues.values().forEach(group -> group.forEach(TrackRenderMesh::close));
             if (entry.nativeState != null) entry.nativeState.invalidateGpu();
             if (entry.crossoverState != null) entry.crossoverState.invalidateGpu();
+            if (entry.doubleSlipState != null) entry.doubleSlipState.invalidateGpu();
             if (entry.loading != null) for (var group : entry.meshes.values()) for (var mesh : group)
                 NativeTurnoutLoading.associate(mesh, entry.loading);
             if (entry.script != null) {
@@ -300,6 +302,7 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
         NativeTurnoutRenderState nativeState;
         NativeDiamondRenderState diamondState;
         NativeCrossoverRenderState crossoverState;
+        NativeDoubleSlipRenderState doubleSlipState;
         NativeTurnoutLoading.Trace loading;
         boolean nativeFailed;
         boolean scriptFailed, scriptActive, scriptActivating, missingReported;
@@ -350,7 +353,8 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
         }
 
         boolean moving(double time) {
-            return rendersModel() && (nativeState != null || crossoverState != null || scriptActive || data.definition() == TrackAssemblyDefinition.CUSTOM)
+            return rendersModel() && (nativeState != null || crossoverState != null || doubleSlipState != null
+                    || scriptActive || data.definition() == TrackAssemblyDefinition.CUSTOM)
                     && animations.values().stream().anyMatch(animation -> animation.moving(time));
         }
 
@@ -384,6 +388,7 @@ public final class ClientTrackCache implements ResourceManagerReloadListener, Au
             clearFallback();
             diamondState = null;
             if (crossoverState != null) { crossoverState.close(); crossoverState = null; }
+            if (doubleSlipState != null) { doubleSlipState.close(); doubleSlipState = null; }
             if (nativeState != null) { nativeState.close(); nativeState = null; }
             if (loading != null) { loading.close(); loading = null; }
             nativeFailed = false;

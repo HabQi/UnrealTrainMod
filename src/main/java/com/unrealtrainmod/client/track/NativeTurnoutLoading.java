@@ -50,6 +50,7 @@ public final class NativeTurnoutLoading {
             entry.loading = start("world", entry.data.modelId(), entry.data.id());
             if (entry.nativeState != null) entry.nativeState.attachLoading(entry.loading);
             if (entry.crossoverState != null) entry.crossoverState.attachLoading(entry.loading);
+            if (entry.doubleSlipState != null) entry.doubleSlipState.attachLoading(entry.loading);
             for (var group : entry.meshes.values()) for (var mesh : group) associate(mesh, entry.loading);
         }
         return entry.loading;

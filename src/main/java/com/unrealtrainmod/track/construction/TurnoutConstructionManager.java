@@ -217,6 +217,8 @@ public final class TurnoutConstructionManager {
             if (s.points.size() == s.kind.pointCount()) {
                 if (s.kind == TrackConstructionType.SCISSORS_CROSSOVER && !NativeTurnoutCatalog.SCISSORS_R11.equals(selectedModel))
                     return s.validation = selectedModel == null ? Feedback.SELECT_MODEL : Feedback.MODEL_UNSUPPORTED;
+                if (s.kind == TrackConstructionType.DOUBLE_SLIP && !NativeTurnoutCatalog.DOUBLE_SLIP_R11.equals(selectedModel))
+                    return s.validation = selectedModel == null ? Feedback.SELECT_MODEL : Feedback.MODEL_UNSUPPORTED;
                 if (nativeSingle(s)) {
                     var solved = solve(graph, s);
                     if (solved != Feedback.READY) return s.validation = solved;
@@ -225,8 +227,7 @@ public final class TurnoutConstructionManager {
                     blocks.validatePlacement(prepared.segments());
                     return s.validation = Feedback.READY;
                 }
-                // Double slips validate their paths and footprint without borrowing another native layout.
-                if (s.kind != TrackConstructionType.DOUBLE_SLIP && NativeTurnoutCatalog.contains(selectedModel)) {
+                if (NativeTurnoutCatalog.contains(selectedModel)) {
                     if (!NativeTurnoutCatalog.supports(selectedModel, s.kind)) return s.validation = Feedback.MODEL_UNSUPPORTED;
                     if (!s.revision.equals(s.nativeRevision) || !selectedModel.equals(s.nativeModel) || s.nativeGauge != s.gauge) {
                         s.nativeRevision = s.revision;
@@ -235,11 +236,16 @@ public final class TurnoutConstructionManager {
                         try {
                             var nativeGeometry = AssemblyPlacementGeometry.create(s.kind,
                                     s.points.stream().map(TrackPlacementEndpoint::position).toList(), s.gauge, s.curves, s.yaw);
-                            if (NativeTurnoutCatalog.SCISSORS_R11.equals(selectedModel)) {
+                            if (NativeTurnoutCatalog.DOUBLE_SLIP_R11.equals(selectedModel)) {
+                                com.unrealtrainmod.track.mesh.NativeDoubleSlipLayout.build(nativeGeometry, s.gauge);
+                            } else if (NativeTurnoutCatalog.SCISSORS_R11.equals(selectedModel)) {
                                 com.unrealtrainmod.track.mesh.NativeCrossoverLayout.build(nativeGeometry, s.gauge);
                             } else if (NativeTurnoutCatalog.DIAMOND_R11.equals(selectedModel)) {
                                 NativeDiamondLayout.build(nativeGeometry, s.gauge);
                             } else com.unrealtrainmod.track.mesh.NativeTurnoutLayout.build(nativeGeometry, s.gauge);
+                        } catch (NativeDoubleSlipSolver.InvalidLayout exception) {
+                            LOGGER.warn("Native double slip rejected player={} revision={}: {}", player.getUUID(), s.revision, exception.getMessage());
+                            s.nativeFeedback = doubleSlipFailure(exception);
                         } catch (com.unrealtrainmod.track.mesh.NativeCrossoverLayout.InvalidLayout exception) {
                             LOGGER.warn("Native construction rejected player={} revision={}: {}", player.getUUID(), s.revision, exception.getMessage());
                             s.nativeFeedback = switch (exception.problem()) {
@@ -263,8 +269,7 @@ public final class TurnoutConstructionManager {
                 }
                 var prepared = graph.prepareAssembly(s.kind, s.points, s.gauge, s.curves, s.edited, s.yaw, null);
                 blocks.validatePlacement(prepared.segments());
-                return s.validation = s.kind == TrackConstructionType.DOUBLE_SLIP
-                        ? Feedback.NATIVE_DOUBLE_SLIP_PENDING : Feedback.READY;
+                return s.validation = Feedback.READY;
             }
             AssemblyPlacementGeometry.create(s.kind, s.points.stream().map(TrackPlacementEndpoint::position).toList(),
                     s.gauge, s.curves, s.yaw);
@@ -279,14 +284,18 @@ public final class TurnoutConstructionManager {
             LOGGER.warn("Native double slip rejected player={} revision={} gauge={} points={} curves={}: {}",
                     player.getUUID(), s.revision, s.gauge,
                     s.points.stream().map(TrackPlacementEndpoint::position).toList(), s.curves, exception.getMessage());
-            return s.validation = switch (exception.problem()) {
-                case INTERSECTION -> Feedback.NATIVE_DOUBLE_SLIP_INTERSECTION;
-                case ANGLE -> Feedback.NATIVE_DOUBLE_SLIP_ANGLE;
-                case SPACE -> Feedback.NATIVE_DOUBLE_SLIP_SPACE;
-            };
+            return s.validation = doubleSlipFailure(exception);
         } catch (TrackGraphException exception) { return s.validation = failure(exception); }
         catch (IllegalArgumentException exception) { s.cancelSolve(); return s.validation = Feedback.INVALID_GEOMETRY; }
         catch (IllegalStateException exception) { LOGGER.error("Cannot validate turnout", exception); return s.validation = Feedback.STORAGE; }
+    }
+
+    private static Feedback doubleSlipFailure(NativeDoubleSlipSolver.InvalidLayout exception) {
+        return switch (exception.problem()) {
+            case INTERSECTION -> Feedback.NATIVE_DOUBLE_SLIP_INTERSECTION;
+            case ANGLE -> Feedback.NATIVE_DOUBLE_SLIP_ANGLE;
+            case SPACE -> Feedback.NATIVE_DOUBLE_SLIP_SPACE;
+        };
     }
 
     private static boolean nativeSingle(Session s) {

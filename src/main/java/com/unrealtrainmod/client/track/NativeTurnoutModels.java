@@ -42,7 +42,8 @@ public final class NativeTurnoutModels {
     private static final String ROOT = "models/native_turnout/r11_simplified/";
     private static final List<String> PARAMETER_PARTS = List.of("L1", "R1", "railL", "railR");
     private record PartResource(String file, String parameters, int duplicateTrianglesRemoved) {}
-    private record DerivedKey(IndexedMesh mesh, double length, NativeTurnoutLayout.BladeContact contact, NativeTurnoutLayout.RailBend bend, boolean fixed) {}
+    private record DerivedKey(IndexedMesh mesh, double length, NativeTurnoutLayout.BladeContact contact,
+                              NativeTurnoutLayout.RailBend bend, boolean fixed, NativeTurnoutCurves.SlipShape slip) {}
     private static final Map<DerivedKey, DerivedSource> DERIVED = new LinkedHashMap<>();
     private static final Map<Source, DerivedSource> OWNED = new IdentityHashMap<>();
     private static final class DerivedSource {
@@ -149,22 +150,26 @@ public final class NativeTurnoutModels {
     }
 
     static Source blade(Source source, Source rail, float length, NativeTurnoutLayout.BladeContact contact) {
-        return derived(new DerivedKey(source.mesh(), length, contact, null, false), () ->
+        return derived(new DerivedKey(source.mesh(), length, contact, null, false, null), () ->
                 new Source(source.part(), source.texture(), source.doubleSided(),
                         NativeTurnoutCurves.blade(source.mesh(), rail.mesh(), length, contact)));
     }
     static Source rail(Source source, float length, NativeTurnoutLayout.RailBend bend) {
-        return derived(new DerivedKey(source.mesh(), length, null, bend, false), () ->
+        return derived(new DerivedKey(source.mesh(), length, null, bend, false, null), () ->
                 new Source(source.part(), source.texture(), source.doubleSided(),
                         NativeTurnoutCurves.rail(source.mesh(), length, bend, source.part().equals("railL") ? 0.74875 : -0.74875)));
     }
     static Source fixedRail(Source source, double length, NativeTurnoutLayout.RailBend bend) {
-        return derived(new DerivedKey(source.mesh(),length,null,bend,true), () ->
+        return derived(new DerivedKey(source.mesh(),length,null,bend,true,null), () ->
                 new Source(source.part(),source.texture(),source.doubleSided(),NativeTurnoutCurves.fixedRail(source.mesh(),-length/2,length/2,
                         source.part().equals("railL") ? .74875 : -.74875,bend.curve(),0,0)));
     }
     static Source generated(String name, IndexedMesh mesh) {
-        return derived(new DerivedKey(mesh, 0, null, null, false), () -> new Source(name, TEXTURE, false, mesh));
+        return derived(new DerivedKey(mesh, 0, null, null, false, null), () -> new Source(name, TEXTURE, false, mesh));
+    }
+    static Source slipStrip(Source source, NativeTurnoutCurves.SlipShape shape) {
+        return derived(new DerivedKey(source.mesh(), 0, null, null, false, shape), () ->
+                new Source(source.part(), source.texture(), source.doubleSided(), NativeTurnoutCurves.slipStrip(source.mesh(), shape)));
     }
     static Source retain(Source source) {
         synchronized (NativeTurnoutModels.class) {

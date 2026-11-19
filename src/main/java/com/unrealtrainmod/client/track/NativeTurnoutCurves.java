@@ -190,6 +190,37 @@ final class NativeTurnoutCurves {
         return new IndexedMesh(data,source.colors(),source.indices());
     }
 
+    record SlipSection(float rightX, float rightZ, float width) {}
+    record SlipShape(SlipSection start, SlipSection end, float length, int side) {}
+
+    /** Bake the two shared cross sections of a slip rail link from the authored r11 rail. */
+    static IndexedMesh slipStrip(IndexedMesh source, SlipShape shape) {
+        var data = source.vertices().clone();
+        float min = Float.POSITIVE_INFINITY, max = Float.NEGATIVE_INFINITY;
+        for (int i = 2; i < data.length; i += 8) { min = Math.min(min, data[i]); max = Math.max(max, data[i]); }
+        double side = shape.side(), span = max-min;
+        double head = com.unrealtrainmod.track.mesh.NativeDoubleSlipLayout.HEAD_WIDTH;
+        double offset = side * com.unrealtrainmod.track.mesh.NativeTurnoutLayout.RAIL_WORK_X;
+        for (int i = 0; i < data.length; i += 8) {
+            double t = (data[i+2]-min)/span;
+            var a = shape.start(); var b = shape.end();
+            double rightX = Math.fma(b.rightX()-a.rightX(), t, a.rightX());
+            double rightZ = Math.fma(b.rightZ()-a.rightZ(), t, a.rightZ());
+            double width = Math.fma(b.width()-a.width(), t, a.width());
+            double across = data[i]-offset;
+            if (width < head-1e-6) {
+                // The wider foot narrows with the head on the contact side; the running face stays in place.
+                double limit = width * (data[i+1] < -.12 ? .1105/head : 1);
+                across = side * Math.min(side*across, limit);
+            }
+            double nx = data[i+5], nz = data[i+7] * span / shape.length();
+            data[i] = (float)(across*rightX);
+            data[i+2] = (float)(shape.length()*t + across*rightZ);
+            normal(data, i, nx*rightX-nz*rightZ, data[i+6], nx*rightZ+nz*rightX);
+        }
+        return new IndexedMesh(data, source.colors(), source.indices());
+    }
+
     static IndexedMesh rail(IndexedMesh source, float length, RailBend bend, double center) {
         float start = -length/2;
         if (bend.curve() != null) {

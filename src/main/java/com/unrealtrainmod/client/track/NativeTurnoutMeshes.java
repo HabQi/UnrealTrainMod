@@ -133,6 +133,10 @@ final class NativeTurnoutMeshes {
         return part.railBend() != null && (part.name().equals("railL") || part.name().equals("railR"));
     }
     static List<Long> railChunks(TrackVector origin, Matrix4f transform, List<Source> sources, double scale) {
+        return meshChunks(origin,transform,sources,(NativeFixedRails.MAX_LENGTH+.5)*scale);
+    }
+
+    static List<Long> meshChunks(TrackVector origin, Matrix4f transform, List<Source> sources, double limit) {
         double minX = Double.POSITIVE_INFINITY, minZ = minX, maxX = Double.NEGATIVE_INFINITY, maxZ = maxX;
         var point = new Vector3f();
         for (var source : sources) {
@@ -143,14 +147,12 @@ final class NativeTurnoutMeshes {
                 minZ = Math.min(minZ,origin.z()+point.z); maxZ = Math.max(maxZ,origin.z()+point.z);
             }
         }
-        // A fixed strip is at most 3 m plus its cross section. Reject corrupt finite
-        // positions before converting them into an unbounded chunk enumeration.
-        double limit = (NativeFixedRails.MAX_LENGTH+.5)*scale;
+        // Reject corrupt positions before converting them into a chunk enumeration.
         if (!Double.isFinite(minX) || !Double.isFinite(maxX) || !Double.isFinite(minZ) || !Double.isFinite(maxZ)
                 || maxX-minX > limit || maxZ-minZ > limit
                 || minX/16 < Integer.MIN_VALUE || maxX/16 >= Integer.MAX_VALUE
                 || minZ/16 < Integer.MIN_VALUE || maxZ/16 >= Integer.MAX_VALUE)
-            throw new IllegalArgumentException("Invalid fixed rail bounds: parts="+sources.stream().map(Source::part).toList()
+            throw new IllegalArgumentException("Invalid fixed track bounds: parts="+sources.stream().map(Source::part).toList()
                     +", x=["+minX+","+maxX+"], z=["+minZ+","+maxZ+"]");
         var chunks = new ArrayList<Long>();
         for (long x = (long)Math.floor(minX/16), lastX = (long)Math.floor(maxX/16); x <= lastX; x++)
