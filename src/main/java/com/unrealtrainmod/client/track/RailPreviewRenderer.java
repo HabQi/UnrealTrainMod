@@ -7,6 +7,8 @@ package com.unrealtrainmod.client.track;
 import com.mojang.blaze3d.platform.NativeImage;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.PoseStack;
+import com.mojang.blaze3d.vertex.VertexBuffer;
+import com.unrealtrainmod.client.compat.iris.IrisCompat;
 import com.unrealtrainmod.client.renderer.preview.PreviewCamera;
 import com.unrealtrainmod.client.renderer.preview.PreviewRenderer;
 import com.unrealtrainmod.model.ModelBounds;
@@ -36,13 +38,16 @@ public final class RailPreviewRenderer implements AutoCloseable {
     public void render(GuiGraphics graphics, int x, int y, int width, int height,
                        ClientRailModelManager.Model selected, PreviewCamera camera) {
         if (!prepare(selected)) return;
-        renderer.render(graphics, x, y, width, height, bounds, camera, this::draw);
+        try (var shaders = IrisCompat.previewShaders()) {
+            renderer.render(graphics, x, y, width, height, bounds, camera, this::draw);
+        }
     }
 
     public NativeImage capture(ClientRailModelManager.Model selected) {
         if (!prepare(selected)) return null;
-        try { return renderer.capture(bounds, -180, 90, false, PreviewRenderer.RAIL_THUMBNAIL_SAMPLE_SCALE, this::draw); }
-        finally { clearMesh(); }
+        try (var shaders = IrisCompat.previewShaders()) {
+            return renderer.capture(bounds, -180, 90, false, PreviewRenderer.RAIL_THUMBNAIL_SAMPLE_SCALE, this::draw);
+        } finally { clearMesh(); }
     }
 
     private boolean prepare(ClientRailModelManager.Model selected) {
@@ -91,15 +96,17 @@ public final class RailPreviewRenderer implements AutoCloseable {
 
     private void draw(PoseStack pose) {
         try (var state = new TrackRenderState(null)) {
-            buffers.beginView();
             if (mesh.isEmpty()) return;
-            buffers.request(mesh, TrackRenderStats.STRUCTURE_TRACK);
-            buffers.prepare(null, null, Integer.MAX_VALUE, null);
             queue.begin();
             queue.addStatic(mesh, new Matrix4f(pose.last().pose()), TrackRenderStats.STRUCTURE_TRACK);
             queue.resolve(buffers, null);
-            // The preview owns a native shader scope even when Iris is enabled in the world.
-            queue.drawPreview(state, RenderSystem.getProjectionMatrix());
+            try {
+                queue.drawPreview(state, RenderSystem.getProjectionMatrix());
+            } finally {
+                // Clear Iris's tracked VertexBuffer before a screenshot releases its private pages.
+                // TrackRenderState then restores the caller's actual VAO.
+                VertexBuffer.unbind();
+            }
         } finally { queue.clear(); }
     }
 

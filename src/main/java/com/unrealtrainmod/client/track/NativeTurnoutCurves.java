@@ -190,7 +190,7 @@ final class NativeTurnoutCurves {
         return new IndexedMesh(data,source.colors(),source.indices());
     }
 
-    record SlipSection(float rightX, float rightZ, float width) {}
+    record SlipSection(float rightX, float rightZ, float width, float footLimit, float bevel) {}
     record SlipShape(SlipSection start, SlipSection end, float length, int side) {}
 
     /** Bake the two shared cross sections of a slip rail link from the authored r11 rail. */
@@ -207,15 +207,23 @@ final class NativeTurnoutCurves {
             double rightX = Math.fma(b.rightX()-a.rightX(), t, a.rightX());
             double rightZ = Math.fma(b.rightZ()-a.rightZ(), t, a.rightZ());
             double width = Math.fma(b.width()-a.width(), t, a.width());
+            double bevel = Math.fma(b.bevel()-a.bevel(),t,a.bevel());
             double across = data[i]-offset;
+            boolean foot = data[i+1] < -.12;
             if (width < head-1e-6) {
                 // The wider foot narrows with the head on the contact side; the running face stays in place.
-                double limit = width * (data[i+1] < -.12 ? .1105/head : 1);
+                double limit = width * (foot ? .1105/head : 1);
                 across = side * Math.min(side*across, limit);
+            }
+            if (foot) {
+                double limit = Math.fma(b.footLimit()-a.footLimit(),t,a.footLimit());
+                across = side*Math.min(side*across,limit);
             }
             double nx = data[i+5], nz = data[i+7] * span / shape.length();
             data[i] = (float)(across*rightX);
-            data[i+2] = (float)(shape.length()*t + across*rightZ);
+            // Positive cuts recess the outside of the toe; negative cuts relieve the inside of the heel.
+            double setback = bevel*Math.max(0,side*Math.signum(bevel)*across);
+            data[i+2] = (float)(shape.length()*t+across*rightZ+setback);
             normal(data, i, nx*rightX-nz*rightZ, data[i+6], nx*rightZ+nz*rightX);
         }
         return new IndexedMesh(data, source.colors(), source.indices());

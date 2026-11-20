@@ -71,7 +71,7 @@ public final class RailModelScreen extends BaseTrainScreen {
             search.setResponder(query -> { list.filter(query); updateWidgets(); });
             preview = new RailPreviewWidget(camera, selected == null ? null : selected.id());
             reset = new TrainIconButton(0, 0, 24, Component.translatable("gui.unrealtrainmod.preview.reset"),
-                    TrainIconButton.Icon.RESET, camera::reset);
+                    TrainIconButton.Icon.RESET, preview::resetCamera);
             apply = new TrainIconButton(0, 0, 120, Component.translatable("gui.unrealtrainmod.rail_models.apply"),
                     TrainIconButton.Icon.CONFIRM, this::submit);
             close = new TrainIconButton(0, 0, 24, Component.translatable("gui.unrealtrainmod.close"),

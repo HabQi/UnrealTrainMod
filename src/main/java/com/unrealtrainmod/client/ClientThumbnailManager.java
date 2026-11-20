@@ -20,6 +20,7 @@ import com.unrealtrainmod.model.ModelSource;
 import com.unrealtrainmod.model.ContactFaceEliminator;
 import com.unrealtrainmod.resource.PackageAsset;
 import com.unrealtrainmod.resource.ResourceIds;
+import com.unrealtrainmod.track.model.NativeTurnoutCatalog;
 import com.unrealtrainmod.track.model.RailCatalog;
 import com.unrealtrainmod.track.model.RailDefinition;
 import com.unrealtrainmod.vehicle.VehicleCatalog;
@@ -305,7 +306,9 @@ public final class ClientThumbnailManager extends SimplePreparableReloadListener
     private static ListEntryImage upload(Key key, ResourceLocation id, NativeImage pixels) {
         float guiPixelsPerBlock = key.kind() == Kind.VEHICLE ? VEHICLE_GUI_PIXELS_PER_BLOCK * 0.85f : RAIL_GUI_PIXELS_PER_BLOCK;
         float scale = guiPixelsPerBlock / (PreviewRenderer.THUMBNAIL_PIXELS_PER_BLOCK * sampleScale(key.kind()));
-        var image = new ListEntryImage(id, pixels.getWidth(), pixels.getHeight(), scale);
+        var image = key.kind() == Kind.RAIL && NativeTurnoutCatalog.DOUBLE_SLIP_R11.equals(key.id())
+                ? new ListEntryImage(id, pixels.getWidth(), pixels.getHeight())
+                : new ListEntryImage(id, pixels.getWidth(), pixels.getHeight(), scale);
         int active = GlStateManager._getActiveTexture();
         int bound = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
         int alignment = GL11.glGetInteger(GL11.GL_UNPACK_ALIGNMENT);

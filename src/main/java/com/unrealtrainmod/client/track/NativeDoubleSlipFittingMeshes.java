@@ -62,7 +62,7 @@ final class NativeDoubleSlipFittingMeshes {
         for (var clearance : NativeDoubleSlipFittings.railheads(layout.fixed(),layout.scale()))
             hardware.add(Cut.of(clearance,layout.origin()));
         var result = new ArrayList<Source>();
-        var ballast = new java.util.IdentityHashMap<IndexedMesh,IndexedMesh>();
+        var tiles = new java.util.IdentityHashMap<IndexedMesh,IndexedMesh>();
         for (var fitting : layout.fittings().parts()) {
             var part = fitting.part();
             var transform = fitting.transform(layout.origin(),layout.scale());
@@ -70,9 +70,17 @@ final class NativeDoubleSlipFittingMeshes {
             var sources = originals.get(part.name());
             if (sources == null) throw new IllegalArgumentException("Missing native double slip part: " + part.name());
             for (var source : sources) {
-                var transformed = fitting.bed() == null ? transform(NativeDiamondRenderState.mesh(part,source),transform)
-                        : bed(ballast.computeIfAbsent(source.mesh(),mesh -> NativeTurnoutMeshes.trim(mesh,0,BED_LENGTH)),
-                                fitting.bed(),layout.origin(),layout.scale());
+                IndexedMesh transformed;
+                if (fitting.bed() != null) {
+                    var tile = tiles.computeIfAbsent(source.mesh(),mesh -> NativeTurnoutMeshes.trim(mesh,0,BED_LENGTH));
+                    transformed = bed(tile,fitting.bed(),layout.origin(),layout.scale());
+                } else {
+                    // Extract one centered sleeper from the authored support module before orienting each row.
+                    var mesh = part.name().equals("sleeper_support")
+                            ? tiles.computeIfAbsent(source.mesh(),sourceMesh -> NativeTurnoutMeshes.trim(sourceMesh,-.25f,.25f))
+                            : NativeDiamondRenderState.mesh(part,source);
+                    transformed = transform(mesh,transform);
+                }
                 var mesh = trim(transformed,cuts);
                 if (mesh.indices().length != 0) result.add(new Source(source.part(),source.texture(),source.doubleSided(),mesh));
             }

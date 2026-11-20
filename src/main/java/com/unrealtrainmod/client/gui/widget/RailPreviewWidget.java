@@ -8,6 +8,7 @@ import com.unrealtrainmod.client.gui.theme.GuiTheme;
 import com.unrealtrainmod.client.renderer.preview.PreviewCamera;
 import com.unrealtrainmod.client.track.ClientRailModelManager;
 import com.unrealtrainmod.client.track.RailPreviewRenderer;
+import com.unrealtrainmod.track.model.NativeTurnoutCatalog;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.AbstractWidget;
@@ -28,6 +29,7 @@ public final class RailPreviewWidget extends AbstractWidget implements AutoClose
         super(0, 0, 100, 100, Component.translatable("gui.unrealtrainmod.rail_models.preview"));
         this.camera = camera;
         this.modelId = modelId;
+        resetCamera();
         setTooltip(Tooltip.create(Component.translatable("gui.unrealtrainmod.preview.help")
                 .append("\n").append(Component.translatable("gui.unrealtrainmod.rail_models.static"))));
     }
@@ -35,7 +37,12 @@ public final class RailPreviewWidget extends AbstractWidget implements AutoClose
     public void setModel(ResourceLocation id) {
         renderer.clearMesh();
         modelId = id;
-        camera.reset();
+        resetCamera();
+    }
+
+    public void resetCamera() {
+        if (NativeTurnoutCatalog.DOUBLE_SLIP_R11.equals(modelId)) camera.reset(0, 70);
+        else camera.reset();
     }
 
     @Override
@@ -75,7 +82,7 @@ public final class RailPreviewWidget extends AbstractWidget implements AutoClose
             case GLFW.GLFW_KEY_DOWN -> camera.rotate(0, 5);
             case GLFW.GLFW_KEY_EQUAL, GLFW.GLFW_KEY_KP_ADD -> camera.setZoom(camera.zoom() + 0.05);
             case GLFW.GLFW_KEY_MINUS, GLFW.GLFW_KEY_KP_SUBTRACT -> camera.setZoom(camera.zoom() - 0.05);
-            case GLFW.GLFW_KEY_HOME -> camera.reset();
+            case GLFW.GLFW_KEY_HOME -> resetCamera();
             default -> { return false; }
         }
         return true;

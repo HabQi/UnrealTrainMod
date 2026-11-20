@@ -10,6 +10,7 @@ import com.mojang.blaze3d.vertex.VertexFormat;
 import com.mojang.blaze3d.vertex.VertexBuffer;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
+import java.lang.invoke.VarHandle;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.culling.Frustum;
 import net.minecraft.client.renderer.RenderStateShard;
@@ -26,6 +27,7 @@ import org.slf4j.LoggerFactory;
 public final class IrisCompat {
     private static MethodHandle inUse, shadowPass, modelView, projection, frustum;
     private static MethodHandle wrapEntity, handActive, originalBuffer;
+    private static VarHandle previewShaderBypass;
     private static Class<?> bufferWrapper;
     private static final IdentityHashMap<RenderType, RenderType> ENTITY_TYPES = new IdentityHashMap<>();
     private static final MethodHandle[] getIdentity = new MethodHandle[3], setIdentity = new MethodHandle[3];
@@ -68,9 +70,27 @@ public final class IrisCompat {
             inUse = null;
             LoggerFactory.getLogger(IrisCompat.class).error("Cannot connect to the installed Iris API", exception);
         }
+        try {
+            var bypass = Class.forName("net.irisshaders.iris.vertices.ImmediateState").getField("bypass");
+            previewShaderBypass = MethodHandles.publicLookup().unreflectVarHandle(bypass);
+        } catch (ReflectiveOperationException exception) {
+            LoggerFactory.getLogger(IrisCompat.class).warn("Cannot isolate GUI preview shaders from Iris", exception);
+        }
     }
 
     public static boolean active() { return active; }
+
+    /** The GUI owns a vanilla-format framebuffer pass and must not use Iris world shader overrides. */
+    public static PreviewShaders previewShaders() {
+        if (!active || previewShaderBypass == null) return null;
+        boolean previous = (boolean)previewShaderBypass.get();
+        previewShaderBypass.set(true);
+        return new PreviewShaders(previous);
+    }
+
+    public record PreviewShaders(boolean previous) implements AutoCloseable {
+        @Override public void close() { previewShaderBypass.set(previous); }
+    }
 
     public static boolean handPass() {
         if (!active) return false;

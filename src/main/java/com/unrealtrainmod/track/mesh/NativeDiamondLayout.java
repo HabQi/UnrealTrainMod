@@ -163,6 +163,8 @@ public record NativeDiamondLayout(TrackVector origin, double scale, List<Part> p
                            int firstInnerSide, List<TrackVector> boundary) {
         public SlipEnds { boundary = List.copyOf(boundary); }
     }
+    record SlipFrogRail(boolean second, Part nose, double noseLengthScale, RailEnd tail, RailEnd wing) {}
+    record SlipFrogs(List<Part> wings, List<SlipFrogRail> rails) {}
 
     public static SlipEnds slipEnds(TrackGeometry first, TrackGeometry second, double gauge) {
         if (!Double.isFinite(gauge) || gauge <= 0) throw new InvalidLayout(Problem.SPACE);
@@ -570,23 +572,38 @@ public record NativeDiamondLayout(TrackVector origin, double scale, List<Part> p
         nose(parts, nosePath, side, tip, noseDirection, noseName+noseVariant(degrees), center, scale);
     }
 
-    static List<Part> slipHardware(Path a, Path b, SlipEnds ends, double scale) {
+    static SlipFrogs slipFrogs(Path a, Path b, SlipEnds ends, double scale) {
         var parts = new ArrayList<Part>();
+        var rails = new ArrayList<SlipFrogRail>();
         for (var end : List.of(ends.entrance(), ends.exit())) {
             double direction = end == ends.entrance() ? -1 : 1;
+            int side = direction < 0 ? ends.firstInnerSide() : -ends.firstInnerSide();
             double first = end.firstStation(), second = end.secondStation();
             double ya = direction(a,first,first+direction*2*scale);
             double yb = direction(b,second,second+direction*2*scale);
             double degrees = angle(a.at(first),b.at(second));
             double gap = WING_SETBACK*scale/Math.sin(Math.toRadians(degrees));
-            acuteWings(parts,a,b,end.workingPoint(),first,second,direction,ya,yb,Math.sin(yb-ya)>0,gap,scale);
+            boolean right = Math.sin(yb-ya)>0;
+            String variant = noseVariant(degrees);
+            var wings = acuteWings(parts,a,b,end.workingPoint(),first,second,direction,ya,yb,right,gap,scale);
+            rails.add(slipFrogRail(a,false,side,end.workingPoint(),first,direction,ya,right,variant,wings[0],gap,scale));
+            rails.add(slipFrogRail(b,true,-side,end.workingPoint(),second,direction,yb,!right,variant,wings[1],gap,scale));
         }
-        int side = ends.firstInnerSide();
-        for (var end : List.of(ends.firstSide(), ends.oppositeSide())) {
-            middle(parts,end.workingPoint(),a.at(end.firstStation()),b.at(end.secondStation()),side,scale);
-            side = -side;
-        }
-        return List.copyOf(parts);
+        return new SlipFrogs(List.copyOf(parts),List.copyOf(rails));
+    }
+
+    private static SlipFrogRail slipFrogRail(Path path, boolean second, int side, TrackVector point, double station,
+                                           double direction, double yaw, boolean right, String variant,
+                                           TrackVector wingCenter, double gap, double scale) {
+        double noseLength = Math.min(NOSE_END*scale,(direction < 0 ? station : path.length()-station)-.10*scale);
+        var nose = new Part((right ? "noseR" : "noseL")+variant,point,yaw,0,0,chunk(point));
+        double flip = direction < 0 ? Math.PI : 0;
+        var tailCenter = shifted(point,yaw,(right ? 1 : -1)*NOSE_X*scale,noseLength);
+        var tail = new RailEnd(side,station+direction*noseLength,tailCenter,yaw-flip,0);
+        double wingStation = innerStation(path,side,wingCenter,station-direction*(gap-WING_REAR_END*scale),scale);
+        double wingYaw = direction(path,station-direction*scale,station)-flip;
+        var wing = new RailEnd(side,wingStation,wingCenter,wingYaw,0);
+        return new SlipFrogRail(second,nose,noseLength/(NOSE_END*scale),tail,wing);
     }
 
     private static void nose(List<Part> parts, Path path, int side, double tip, int direction,

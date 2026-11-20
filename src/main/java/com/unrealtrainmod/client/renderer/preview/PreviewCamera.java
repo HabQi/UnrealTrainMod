@@ -32,8 +32,12 @@ public final class PreviewCamera {
     }
 
     public void reset() {
-        yaw = -135;
-        pitch = 20;
+        reset(-135, 20);
+    }
+
+    public void reset(float yaw, float pitch) {
+        this.yaw = yaw;
+        this.pitch = pitch;
         zoom = 1;
         panX = panY = 0;
     }

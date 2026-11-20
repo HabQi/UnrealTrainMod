@@ -1,17 +1,19 @@
 /* Copyright (c) 2026 HabQi; SPDX-License-Identifier: GPL-3.0-only */
 package com.unrealtrainmod.track.mesh;
 
+import com.unrealtrainmod.track.TrackPlacementGeometry;
 import com.unrealtrainmod.track.assembly.TrackAssemblyDefinition;
 import com.unrealtrainmod.track.geometry.BezierTrackGeometry;
 import com.unrealtrainmod.track.geometry.LinearGrade;
 import com.unrealtrainmod.track.geometry.TrackGeometry;
 import com.unrealtrainmod.track.geometry.TrackPoint;
-import com.unrealtrainmod.track.geometry.TrackPose;
 import com.unrealtrainmod.track.geometry.TrackVector;
 import java.util.List;
 
-/** Inner rail contacts both acute diamond vertices; centreline endpoints remain on the original main lines. */
+/** Solves tangent slip connections between the two main lines. */
 public final class NativeDoubleSlipSolver {
+    static final double MAX_INSET = .20;
+    private static final int INSET_STEPS = 4;
     private NativeDoubleSlipSolver() {}
     public enum Problem { INTERSECTION, ANGLE, SPACE }
     public static final class InvalidLayout extends IllegalArgumentException {
@@ -28,7 +30,23 @@ public final class NativeDoubleSlipSolver {
 
     public static Solution solve(BezierTrackGeometry first, BezierTrackGeometry second, double gauge) {
         var ends = ends(first, second, gauge);
-        return new Solution(path(first, second, ends, true, gauge), path(second, first, ends, false, gauge));
+        double scale = gauge / 1.435;
+        for (int step = INSET_STEPS; step > 0; step--) {
+            double inset = MAX_INSET * step / INSET_STEPS * scale;
+            try {
+                return candidate(first,second,ends,gauge,scale,inset);
+            } catch (IllegalArgumentException rejected) {
+                // Try a smaller paired inset before reporting the original layout's diagnostic.
+            }
+        }
+        return candidate(first,second,ends,gauge,scale,0);
+    }
+
+    private static Solution candidate(BezierTrackGeometry first, BezierTrackGeometry second,
+                                      NativeDiamondLayout.SlipEnds ends, double gauge, double scale, double inset) {
+        var solution = new Solution(path(first,second,ends,true,gauge,inset),path(second,first,ends,false,gauge,inset));
+        NativeDoubleSlipLayout.validateBlades(first,second,solution,ends,scale);
+        return solution;
     }
 
     private static NativeDiamondLayout.SlipEnds ends(TrackGeometry first, TrackGeometry second, double gauge) {
@@ -39,13 +57,14 @@ public final class NativeDoubleSlipSolver {
     }
 
     private static List<TrackGeometry> path(BezierTrackGeometry entry, BezierTrackGeometry exit,
-            NativeDiamondLayout.SlipEnds ends, boolean first, double gauge) {
+            NativeDiamondLayout.SlipEnds ends, boolean first, double gauge, double inset) {
         String name = first ? "first_crossover" : "second_crossover";
         int inner = first ? ends.firstInnerSide() : -ends.firstInnerSide();
-        double from = first ? ends.entrance().firstStation() : ends.entrance().secondStation();
-        double to = first ? ends.exit().secondStation() : ends.exit().firstStation();
+        double from = (first ? ends.entrance().firstStation() : ends.entrance().secondStation()) + inset;
+        double to = (first ? ends.exit().secondStation() : ends.exit().firstStation()) - inset;
         double approach = NativeDiamondLayout.ORDINARY_PERIOD * gauge / 1.435;
-        if (from < approach || exit.getLength() - to < approach) throw new InvalidLayout(Problem.SPACE,
+        if (from < approach || exit.getLength() - to < approach || from >= entry.getLength() || to <= 0)
+            throw new InvalidLayout(Problem.SPACE,
                 NativeLayoutDiagnostic.at("double_slip_approach_space", name, inner, 0,
                         Math.min(from, exit.getLength() - to), approach));
         var a = entry.sample(from); var b = exit.sample(to);
@@ -64,7 +83,12 @@ public final class NativeDoubleSlipSolver {
         var curve = new BezierTrackGeometry(point(a.position()), point(c1), point(c2), point(b.position()),
                 new LinearGrade(a.position().y(), b.position().y()), gauge);
         checkBend(curve, ends, inner, gauge, name);
-        return List.of(entry.subCurve(0, from), curve, exit.subCurve(to, exit.getLength()));
+        var lead = entry.subCurve(0,from);
+        var trail = exit.subCurve(to,exit.getLength());
+        double length = lead.getLength()+curve.getLength()+trail.getLength();
+        if (length > TrackPlacementGeometry.MAX_LENGTH) throw new InvalidLayout(Problem.SPACE,
+                NativeLayoutDiagnostic.at("double_slip_path_length",name,inner,from,length,TrackPlacementGeometry.MAX_LENGTH));
+        return List.of(lead,curve,trail);
     }
 
     private static void checkBend(TrackGeometry curve, NativeDiamondLayout.SlipEnds ends, int inner, double gauge, String path) {
@@ -94,28 +118,25 @@ public final class NativeDoubleSlipSolver {
         return inside;
     }
 
-    /** Both ends of the inner working edge must meet the acute vertices, not the upper/lower obtuse corners. */
+    /** Saved bends may start at the original acute vertices or within the inset on their respective main lines. */
     public static void validate(TrackAssemblyDefinition.Geometry geometry) {
         var first = geometry.paths().get("first_straight").getFirst();
         var second = geometry.paths().get("second_straight").getFirst();
         double gauge = first.sample(0).gauge();
         var ends = ends(first, second, gauge);
-        contact(geometry.paths().get("first_crossover"), ends, ends.firstInnerSide(), gauge, "first_crossover");
-        contact(geometry.paths().get("second_crossover"), ends, -ends.firstInnerSide(), gauge, "second_crossover");
+        contact(geometry.paths().get("first_crossover").get(1),first,second,ends,true,gauge);
+        contact(geometry.paths().get("second_crossover").get(1),second,first,ends,false,gauge);
     }
 
-    private static void contact(List<TrackGeometry> parts, NativeDiamondLayout.SlipEnds ends, int inner, double gauge, String path) {
-        var curve = parts.get(1);
-        for (boolean start : List.of(true, false)) {
-            var pose = curve.sample(start ? 0 : curve.getLength());
-            var target = start ? ends.entrance().workingPoint() : ends.exit().workingPoint();
-            var edge = add(pose.position(), pose.lateral(), inner * workingOffset(gauge));
-            var delta = add(edge, target, -1);
-            double error = Math.hypot(delta.x(), delta.z()), tolerance = 0.00001 * gauge / 1.435;
-            if (error > tolerance || Math.abs(delta.y()) > 1e-6) throw new InvalidLayout(Problem.SPACE,
-                    NativeLayoutDiagnostic.at("double_slip_acute_contact", path, inner, 0, error, tolerance));
-        }
-        checkBend(curve, ends, inner, gauge, path);
+    private static void contact(TrackGeometry curve, TrackGeometry entry, TrackGeometry exit,
+                                NativeDiamondLayout.SlipEnds ends, boolean first, double gauge) {
+        double scale = gauge / 1.435;
+        double from = first ? ends.entrance().firstStation() : ends.entrance().secondStation();
+        double to = first ? ends.exit().secondStation() : ends.exit().firstStation();
+        NativeDoubleSlipLayout.transitionStation(entry,curve.sample(0),from,scale);
+        NativeDoubleSlipLayout.transitionStation(exit.reversed(),curve.reversed().sample(0),exit.getLength()-to,scale);
+        checkBend(curve,ends,first ? ends.firstInnerSide() : -ends.firstInnerSide(),gauge,
+                first ? "first_crossover" : "second_crossover");
     }
 
     private static TrackPoint point(TrackVector p) { return new TrackPoint(p.x(), p.z()); }

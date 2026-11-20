@@ -23,7 +23,7 @@ import static com.unrealtrainmod.track.mesh.NativeRailCurve.dot;
 
 /** Preparation and ownership for slip rails. World submission uses the ordinary native turnout caches. */
 public final class NativeDoubleSlipRenderState implements AutoCloseable {
-    public static final String THUMBNAIL_RECIPE = "native-double-slip-r11-fittings-3";
+    public static final String THUMBNAIL_RECIPE = "native-double-slip-r11-aligned-sleepers-10";
     final NativeDoubleSlipLayout layout;
     final Map<String, NativeTurnoutRenderState> switches = new LinkedHashMap<>();
     final Map<Long, RailTrackMeshData> fixed;
@@ -110,9 +110,9 @@ public final class NativeDoubleSlipRenderState implements AutoCloseable {
         }
         private static NativeTurnoutCurves.SlipSection section(NativeDoubleSlipLayout.Section section, TrackVector right,
                                                                TrackVector forward) {
-            var normal = NativeDoubleSlipLayout.lateral(section.tangent());
+            var normal = section.across();
             return new NativeTurnoutCurves.SlipSection(quantized(dot(normal,right)), quantized(dot(normal,forward)),
-                    quantized(section.width()));
+                    quantized(section.width()),quantized(section.footLimit()),quantized(section.bevel()));
         }
         private static float quantized(double value) { return (float)(Math.rint(value*1e6)*1e-6); }
         Matrix4f transform(TrackVector origin, double scale) {
