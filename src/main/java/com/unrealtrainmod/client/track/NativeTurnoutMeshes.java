@@ -137,6 +137,23 @@ final class NativeTurnoutMeshes {
     }
 
     static List<Long> meshChunks(TrackVector origin, Matrix4f transform, List<Source> sources, double limit) {
+        var bounds = meshBounds(origin,transform,sources,limit);
+        var chunks = new ArrayList<Long>();
+        for (long x = (long)Math.floor(bounds.minX()/16), lastX = (long)Math.floor(bounds.maxX()/16); x <= lastX; x++)
+            for (long z = (long)Math.floor(bounds.minZ()/16), lastZ = (long)Math.floor(bounds.maxZ()/16); z <= lastZ; z++)
+                chunks.add(ChunkPos.asLong((int)x,(int)z));
+        return chunks;
+    }
+
+    static long meshOwner(TrackVector origin, Matrix4f transform, List<Source> sources, double limit) {
+        var bounds = meshBounds(origin,transform,sources,limit);
+        return ChunkPos.asLong((int)Math.floor((bounds.minX()+bounds.maxX())/32),
+                (int)Math.floor((bounds.minZ()+bounds.maxZ())/32));
+    }
+
+    private record MeshBounds(double minX, double minZ, double maxX, double maxZ) {}
+
+    private static MeshBounds meshBounds(TrackVector origin, Matrix4f transform, List<Source> sources, double limit) {
         double minX = Double.POSITIVE_INFINITY, minZ = minX, maxX = Double.NEGATIVE_INFINITY, maxZ = maxX;
         var point = new Vector3f();
         for (var source : sources) {
@@ -154,10 +171,7 @@ final class NativeTurnoutMeshes {
                 || minZ/16 < Integer.MIN_VALUE || maxZ/16 >= Integer.MAX_VALUE)
             throw new IllegalArgumentException("Invalid fixed track bounds: parts="+sources.stream().map(Source::part).toList()
                     +", x=["+minX+","+maxX+"], z=["+minZ+","+maxZ+"]");
-        var chunks = new ArrayList<Long>();
-        for (long x = (long)Math.floor(minX/16), lastX = (long)Math.floor(maxX/16); x <= lastX; x++)
-            for (long z = (long)Math.floor(minZ/16), lastZ = (long)Math.floor(maxZ/16); z <= lastZ; z++) chunks.add(ChunkPos.asLong((int)x,(int)z));
-        return chunks;
+        return new MeshBounds(minX,minZ,maxX,maxZ);
     }
     static void appendRailChunk(RailMeshAccumulator output, Source source, IndexedMesh mesh, Matrix4f transform, Vector3f position, Vector3f normal) {
         var data = mesh.vertices().clone(); var normals = transform.normal(new Matrix3f());

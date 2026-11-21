@@ -12,8 +12,9 @@ import java.util.List;
 
 /** Solves tangent slip connections between the two main lines. */
 public final class NativeDoubleSlipSolver {
-    static final double MAX_INSET = .20;
-    private static final int INSET_STEPS = 4;
+    private static final double INSET_STEP = .05;
+    private static final int INSET_STEPS = 7;
+    static final double MAX_INSET = INSET_STEPS * INSET_STEP;
     private NativeDoubleSlipSolver() {}
     public enum Problem { INTERSECTION, ANGLE, SPACE }
     public static final class InvalidLayout extends IllegalArgumentException {
@@ -32,7 +33,7 @@ public final class NativeDoubleSlipSolver {
         var ends = ends(first, second, gauge);
         double scale = gauge / 1.435;
         for (int step = INSET_STEPS; step > 0; step--) {
-            double inset = MAX_INSET * step / INSET_STEPS * scale;
+            double inset = INSET_STEP * step * scale;
             try {
                 return candidate(first,second,ends,gauge,scale,inset);
             } catch (IllegalArgumentException rejected) {

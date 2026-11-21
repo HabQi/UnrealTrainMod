@@ -10,6 +10,8 @@ import com.mojang.brigadier.builder.RequiredArgumentBuilder;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import com.mojang.brigadier.exceptions.SimpleCommandExceptionType;
 import com.unrealtrainmod.track.TrackGraph;
+import com.unrealtrainmod.track.assembly.JunctionState;
+import com.unrealtrainmod.track.assembly.TrackAssemblyDefinition;
 import com.unrealtrainmod.track.assembly.TrackAssemblyInstance;
 import com.unrealtrainmod.track.assembly.SwitchPosition;
 import com.unrealtrainmod.track.assembly.TrackTransitionResolver;
@@ -41,6 +43,11 @@ public final class TurnoutCommands {
             var position = name.equals("straight") ? SwitchPosition.NORMAL : SwitchPosition.REVERSE;
             set.then(literal(name).executes(c -> execute(c, g -> setAll(c, g, position))));
         }
+        set.then(literal("route").then(argument("path", StringArgumentType.word()).suggests((c, b) -> {
+            var assembly = graph(c).assembly(UuidArgument.getUuid(c, "assemblyId"));
+            return assembly.definition() == TrackAssemblyDefinition.DOUBLE_SLIP
+                    ? SharedSuggestionProvider.suggest(assembly.definition().routes().keySet(), b) : b.buildFuture();
+        }).executes(c -> execute(c, g -> setRoute(c, g)))));
         set.then(literal("control").then(argument("control", StringArgumentType.word()).suggests((c, b) -> {
             var assembly = graph(c).assembly(UuidArgument.getUuid(c, "assemblyId"));
             return SharedSuggestionProvider.suggest(assembly.state().controls().keySet(), b);
@@ -60,9 +67,10 @@ public final class TurnoutCommands {
                         case "reverse" -> SwitchPosition.REVERSE;
                         default -> throw new IllegalArgumentException("Unknown switch position");
                     };
-                    g.setAssemblyState(id, assembly.state().withControl(control, position));
-                    describe(c, g, g.assembly(id));
-                    return 1;
+                    var state = assembly.definition() == TrackAssemblyDefinition.DOUBLE_SLIP
+                            ? TrackAssemblyDefinition.doubleSlipStateForControl(control, position)
+                            : assembly.state().withControl(control, position);
+                    return applyState(c, g, id, state);
                 })))));
         var turnout = literal("turnout").then(literal("set").then(set))
                 .then(literal("info").then(assemblyArgument().executes(c -> execute(c, g -> {
@@ -80,11 +88,30 @@ public final class TurnoutCommands {
         event.getDispatcher().register(literal("utm").requires(s -> s.hasPermission(2)).then(turnout));
     }
 
-    /** Ordinary turnouts use main; multi-control structures switch every group together. */
+    private static int setRoute(CommandContext<CommandSourceStack> context, TrackGraph graph) {
+        TrainManager.get(context.getSource().getLevel()).refreshTurnoutOccupancy();
+        UUID id = UuidArgument.getUuid(context, "assemblyId");
+        var assembly = graph.assembly(id);
+        if (assembly.definition() != TrackAssemblyDefinition.DOUBLE_SLIP) {
+            context.getSource().sendFailure(Component.translatable(PREFIX + "route_double_slip_only"));
+            return 0;
+        }
+        String path = getString(context, "path");
+        if (!assembly.paths().containsKey(path)) {
+            context.getSource().sendFailure(Component.translatable(PREFIX + "unknown_route", path));
+            return 0;
+        }
+        return applyState(context, graph, id, TrackAssemblyDefinition.doubleSlipState(path));
+    }
+
     private static int setAll(CommandContext<CommandSourceStack> context, TrackGraph graph, SwitchPosition position) {
         TrainManager.get(context.getSource().getLevel()).refreshTurnoutOccupancy();
         UUID id = UuidArgument.getUuid(context, "assemblyId");
         var assembly = graph.assembly(id);
+        if (assembly.definition() == TrackAssemblyDefinition.DOUBLE_SLIP) {
+            String path = position == SwitchPosition.NORMAL ? "first_straight" : "first_crossover";
+            return applyState(context, graph, id, TrackAssemblyDefinition.doubleSlipState(path));
+        }
         if (assembly.state().controls().isEmpty()) {
             context.getSource().sendFailure(Component.translatable(PREFIX + "no_controls"));
             return 0;
@@ -92,6 +119,10 @@ public final class TurnoutCommands {
         var state = assembly.state();
         if (state.controls().containsKey("main")) state = state.withControl("main", position);
         else for (String control : state.controls().keySet()) state = state.withControl(control, position);
+        return applyState(context, graph, id, state);
+    }
+
+    private static int applyState(CommandContext<CommandSourceStack> context, TrackGraph graph, UUID id, JunctionState state) {
         graph.setAssemblyState(id, state);
         describe(context, graph, graph.assembly(id));
         return 1;

@@ -3,23 +3,24 @@ package com.unrealtrainmod.client.track;
 
 import com.unrealtrainmod.client.track.NativeTurnoutMeshes.Corner;
 import com.unrealtrainmod.model.IndexedMesh;
+import com.unrealtrainmod.track.geometry.TrackPose;
 import com.unrealtrainmod.track.geometry.TrackVector;
+import com.unrealtrainmod.track.mesh.NativeDiamondLayout;
 import com.unrealtrainmod.track.mesh.NativeDoubleSlipFittings;
 import com.unrealtrainmod.track.mesh.NativeDoubleSlipLayout;
 import com.unrealtrainmod.track.mesh.RailTrackMeshBuilder.Source;
 import it.unimi.dsi.fastutil.floats.FloatArrayList;
 import it.unimi.dsi.fastutil.ints.IntArrayList;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import org.joml.Matrix3f;
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
 
-/** Attribute-preserving static cuts around the full swept envelope, before static page registration. */
+/** Static fitting geometry and fixed railhead clearance for the guards. */
 final class NativeDoubleSlipFittingMeshes {
-    // Trim the end overlaps at matching cross sections before joining neighboring r11 ballast tiles.
-    private static final float BED_LENGTH = 1.5f;
     private NativeDoubleSlipFittingMeshes() {}
 
     private record Plane(double x, double y, double z, double limit) {
@@ -56,56 +57,64 @@ final class NativeDoubleSlipFittingMeshes {
         }
     }
 
-    static List<Source> bake(NativeDoubleSlipLayout layout, Map<String,List<Source>> originals) {
-        var motion = layout.fittings().motion().stream().map(clearance -> Cut.of(clearance,layout.origin())).toList();
-        var hardware = new ArrayList<>(motion);
-        for (var clearance : NativeDoubleSlipFittings.railheads(layout.fixed(),layout.scale()))
-            hardware.add(Cut.of(clearance,layout.origin()));
+    record Prepared(NativeDoubleSlipLayout layout, List<Source> sources) {}
+
+    static Prepared prepare(NativeDoubleSlipLayout layout, Map<String,List<Source>> originals) {
+        var fixed = NativeDoubleSlipFittings.railheads(layout.fixed(),layout.scale()).stream()
+                .map(clearance -> Cut.of(clearance,layout.origin())).toList();
         var result = new ArrayList<Source>();
-        var tiles = new java.util.IdentityHashMap<IndexedMesh,IndexedMesh>();
         for (var fitting : layout.fittings().parts()) {
+            if (!fitting.guard()) continue;
             var part = fitting.part();
             var transform = fitting.transform(layout.origin(),layout.scale());
-            var cuts = fitting.hardware() ? hardware : motion;
-            var sources = originals.get(part.name());
-            if (sources == null) throw new IllegalArgumentException("Missing native double slip part: " + part.name());
-            for (var source : sources) {
-                IndexedMesh transformed;
-                if (fitting.bed() != null) {
-                    var tile = tiles.computeIfAbsent(source.mesh(),mesh -> NativeTurnoutMeshes.trim(mesh,0,BED_LENGTH));
-                    transformed = bed(tile,fitting.bed(),layout.origin(),layout.scale());
-                } else {
-                    // Extract one centered sleeper from the authored support module before orienting each row.
-                    var mesh = part.name().equals("sleeper_support")
-                            ? tiles.computeIfAbsent(source.mesh(),sourceMesh -> NativeTurnoutMeshes.trim(sourceMesh,-.25f,.25f))
-                            : NativeDiamondRenderState.mesh(part,source);
-                    transformed = transform(mesh,transform);
-                }
-                var mesh = trim(transformed,cuts);
-                if (mesh.indices().length != 0) result.add(new Source(source.part(),source.texture(),source.doubleSided(),mesh));
+            for (var source : sources(originals,part.name()))
+                append(result,source,trim(transform(NativeDiamondRenderState.mesh(part,source),transform),fixed));
+        }
+        var controls = NativeDoubleSlipGuardClearance.resolve(layout,originals,result);
+        for (var fitting : layout.fittings().parts()) {
+            if (fitting.guard()) continue;
+            var part = fitting.part();
+            var transform = fitting.transform(layout.origin(),layout.scale());
+            var span = fitting.bed();
+            for (var source : sources(originals,part.name())) {
+                var transformed = span != null ? bed(source.mesh(),span,layout.origin(),layout.scale())
+                        : transform(source.mesh(),transform);
+                append(result,source,transformed);
             }
         }
-        return List.copyOf(result);
+        return new Prepared(new NativeDoubleSlipLayout(layout.origin(),layout.scale(),layout.fixed(),controls,layout.fittings()),
+                List.copyOf(result));
+    }
+
+    private static List<Source> sources(Map<String,List<Source>> originals, String part) {
+        var sources = originals.get(part);
+        if (sources == null) throw new IllegalArgumentException("Missing native double slip part: " + part);
+        return sources;
+    }
+
+    private static void append(List<Source> output, Source source, IndexedMesh mesh) {
+        if (mesh.indices().length != 0) output.add(new Source(source.part(),source.texture(),source.doubleSided(),mesh));
     }
 
     private static IndexedMesh bed(IndexedMesh mesh, NativeDoubleSlipFittings.BedSpan span,
                                    TrackVector origin, double scale) {
-        var start = span.start();
-        var end = span.end();
-        double dx = end.center().x()-start.center().x(), dz = end.center().z()-start.center().z();
-        double lx = end.lateral().x()-start.lateral().x(), lz = end.lateral().z()-start.lateral().z();
+        var crossSections = new HashMap<Float,TrackPose>();
         var vertices = mesh.vertices().clone();
         var normal = new Vector3f();
         for (int i = 0; i < vertices.length; i += 8) {
-            double t = vertices[i+2]/BED_LENGTH;
+            var pose = crossSections.computeIfAbsent(vertices[i+2], z -> span.sample(z*scale));
+            var point = pose.position();
+            var tangent = pose.tangent();
+            double rx = pose.lateral().x(), rz = pose.lateral().z();
             double x = vertices[i]*scale;
-            double rx = start.lateral().x()+t*lx, rz = start.lateral().z()+t*lz;
-            vertices[i] = (float)(start.center().x()-origin.x()+t*dx+x*rx);
-            vertices[i+1] = (float)(start.center().y()-origin.y()+vertices[i+1]*scale);
-            vertices[i+2] = (float)(start.center().z()-origin.z()+t*dz+x*rz);
-            double fx = (dx+x*lx)/(BED_LENGTH*scale), fz = (dz+x*lz)/(BED_LENGTH*scale);
-            double nx = vertices[i+5], nz = vertices[i+7];
-            normal.set((float)(fz*nx-rz*nz),(float)((rx*fz-rz*fx)*vertices[i+6]),(float)(rx*nz-fx*nx));
+            vertices[i] = (float)(point.x()-origin.x()+x*rx);
+            vertices[i+1] = (float)(point.y()-origin.y()+vertices[i+1]*scale-span.drop());
+            vertices[i+2] = (float)(point.z()-origin.z()+x*rz);
+            double stretch = 1-x*pose.curvature();
+            double fx = tangent.x()*stretch, fy = tangent.y(), fz = tangent.z()*stretch;
+            double nx = vertices[i+5], ny = vertices[i+6], nz = vertices[i+7];
+            normal.set((float)(fz*nx+fy*rz*ny-rz*nz),(float)((rx*fz-rz*fx)*ny),
+                    (float)(rx*nz-fx*nx-fy*rx*ny));
             if (normal.lengthSquared() > 0) normal.normalize();
             vertices[i+5] = normal.x; vertices[i+6] = normal.y; vertices[i+7] = normal.z;
         }

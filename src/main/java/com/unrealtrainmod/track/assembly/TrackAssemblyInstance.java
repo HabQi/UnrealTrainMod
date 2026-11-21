@@ -279,7 +279,8 @@ public final class TrackAssemblyInstance {
         double yaw = ((tag.getDouble("Yaw") % 360) + 540) % 360 - 180;
         double gauge = tag.getDouble("Gauge");
         var value = new TrackAssemblyInstance(readUuid(tag, "Id"), definition, ports, paths, origin, yaw, gauge,
-                state, tag.getLong("Revision"), tag.hasUUID("Occupant") ? tag.getUUID("Occupant") : null,
+                definition.normalizeLoadedState(state), tag.getLong("Revision"),
+                tag.hasUUID("Occupant") ? tag.getUUID("Occupant") : null,
                 readGeometry(tag.getCompound("Geometry"), ports, paths, gauge),
                 tag.contains("ModelId", Tag.TAG_STRING) ? net.minecraft.resources.ResourceLocation.parse(tag.getString("ModelId")).toString() : null);
         if (tag.contains("TrailingPass")) {

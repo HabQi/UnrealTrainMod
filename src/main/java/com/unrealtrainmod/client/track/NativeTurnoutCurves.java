@@ -190,11 +190,50 @@ final class NativeTurnoutCurves {
         return new IndexedMesh(data,source.colors(),source.indices());
     }
 
-    record SlipSection(float rightX, float rightZ, float width, float footLimit, float bevel) {}
-    record SlipShape(SlipSection start, SlipSection end, float length, int side) {}
+    record SlipSection(float rightX, float rightZ, float width, float footLimit, float bevel, float footRelief) {}
+    record SlipShape(SlipSection start, SlipSection end, float length, int side, float visibleFrom) {}
+    record SlipGeometry(IndexedMesh mesh, float[] sections) {}
 
-    /** Bake the two shared cross sections of a slip rail link from the authored r11 rail. */
     static IndexedMesh slipStrip(IndexedMesh source, SlipShape shape) {
+        return shape.visibleFrom() == 0 && shape.start().footRelief() == 0 && shape.end().footRelief() == 0
+                ? deformSlipStrip(source,shape,null) : slipGeometry(source,shape).mesh();
+    }
+
+    /** Retain the original section parameter on the actual triangles, including a clipped toe. */
+    static SlipGeometry slipGeometry(IndexedMesh source, SlipShape shape) {
+        var sections = new float[source.colors().length];
+        var mesh = deformSlipStrip(source,shape,sections);
+        float floor = -.176f+shape.start().footRelief();
+        float slope = shape.end().footRelief()-shape.start().footRelief();
+        if (shape.start().footRelief() > 0 || shape.end().footRelief() > 0) {
+            // Clip the underside of the toe on a sloped plane, retaining its railhead and web.
+            var vertices = mesh.vertices();
+            for (int i = 0; i < sections.length; i++) vertices[i*8+1] -= floor+slope*sections[i];
+            var clipped = NativeRailClip.clip(mesh,1,0,Float.POSITIVE_INFINITY,sections);
+            mesh = clipped.mesh();
+            sections = clipped.parameters();
+            vertices = mesh.vertices();
+            for (int i = 0; i < sections.length; i++) vertices[i*8+1] += floor+slope*sections[i];
+        }
+        if (shape.visibleFrom() == 0) return new SlipGeometry(mesh,sections);
+        var data = mesh.vertices();
+        // Clip in the section parameter, carrying the deformed Z through the same interpolation.
+        for (int i = 0; i < sections.length; i++) {
+            float z = data[i*8+2];
+            data[i*8+2] = sections[i];
+            sections[i] = z;
+        }
+        var clipped = NativeRailClip.clip(mesh,shape.visibleFrom(),1,sections);
+        var vertices = clipped.mesh().vertices();
+        var retained = new float[clipped.mesh().colors().length];
+        for (int i = 0; i < retained.length; i++) {
+            retained[i] = vertices[i*8+2];
+            vertices[i*8+2] = clipped.parameters()[i];
+        }
+        return new SlipGeometry(clipped.mesh(),retained);
+    }
+
+    private static IndexedMesh deformSlipStrip(IndexedMesh source, SlipShape shape, float[] sections) {
         var data = source.vertices().clone();
         float min = Float.POSITIVE_INFINITY, max = Float.NEGATIVE_INFINITY;
         for (int i = 2; i < data.length; i += 8) { min = Math.min(min, data[i]); max = Math.max(max, data[i]); }
@@ -203,6 +242,7 @@ final class NativeTurnoutCurves {
         double offset = side * com.unrealtrainmod.track.mesh.NativeTurnoutLayout.RAIL_WORK_X;
         for (int i = 0; i < data.length; i += 8) {
             double t = (data[i+2]-min)/span;
+            if (sections != null) sections[i/8] = (float)t;
             var a = shape.start(); var b = shape.end();
             double rightX = Math.fma(b.rightX()-a.rightX(), t, a.rightX());
             double rightZ = Math.fma(b.rightZ()-a.rightZ(), t, a.rightZ());

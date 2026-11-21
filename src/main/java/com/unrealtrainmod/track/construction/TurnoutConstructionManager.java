@@ -29,6 +29,7 @@ import com.unrealtrainmod.track.TrackPlacementEndpoint;
 import com.unrealtrainmod.track.TrackPlacementGeometry;
 import com.unrealtrainmod.track.TrackVerticalCurveParameters;
 import com.unrealtrainmod.track.AssemblyPlacementGeometry;
+import com.unrealtrainmod.track.assembly.TrackAssemblyDefinition;
 import com.unrealtrainmod.track.assembly.TrackAssemblyInstance;
 import com.unrealtrainmod.track.assembly.SwitchPosition;
 import com.unrealtrainmod.track.block.TrackBlockManager;
@@ -493,6 +494,15 @@ public final class TurnoutConstructionManager {
                         assembly.occupant().toString()).withStyle(ChatFormatting.RED), true); return;
             }
             var current = assembly.state();
+            if (assembly.definition() == TrackAssemblyDefinition.DOUBLE_SLIP) {
+                String path = TrackAssemblyDefinition.nextDoubleSlipPath(current);
+                graph.setAssemblyState(assembly.id(), TrackAssemblyDefinition.doubleSlipState(path));
+                var route = assembly.definition().routes().get(path);
+                player.displayClientMessage(Component.translatable("item.unrealtrainmod.turnout_builder.switched",
+                        Component.literal(route.entrance() + "↔" + route.exit()))
+                        .withStyle(ChatFormatting.GREEN), true);
+                return;
+            }
             if (!current.controls().containsKey("main")) {
                 boolean straight = current.controls().values().stream().allMatch(position -> position == SwitchPosition.NORMAL);
                 var next = straight ? SwitchPosition.REVERSE : SwitchPosition.NORMAL;

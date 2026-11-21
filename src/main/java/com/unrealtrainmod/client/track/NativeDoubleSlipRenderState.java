@@ -2,6 +2,8 @@
 package com.unrealtrainmod.client.track;
 
 import com.unrealtrainmod.model.ModelBounds;
+import com.unrealtrainmod.track.assembly.SwitchPosition;
+import com.unrealtrainmod.track.assembly.TrackAssemblyDefinition;
 import com.unrealtrainmod.track.geometry.TrackVector;
 import com.unrealtrainmod.track.mesh.NativeDoubleSlipLayout;
 import com.unrealtrainmod.track.mesh.NativeTurnoutLayout;
@@ -23,26 +25,33 @@ import static com.unrealtrainmod.track.mesh.NativeRailCurve.dot;
 
 /** Preparation and ownership for slip rails. World submission uses the ordinary native turnout caches. */
 public final class NativeDoubleSlipRenderState implements AutoCloseable {
-    public static final String THUMBNAIL_RECIPE = "native-double-slip-r11-aligned-sleepers-10";
+    public static final String THUMBNAIL_RECIPE = "native-double-slip-r11-full-sleepers-25";
     final NativeDoubleSlipLayout layout;
     final Map<String, NativeTurnoutRenderState> switches = new LinkedHashMap<>();
     final Map<Long, RailTrackMeshData> fixed;
     NativeTurnoutLoading.Trace loading;
 
-    NativeDoubleSlipRenderState(NativeDoubleSlipLayout layout, ClientRailModelManager.Model model) {
-        this.layout = layout;
+    NativeDoubleSlipRenderState(NativeDoubleSlipLayout base, ClientRailModelManager.Model model) {
         loading = NativeTurnoutLoading.current();
         var originals = NativeTurnoutModels.sources(model.parts());
+        var preparedGeometry = NativeDoubleSlipFittingMeshes.prepare(base,originals);
+        layout = preparedGeometry.layout();
         var chunks = new LinkedHashMap<Long, RailMeshAccumulator>();
         var position = new Vector3f(); var normal = new Vector3f();
-        bakeFixed(layout,originals,layout.origin(),(sources,matrix) -> {
-            // The shared r11 ballast is wider than the limit used for individual running rails.
-            for (long chunk : NativeTurnoutMeshes.meshChunks(layout.origin(),matrix,sources,10*layout.scale())) {
-                var origin = chunkOrigin(layout, chunk);
-                var output = chunks.computeIfAbsent(chunk, ignored -> new RailMeshAccumulator(origin));
+        bakeFixed(layout,originals,preparedGeometry.sources(),layout.origin(),(sources,matrix) -> {
+            String part = sources.getFirst().part();
+            double limit = 10*layout.scale();
+            boolean split = part.startsWith("guard");
+            var owners = split ? NativeTurnoutMeshes.meshChunks(layout.origin(),matrix,sources,limit)
+                    : List.of(NativeTurnoutMeshes.meshOwner(layout.origin(),matrix,sources,limit));
+            for (long chunk : owners) {
+                var origin = chunkOrigin(layout,chunk);
+                var output = chunks.computeIfAbsent(chunk,ignored -> new RailMeshAccumulator(origin));
                 var transform = translation(layout.origin(),origin).mul(matrix);
-                for (var source : sources)
-                    NativeTurnoutMeshes.appendRailChunk(output, source, source.mesh(), transform, position, normal);
+                for (var source : sources) {
+                    if (split) NativeTurnoutMeshes.appendRailChunk(output,source,source.mesh(),transform,position,normal);
+                    else NativeTurnoutMeshes.append(output,source,source.mesh(),transform,position,normal);
+                }
             }
         });
         var data = new LinkedHashMap<Long, RailTrackMeshData>();
@@ -63,12 +72,12 @@ public final class NativeDoubleSlipRenderState implements AutoCloseable {
         return new Matrix4f().translation((float)(from.x()-to.x()),(float)(from.y()-to.y()),(float)(from.z()-to.z()));
     }
 
-    private static void bakeFixed(NativeDoubleSlipLayout layout, Map<String,List<Source>> originals,
+    private static void bakeFixed(NativeDoubleSlipLayout layout, Map<String,List<Source>> originals, List<Source> fittings,
                                   TrackVector origin, BiConsumer<List<Source>,Matrix4f> output) {
         var shapes = new LinkedHashMap<NativeTurnoutCurves.SlipShape,List<Source>>();
         try {
             for (var rail : layout.fixed()) {
-                var frame = Frame.of(rail,layout.scale());
+                var frame = Frame.of(rail,layout.scale(),0);
                 var sources = shapes.computeIfAbsent(frame.shape(), ignored -> frame.sources(originals));
                 output.accept(sources,frame.transform(origin,layout.scale()));
             }
@@ -76,7 +85,7 @@ public final class NativeDoubleSlipRenderState implements AutoCloseable {
             for (var sources : shapes.values()) sources.forEach(NativeTurnoutModels::release);
         }
         var transform = translation(layout.origin(),origin);
-        for (var source : NativeDoubleSlipFittingMeshes.bake(layout,originals)) output.accept(List.of(source),transform);
+        for (var source : fittings) output.accept(List.of(source),transform);
     }
 
     RailTrackMeshData fixedData(long chunk) {
@@ -96,23 +105,22 @@ public final class NativeDoubleSlipRenderState implements AutoCloseable {
         switches.clear();
     }
 
-    private record Frame(TrackVector start, TrackVector end, double yaw, double length,
-                         NativeTurnoutCurves.SlipShape shape) {
-        static Frame of(NativeDoubleSlipLayout.Strip rail, double scale) {
+    record Frame(TrackVector start, TrackVector end, double yaw, double length, NativeTurnoutCurves.SlipShape shape) {
+        static Frame of(NativeDoubleSlipLayout.Strip rail, double scale, float visibleFrom) {
             var start = rail.start().point(); var end = rail.end().point();
             var chord = add(end,start,-1);
             double length = NativeDoubleSlipLayout.length(chord), yaw = NativeDoubleSlipLayout.yaw(chord);
             var forward = new TrackVector(Math.sin(yaw),0,Math.cos(yaw));
             var right = NativeDoubleSlipLayout.lateral(forward);
             var shape = new NativeTurnoutCurves.SlipShape(section(rail.start(), right, forward),
-                    section(rail.end(), right, forward), quantized(length/scale), rail.side());
+                    section(rail.end(), right, forward), quantized(length/scale), rail.side(), visibleFrom);
             return new Frame(start,end,yaw,length,shape);
         }
         private static NativeTurnoutCurves.SlipSection section(NativeDoubleSlipLayout.Section section, TrackVector right,
                                                                TrackVector forward) {
             var normal = section.across();
             return new NativeTurnoutCurves.SlipSection(quantized(dot(normal,right)), quantized(dot(normal,forward)),
-                    quantized(section.width()),quantized(section.footLimit()),quantized(section.bevel()));
+                    quantized(section.width()),quantized(section.footLimit()),quantized(section.bevel()),quantized(section.footRelief()));
         }
         private static float quantized(double value) { return (float)(Math.rint(value*1e6)*1e-6); }
         Matrix4f transform(TrackVector origin, double scale) {
@@ -122,6 +130,9 @@ public final class NativeDoubleSlipRenderState implements AutoCloseable {
         List<Source> sources(Map<String, List<Source>> originals) {
             return originals.get(shape.side() > 0 ? "railL" : "railR").stream()
                     .map(source -> NativeTurnoutModels.slipStrip(source,shape)).toList();
+        }
+        NativeTurnoutLayout.Motion motion(NativeTurnoutLayout.Motion next, double rotation, boolean opensInNormal) {
+            return NativeTurnoutLayout.Motion.horizontal(next,end,length,yaw,rotation,opensInNormal);
         }
     }
 
@@ -134,9 +145,9 @@ public final class NativeDoubleSlipRenderState implements AutoCloseable {
                 for (var blade : control.blades()) {
                     NativeTurnoutLayout.Motion next = null;
                     for (var link : blade.links().reversed()) {
-                        var frame = Frame.of(link.strip(),slip.scale());
-                        next = NativeTurnoutLayout.Motion.horizontal(next,frame.end(),frame.length(),frame.yaw(),
-                                link.rotation(),blade.opensInNormal());
+                        if (link.visibleFrom() == 1) break;
+                        var frame = Frame.of(link.strip(),slip.scale(),link.visibleFrom());
+                        next = frame.motion(next,link.rotation(),blade.opensInNormal());
                         String name = Integer.toString(parts.size());
                         sources.put(name,frame.sources(originals));
                         parts.add(new NativeTurnoutLayout.Part(name,frame.start(),frame.yaw(),0,0,0,0,0,null,null,null,next));
@@ -151,19 +162,23 @@ public final class NativeDoubleSlipRenderState implements AutoCloseable {
     }
 
     static ClientRailModelManager.Model model(ClientRailModelManager.Model original) {
-        var layout = NativeDoubleSlipLayout.build(NativeDoubleSlipLayout.example(),1.435);
         var originals = NativeTurnoutModels.sources(original.parts());
+        var preparedGeometry = NativeDoubleSlipFittingMeshes.prepare(
+                NativeDoubleSlipLayout.build(NativeDoubleSlipLayout.example(),1.435),originals);
+        var layout = preparedGeometry.layout();
         var origin = new TrackVector(0,0,0);
         var output = new RailMeshAccumulator(origin);
         var position = new Vector3f(); var normal = new Vector3f();
-        bakeFixed(layout,originals,origin,(sources,transform) -> {
+        bakeFixed(layout,originals,preparedGeometry.sources(),origin,(sources,transform) -> {
             for (var source : sources) NativeTurnoutMeshes.append(output,source,source.mesh(),transform,position,normal);
         });
+        var positions = TrackAssemblyDefinition.DOUBLE_SLIP.initialState().controls();
         for (var control : layout.controls()) try (var prepared = new PreparedControl(layout,control,originals)) {
             var sources = NativeTurnoutMeshes.prepare(prepared.layout,prepared.sources);
             try {
+                float movement = positions.get(control.name()) == SwitchPosition.REVERSE ? 1 : 0;
                 NativeCrossoverMeshes.appendData(output,origin,
-                        NativeTurnoutMeshes.build(prepared.layout,sources,null,true,0));
+                        NativeTurnoutMeshes.build(prepared.layout,sources,null,true,movement));
             } finally { NativeTurnoutMeshes.release(sources); }
         }
         var data = output.finish(); var bounds = data.bounds();

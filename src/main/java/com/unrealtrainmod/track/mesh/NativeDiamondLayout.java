@@ -24,7 +24,8 @@ public record NativeDiamondLayout(TrackVector origin, double scale, List<Part> p
                                   List<OrdinaryRun> ordinary, Set<Long> chunks, AABB bounds, int samples) {
     public static final double RAIL_X = 0.74875;
     public static final double ORDINARY_PERIOD = 1.5;
-    private static final double SLEEPER_HALF_WIDTH = 1.239434, SLEEPER_HALF_LENGTH = 0.820367;
+    public static final double SLEEPER_HALF_WIDTH = 1.239434;
+    static final double SLEEPER_HALF_LENGTH = 0.820367;
     private static final double WING_X = 0.0311652;
     private static final double WING_SETBACK = 0.0625;
     // Authored head faces: wingLr's inside edge at its joint, and wingLm/Rm's working face.
@@ -265,7 +266,11 @@ public record NativeDiamondLayout(TrackVector origin, double scale, List<Part> p
         var ordinary = new ArrayList<OrdinaryRun>();
         var sleeperGroups = result == null ? null : new ArrayList<SleeperGroup>();
         if (result == null) {
-            moduleFootprints(a, scale); moduleFootprints(b, scale);
+            for (var path : List.of(a,b)) {
+                path.firstJoint = path.railEnds.stream().mapToDouble(RailEnd::distance).min().orElseThrow();
+                path.lastJoint = path.railEnds.stream().mapToDouble(RailEnd::distance).max().orElseThrow();
+                path.modules.addAll(sleeperFootprints(path,SLEEPER_HALF_WIDTH,scale));
+            }
             ordinaryRuns(a, b, center, core, scale, ordinary, parts);
             fixedTrack(parts, a, scale); fixedTrack(parts, b, scale);
 
@@ -300,23 +305,29 @@ public record NativeDiamondLayout(TrackVector origin, double scale, List<Part> p
         return layout;
     }
 
-    private static void moduleFootprints(Path path, double scale) {
-        path.firstJoint = path.railEnds.stream().mapToDouble(RailEnd::distance).min().orElseThrow();
-        path.lastJoint = path.railEnds.stream().mapToDouble(RailEnd::distance).max().orElseThrow();
+    static List<Footprint> sleeperFootprints(Path path, double halfWidth, double scale) {
         double period = ORDINARY_PERIOD*scale;
         int count = (int)Math.ceil(path.length()/period);
+        var footprints = new ArrayList<Footprint>(count);
         // Continuous conservative coverage of the other path, independent of the drawing phase.
-        for (int index = 0; index < count; index++) path.modules.add(moduleFootprint(path, (index+0.5)*period, scale));
+        for (int index = 0; index < count; index++)
+            footprints.add(moduleFootprint(path,(index+0.5)*period,halfWidth,scale));
+        return footprints;
     }
 
     private static Footprint moduleFootprint(Path path, double center, double scale) {
-        // Match the existing flattening tolerance conservatively at the outer sleeper edges.
-        var left = flatten(path, -(SLEEPER_HALF_WIDTH+0.0005)*scale, scale);
-        var right = flatten(path, (SLEEPER_HALF_WIDTH+0.0005)*scale, scale);
+        return moduleFootprint(path,center,SLEEPER_HALF_WIDTH,scale);
+    }
+
+    static Footprint moduleFootprint(Path path, double center, double halfWidth, double scale) {
+        // Allow for the flattening tolerance at the envelope edges.
+        double width = (halfWidth+0.0005)*scale;
+        var left = flatten(path, -width, scale);
+        var right = flatten(path, width, scale);
         double start = center-SLEEPER_HALF_LENGTH*scale, end = center+SLEEPER_HALF_LENGTH*scale;
         var points = new ArrayList<TrackVector>();
         for (int side : new int[]{-1, 1}) {
-            double offset = side*(SLEEPER_HALF_WIDTH+0.0005)*scale;
+            double offset = side*width;
             points.add(extendedEdge(path, start, offset)); points.add(extendedEdge(path, end, offset));
             var edges = side < 0 ? left : right;
             int low = 0, high = edges.size();
@@ -368,18 +379,22 @@ public record NativeDiamondLayout(TrackVector origin, double scale, List<Part> p
         }
     }
 
-    private static double ordinaryStart(Path path, SleeperBoundary row, int direction, double scale) {
-        double edge = row.distance()+direction*0.25*scale*Math.cos(row.yaw()-yaw(path.at(row.distance())));
+    private static double ordinarySleeperStart(Path path, double station, double heading, int direction, double scale) {
+        double edge = station+direction*0.25*scale*Math.cos(heading-yaw(path.at(station)));
         return edge+direction*0.25*scale;
+    }
+
+    static double ordinarySleeperCenter(Path path, double station, double heading, int direction, double scale) {
+        return ordinarySleeperStart(path,station,heading,direction,scale)+direction*(ORDINARY_PERIOD*scale)/2;
     }
 
     private static boolean ordinaryRun(Path path, Path other, SleeperBoundary candidate, SleeperBoundary retained, int direction,
                                         List<Footprint> core, double scale, List<OrdinaryRun> runs, List<Part> parts) {
         double period = ORDINARY_PERIOD*scale;
-        double candidateCenter = ordinaryStart(path, candidate, direction, scale)+direction*period/2;
+        double candidateCenter = ordinarySleeperCenter(path,candidate.distance(),candidate.yaw(),direction,scale);
         if (!separate(moduleFootprint(path, candidateCenter, scale), other.modules, core)) return false;
         // Replace the outermost special group: continue directly from the preceding retained row.
-        double start = ordinaryStart(path, retained, direction, scale);
+        double start = ordinarySleeperStart(path,retained.distance(),retained.yaw(),direction,scale);
         double length = direction < 0 ? start : path.length()-start;
         if (length <= 0) return false;
         double firstCenter = start+direction*period/2;
@@ -408,7 +423,7 @@ public record NativeDiamondLayout(TrackVector origin, double scale, List<Part> p
         return true;
     }
 
-    private static boolean separate(Footprint module, List<Footprint> other, List<Footprint> core) {
+    static boolean separate(Footprint module, List<Footprint> other, List<Footprint> core) {
         for (var footprint : other) if (module.intersects(footprint)) return false;
         for (var footprint : core) if (module.intersects(footprint)) return false;
         return true;

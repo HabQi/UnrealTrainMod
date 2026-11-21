@@ -20,21 +20,41 @@ public record NativeDoubleSlipLayout(TrackVector origin, double scale, List<Stri
     public static final double HEAD_WIDTH = 2 * (NativeDiamondLayout.RAIL_X - NativeTurnoutLayout.RAIL_WORK_X);
     static final double FOOT_INNER = .075-HEAD_WIDTH/2;
     static final double FOOT_OUTER = .1105;
-    private static final double OPENING = .12;
+    private static final double FLEX_BLADE_OPENING = .14;
+    private static final double SHORT_RAIL_OPENING = .12;
+    private static final double INNER_TOE_TRIM = .32;
+    private static final double OUTER_TOE_TRIM = .90;
+    private static final double INNER_FOOT_RELIEF = .060;
+    private static final double INNER_HEEL = 3.222079;
+    private static final double INNER_ARC_EXTENSION = 1;
+    private static final double INNER_FLEX_EXTENSION = 1.5;
+    private static final double FIXED_INNER_RAIL_RESERVE = .40;
+    private static final double FLEX_SEGMENT_LENGTH = .15;
     private static final double MAX_JOINT_ROTATION = Math.toRadians(.1);
     private static final List<String> CONTROLS = List.of("switch_one", "switch_two", "switch_three", "switch_four");
 
     public record Section(TrackVector point, TrackVector tangent, double width, TrackVector across,
-                          double footLimit, double bevel) {
+                          double footLimit, double bevel, double footRelief) {
+        public Section(TrackVector point, TrackVector tangent, double width, TrackVector across,
+                       double footLimit, double bevel) {
+            this(point,tangent,width,across,footLimit,bevel,0);
+        }
         public Section(TrackVector point, TrackVector tangent, double width) {
             this(point,tangent,width,lateral(tangent),FOOT_OUTER,0);
         }
         Section reversed() {
-            return new Section(point,multiply(tangent,-1),width,multiply(across,-1),footLimit,bevel);
+            return new Section(point,multiply(tangent,-1),width,multiply(across,-1),footLimit,bevel,footRelief);
+        }
+        Section interpolate(Section other, double t) {
+            return new Section(add(point,add(other.point,point,-1),t),
+                    add(tangent,add(other.tangent,tangent,-1),t), Math.fma(other.width-width,t,width),
+                    add(across,add(other.across,across,-1),t), Math.fma(other.footLimit-footLimit,t,footLimit),
+                    Math.fma(other.bevel-bevel,t,bevel), Math.fma(other.footRelief-footRelief,t,footRelief));
         }
     }
     public record Strip(Section start, Section end, int side) {}
-    public record Link(Strip strip, double rotation) {}
+    /** visibleFrom is the fraction of the link from its toe toward its heel. */
+    public record Link(Strip strip, double rotation, float visibleFrom) {}
     public record Blade(List<Link> links, boolean opensInNormal) {}
     public record Control(String name, List<Blade> blades) {}
     private record Gap(double start, double end, Section before, Section after) {}
@@ -57,7 +77,9 @@ public record NativeDoubleSlipLayout(TrackVector origin, double scale, List<Stri
         double scale = gauge / 1.435;
         var first = geometry.paths().get("first_straight").getFirst();
         var second = geometry.paths().get("second_straight").getFirst();
-        var bends = List.of(geometry.paths().get("first_crossover").get(1), geometry.paths().get("second_crossover").get(1));
+        var firstSlip = geometry.paths().get("first_crossover");
+        var secondSlip = geometry.paths().get("second_crossover");
+        var bends = List.of(firstSlip.get(1), secondSlip.get(1));
         var ends = NativeDiamondLayout.slipEnds(first, second, gauge);
         var firstPath = new NativeDiamondLayout.Path(first);
         var secondPath = new NativeDiamondLayout.Path(second);
@@ -85,15 +107,19 @@ public record NativeDoubleSlipLayout(TrackVector origin, double scale, List<Stri
             }
             fixed(fixed,main,from,main.getLength(),side,scale,start,null);
         }
-        double heel = heel(scale);
         for (int i = 0; i < bends.size(); i++) {
             var bend = bends.get(i);
+            double heel = heel(bend, scale, INNER_ARC_EXTENSION + INNER_FLEX_EXTENSION);
             int side = i == 0 ? ends.firstInnerSide() : -ends.firstInnerSide();
             fixed(fixed, bend, 0, bend.getLength(), -side, scale);
             fixed(fixed, bend, heel, bend.getLength() - heel, side, scale);
         }
-        return new NativeDoubleSlipLayout(first.sample(0).position(), scale, List.copyOf(fixed), blades.controls(),
-                NativeDoubleSlipFittings.build(firstPath,secondPath,bends,ends,frogs,scale,blades.controls()));
+        var controls = blades.controls().stream().map(control -> {
+            var rails = control.blades();
+            return new Control(control.name(),List.of(spreadSlipOpening(rails.getFirst()),rails.get(1),rails.getLast()));
+        }).toList();
+        return new NativeDoubleSlipLayout(first.sample(0).position(), scale, List.copyOf(fixed), controls,
+                NativeDoubleSlipFittings.build(firstPath, secondPath, firstSlip, secondSlip, ends, frogs, scale));
     }
 
     static void validateBlades(TrackGeometry first, TrackGeometry second, NativeDoubleSlipSolver.Solution solution,
@@ -101,13 +127,18 @@ public record NativeDoubleSlipLayout(TrackVector origin, double scale, List<Stri
         prepareBlades(first,second,List.of(solution.first().get(1),solution.second().get(1)),ends,scale);
     }
 
-    private static double heel(double scale) { return 3.222079 * scale; }
+    private static double heel(TrackGeometry bend, double scale, double extension) {
+        double base = INNER_HEEL*scale;
+        // Both ends extend equally into the same fixed rail.
+        double room = (bend.getLength() - 2*base - FIXED_INNER_RAIL_RESERVE*scale)/2;
+        return base + Math.clamp(room, 0, extension*scale);
+    }
 
     private static Blades prepareBlades(TrackGeometry first, TrackGeometry second, List<TrackGeometry> bends,
                                        NativeDiamondLayout.SlipEnds ends, double scale) {
         var controls = new ArrayList<Control>();
         var cuts = new ArrayList<Cut>();
-        double toe = scale, heel = heel(scale);
+        double toe = scale;
         for (int i = 0; i < 4; i++) {
             boolean firstLine = i < 2, reverse = i % 2 != 0;
             var main = firstLine ? first : second;
@@ -118,6 +149,8 @@ public record NativeDoubleSlipLayout(TrackVector origin, double scale, List<Stri
             var innerCrossing = forwardSide == ends.firstInnerSide() ? ends.firstSide() : ends.oppositeSide();
             var outerCrossing = forwardSide == ends.firstInnerSide() ? ends.oppositeSide() : ends.firstSide();
             var bend = bends.get(firstLine == reverse ? 1 : 0);
+            double arcEnd = heel(bend, scale, INNER_ARC_EXTENSION);
+            double heel = heel(bend, scale, INNER_ARC_EXTENSION + INNER_FLEX_EXTENSION);
             var directedMain = reverse ? main.reversed() : main;
             var directedBend = reverse ? bend.reversed() : bend;
             double transition = transitionStation(directedMain,directedBend.sample(0),
@@ -126,7 +159,7 @@ public record NativeDoubleSlipLayout(TrackVector origin, double scale, List<Stri
                     station(main, innerCrossing, firstLine, reverse), station(main, outerCrossing, firstLine, reverse),
                     station(other, innerCrossing, !firstLine, false),innerCrossing.workingPoint());
             if (bend.getLength() <= 2 * heel) throw space("inner_blade_heels", CONTROLS.get(i), side, toe, bend.getLength(), 2 * heel);
-            controls.add(new Control(CONTROLS.get(i), blades(port, forwardSide, cuts, scale, toe, heel)));
+            controls.add(new Control(CONTROLS.get(i), blades(port, forwardSide, cuts, scale, toe, arcEnd, heel)));
         }
         var gapsByRail = new ArrayList<List<Gap>>(4);
         for (int i = 0; i < 4; i++) {
@@ -159,15 +192,16 @@ public record NativeDoubleSlipLayout(TrackVector origin, double scale, List<Stri
         return new Section(add(rail.point(),lateral(tangent),-rail.side()*HEAD_WIDTH*.5*scale),tangent,HEAD_WIDTH);
     }
 
-    private static List<Blade> blades(Port port, int forwardSide, List<Cut> cuts, double scale, double toe, double heel) {
+    private static List<Blade> blades(Port port, int forwardSide, List<Cut> cuts, double scale, double toe,
+                                      double arcEnd, double heel) {
         var main = port.main();
         var bend = port.bend();
         int side = port.side();
         double offset = NativeTurnoutLayout.RAIL_WORK_X * scale;
         double outerHeel = port.outerCrossing() - .90 * scale;
         double pivot = port.innerCrossing() - .75 * scale;
-        // Extend the heel toward the approach while retaining room before the curve transition.
-        pivot -= Math.clamp((pivot - port.transition()) / 2, 0, .25 * scale);
+        // Move the heel toward the approach, using at most half of the room before the transition.
+        pivot -= Math.clamp((pivot - port.transition()) / 2, 0, .75 * scale);
         double nose = port.innerCrossing() - .04 * scale;
         double crossingEnd = port.innerCrossing();
         if (outerHeel <= port.transition() || pivot <= port.transition() || crossingEnd >= main.getLength())
@@ -176,12 +210,22 @@ public record NativeDoubleSlipLayout(TrackVector origin, double scale, List<Stri
         double stockToe = aligned(main, port.transition() + toe, side * offset,
                 edge(bend, toe, side * offset), bend.sample(toe).tangent());
         var start = edge(main, stockToe, side * offset);
-        var reference = NativeFixedRails.reference(bend, toe, heel, side * offset, start,
-                edge(bend, heel, side * offset), yaw(main.sample(stockToe).tangent()), yaw(bend.sample(heel).tangent()), scale);
+        var root = at(bend, arcEnd, side * offset);
+        var chord = add(root.point(), start, -1);
+        double bearing = yaw(chord);
+        double delta = yaw(root.tangent())-bearing;
+        double halfTurn = Math.atan2(Math.sin(delta), Math.cos(delta));
+        double slipLength = length(chord)/sinc(halfTurn);
         DoubleFunction<Section> slip = s -> {
-            var knot = reference.at(s);
-            var direction = unit(knot.first());
-            return trimmed(knot.point(), direction, side, main, stockToe + s, side * offset, scale);
+            // The closed toe arc meets the existing inner curved rail tangentially.
+            double t = s/slipLength;
+            var along = heading(bearing+(t-1)*halfTurn);
+            var direction = heading(bearing+(2*t-1)*halfTurn);
+            var horizontal = add(start, along, s*sinc(t*halfTurn));
+            var point = new TrackVector(horizontal.x(), start.y()+t*chord.y(), horizontal.z());
+            double available = availableWidth(point, direction, side, main, stockToe+s, side*offset, scale);
+            double relief = INNER_FOOT_RELIEF*(1-Math.clamp((s/scale-INNER_TOE_TRIM-.06)/.10,0,1));
+            return new Section(point,direction,taperWidth(available),lateral(direction),footLimit(available),0,relief);
         };
         DoubleFunction<Section> through = s -> {
             var frame = main.sample(port.transition() + s);
@@ -189,15 +233,42 @@ public record NativeDoubleSlipLayout(TrackVector origin, double scale, List<Stri
                     -side, bend, s, -side * offset, scale);
         };
         double blueLength = outerHeel - port.transition();
-        if (slip.apply(heel-toe).width() < HEAD_WIDTH - .0001 || through.apply(blueLength).width() < HEAD_WIDTH - .0001)
+        if (slip.apply(slipLength).width() < HEAD_WIDTH - .0001 || through.apply(blueLength).width() < HEAD_WIDTH - .0001)
             throw space("blade_heel_width", "slip", side, 0, blueLength, HEAD_WIDTH);
         addGap(cuts,port,-side,port.transition(),outerHeel,null);
         addGap(cuts,port,side,pivot,crossingEnd,crossingJoint(port));
 
-        return List.of(flexible(slip, heel-toe, heel-toe-.42*scale, side, true, scale),
-                flexible(through, blueLength, 0, -side, false, scale),
+        var inner = flexible(slip, slipLength, side, true, scale);
+        return List.of(extendSlipHeel(inner, port, arcEnd, heel, stockToe+slipLength, scale),
+                flexible(through, blueLength, -side, false, scale),
                 shortRail(port,nose,pivot,side*offset,forwardSide*offset,scale));
     }
+
+    private static Blade extendSlipHeel(Blade blade, Port port, double from, double to, double stockStation, double scale) {
+        if (to == from) return blade;
+        var links = new ArrayList<>(blade.links());
+        var previous = links.getLast().strip().end();
+        int segments = (int)Math.ceil((to-from)/(FLEX_SEGMENT_LENGTH*scale));
+        int side = port.side();
+        double offset = side*NativeTurnoutLayout.RAIL_WORK_X*scale;
+        for (int i = 1; i <= segments; i++) {
+            double station = i == segments ? to : from+(to-from)*i/segments;
+            var section = at(port.bend(),station,offset);
+            // Fit the foot beside the stock rail while preserving the running face.
+            double available = availableWidth(section.point(),section.tangent(),side,port.main(),
+                    stockStation+station-from,offset,scale);
+            var next = new Section(section.point(),section.tangent(),section.width(),section.across(),
+                    footLimit(available),0);
+            // Keep the original toe travel as the reference before distributing it over the longer blade.
+            links.add(new Link(new Strip(previous,next,side),0,0));
+            previous = next;
+        }
+        return new Blade(List.copyOf(links),blade.opensInNormal());
+    }
+
+    private static double sinc(double angle) { return angle == 0 ? 1 : Math.sin(angle)/angle; }
+
+    private static TrackVector heading(double yaw) { return new TrackVector(Math.sin(yaw),0,Math.cos(yaw)); }
 
     private static Section crossingJoint(Port port) {
         var tangent = port.main().sample(port.innerCrossing()).tangent();
@@ -214,8 +285,9 @@ public record NativeDoubleSlipLayout(TrackVector origin, double scale, List<Stri
         var atPivot = port.main().sample(pivot);
         var rootPoint = add(atPivot.position(),atPivot.lateral(),offset);
         double length = length(add(rootPoint,tip.point(),-1));
-        if (length <= OPENING*scale) throw space("short_rail_travel","slip",side,0,length,OPENING*scale);
-        double rotation = side*Math.asin(OPENING*scale/length);
+        double opening = SHORT_RAIL_OPENING * scale;
+        if (length <= opening) throw space("short_rail_travel","slip",side,0,length,opening);
+        double rotation = side*Math.asin(opening/length);
         var rootTangent = multiply(atPivot.tangent(),-1);
         // The inner lip of the foot passes the fixed heel as the blade opens.
         var root = new Section(rootPoint,rootTangent,HEAD_WIDTH,lateral(rootTangent),FOOT_OUTER,-Math.tan(Math.abs(rotation)));
@@ -226,7 +298,7 @@ public record NativeDoubleSlipLayout(TrackVector origin, double scale, List<Stri
             double station = nose+(pivot-nose)*i/segments;
             var next = i == segments ? root : shortSection(port,station,side,offset,otherOffset,scale,0);
             // Equal rotations make all links rotate as one rigid rail around the heel.
-            links.add(new Link(new Strip(previous,next,side),rotation));
+            links.add(new Link(new Strip(previous,next,side),rotation,0));
             previous = next;
         }
         return new Blade(List.copyOf(links),false);
@@ -239,8 +311,7 @@ public record NativeDoubleSlipLayout(TrackVector origin, double scale, List<Stri
         var tangent = multiply(pose.tangent(),-1);
         double available = availableWidth(point,tangent,side,port.other(),port.otherCrossing(),otherOffset,scale);
         // The crossing rail's foot extends past its working face into the nose's swept area.
-        double footLimit = Math.clamp(available-FOOT_INNER-.004,-FOOT_INNER,FOOT_OUTER);
-        return new Section(point,tangent,taperWidth(available),lateral(tangent),footLimit,bevel);
+        return new Section(point,tangent,taperWidth(available),lateral(tangent),footLimit(available),bevel);
     }
 
     private static void addGap(List<Cut> cuts, Port port, int side, double start, double end, Section joint) {
@@ -257,25 +328,22 @@ public record NativeDoubleSlipLayout(TrackVector origin, double scale, List<Stri
         return reverse ? path.getLength() - station : station;
     }
 
-    private static Blade flexible(DoubleFunction<Section> section, double length, double rigid, int side,
-                                  boolean opensInNormal, double scale) {
-        int flexCount = Math.max(3, (int)Math.ceil((length-rigid)/(.15*scale)));
+    private static Blade flexible(DoubleFunction<Section> section, double length, int side, boolean slip, double scale) {
+        int flexCount = Math.max(3, (int)Math.ceil(length/(FLEX_SEGMENT_LENGTH*scale)));
+        double target = FLEX_BLADE_OPENING * scale;
         while (true) {
             var strips = new ArrayList<Strip>();
             var weights = new ArrayList<Double>();
-            int front = (int)Math.ceil(rigid/(.25*scale));
             var previous = section.apply(0);
-            for (int i = 1; i <= front+flexCount; i++) {
-                double t = (i-front)/(double)flexCount;
-                double distance = i <= front ? rigid*i/front : rigid+(length-rigid)*t;
-                var next = section.apply(distance);
+            for (int i = 1; i <= flexCount; i++) {
+                var next = section.apply(length*i/flexCount);
                 strips.add(new Strip(previous, next, side));
-                double u = i <= front ? 0 : t - .5/flexCount;
-                weights.add(1-u*u*u*(10+u*(-15+6*u)));
+                double u = (i-.5)/flexCount;
+                // The linear inner-blade profile establishes the baseline toe travel.
+                weights.add(slip ? 1-u : 1-u*u*u*(10+u*(-15+6*u)));
                 previous = next;
             }
             double low = 0, high = .25;
-            double target = OPENING*scale;
             if (travel(strips, weights, high*side, side) < target)
                 throw space("blade_travel", "slip", side, 0, length, target);
             for (int i = 0; i < 30; i++) {
@@ -283,11 +351,23 @@ public record NativeDoubleSlipLayout(TrackVector origin, double scale, List<Stri
                 if (travel(strips,weights,test*side,side) < target) low = test;
                 else high = test;
             }
-            int required = (int)Math.ceil(1.875*high/MAX_JOINT_ROTATION);
+            int required = (int)Math.ceil((slip ? 1 : 1.875)*high/MAX_JOINT_ROTATION);
             if (required > flexCount) { flexCount = required; continue; }
             var links = new ArrayList<Link>(strips.size());
-            for (int i = 0; i < strips.size(); i++) links.add(new Link(strips.get(i), side*high*weights.get(i)));
-            return new Blade(List.copyOf(links), opensInNormal);
+            // Clip the visible toe after solving the full motion, and keep the entire heel link.
+            double trim = (slip ? INNER_TOE_TRIM : OUTER_TOE_TRIM)*scale;
+            for (int i = 0; i < strips.size(); i++) {
+                var strip = strips.get(i);
+                float visibleFrom = 0;
+                if (trim > 0 && i+1 < strips.size()) {
+                    double segmentLength = length(add(strip.end().point(),strip.start().point(),-1));
+                    double removed = Math.min(trim,segmentLength);
+                    visibleFrom = (float)(removed/segmentLength);
+                    trim -= removed;
+                }
+                links.add(new Link(strip,side*high*weights.get(i),visibleFrom));
+            }
+            return new Blade(List.copyOf(links),slip);
         }
     }
 
@@ -298,9 +378,122 @@ public record NativeDoubleSlipLayout(TrackVector origin, double scale, List<Stri
             var strip = strips.get(i);
             var chord = add(strip.end().point(), strip.start().point(), -1);
             double angle = yaw(chord) + rotation*weights.get(i);
-            opening += dot(add(chord, new TrackVector(Math.sin(angle), 0, Math.cos(angle)), -length(chord)), lateral);
+            opening += dot(add(chord, heading(angle), -length(chord)), lateral);
         }
         return -side*opening;
+    }
+
+    /** Preserve the opening at the retained toe and distribute more of it along the through blade. */
+    public static Blade spreadThroughOpening(Blade blade) {
+        var links = blade.links();
+        var toe = links.stream().filter(link -> link.visibleFrom() < 1).findFirst().orElseThrow();
+        var normal = lateral(unit(add(toe.strip().end().point(),toe.strip().start().point(),-1)));
+        int count = links.size();
+        var projection = OpeningProjection.of(links,normal);
+        double[] weights = new double[count];
+        double sign = Math.signum(toe.rotation());
+        for (int i = 0; i < count; i++) {
+            double u = (i+.5)/count;
+            weights[i] = sign*(1-u*u)*(1-Math.pow(u,12));
+        }
+        // Bound the new profile at the existing segment count, including its fixed heel.
+        double maxStep = Math.abs(weights[count-1]);
+        for (int i = 1; i < count; i++) maxStep = Math.max(maxStep,Math.abs(weights[i]-weights[i-1]));
+        double angle = projection.solve(weights,projection.original(links),sign,Math.min(.25,MAX_JOINT_ROTATION/maxStep));
+        return Double.isNaN(angle) ? blade : new Blade(rotatedLinks(links,weights,angle),blade.opensInNormal());
+    }
+
+    private static Blade spreadSlipOpening(Blade blade) {
+        var links = blade.links();
+        var toe = links.stream().filter(link -> link.visibleFrom() < 1).findFirst().orElseThrow();
+        var normal = lateral(unit(add(toe.strip().end().point(),toe.strip().start().point(),-1)));
+        double sign = Math.signum(toe.rotation());
+        double target = OpeningProjection.of(links,normal).original(links);
+        double length = links.stream().mapToDouble(NativeDoubleSlipLayout::segmentLength).sum();
+        while (true) {
+            double station = 0;
+            var weights = new double[links.size()];
+            for (int i = 0; i < weights.length; i++) {
+                double span = segmentLength(links.get(i));
+                double u = (station+span/2)/length;
+                // Rearward bias with zero slope at the fixed heel.
+                weights[i] = sign*(1-u*u*u)*(1-Math.pow(u,12));
+                station += span;
+            }
+            double angle = OpeningProjection.of(links,normal).solve(weights,target,sign,.25);
+            if (Double.isNaN(angle)) return blade;
+            var refined = new ArrayList<Link>(links.size());
+            for (int i = 0; i < weights.length; i++) {
+                double before = i == 0 ? weights[i] : weights[i-1];
+                double after = i+1 == weights.length ? 0 : weights[i+1];
+                var link = links.get(i);
+                if (angle*Math.max(Math.abs(weights[i]-before),Math.abs(weights[i]-after)) <= MAX_JOINT_ROTATION) {
+                    refined.add(link);
+                    continue;
+                }
+                // Subdivide the existing closed chord and carry its exact toe cut into the two halves.
+                var strip = link.strip();
+                var middle = strip.start().interpolate(strip.end(),.5);
+                refined.add(new Link(new Strip(strip.start(),middle,strip.side()),0,Math.min(1,2*link.visibleFrom())));
+                refined.add(new Link(new Strip(middle,strip.end(),strip.side()),0,Math.max(0,2*link.visibleFrom()-1)));
+            }
+            if (refined.size() == links.size())
+                return new Blade(rotatedLinks(links,weights,angle),blade.opensInNormal());
+            links = refined;
+        }
+    }
+
+    private static double segmentLength(Link link) {
+        return length(add(link.strip().end().point(),link.strip().start().point(),-1));
+    }
+
+    private static List<Link> rotatedLinks(List<Link> links, double[] weights, double angle) {
+        var spread = new ArrayList<Link>(links.size());
+        for (int i = 0; i < links.size(); i++) {
+            var link = links.get(i);
+            spread.add(new Link(link.strip(),angle*weights[i],link.visibleFrom()));
+        }
+        return List.copyOf(spread);
+    }
+
+    private record OpeningProjection(double[] along, double[] across) {
+        static OpeningProjection of(List<Link> links, TrackVector normal) {
+            var along = new double[links.size()]; var across = new double[links.size()];
+            for (int i = 0; i < links.size(); i++) {
+                var link = links.get(i);
+                var chord = add(link.strip().end().point(),link.strip().start().point(),-1);
+                along[i] = (1-link.visibleFrom())*dot(chord,normal);
+                across[i] = (1-link.visibleFrom())*dot(lateral(chord),normal);
+            }
+            return new OpeningProjection(along,across);
+        }
+
+        double original(List<Link> links) {
+            double displacement = 0;
+            for (int i = 0; i < along.length; i++) displacement += opening(along[i],across[i],links.get(i).rotation());
+            return displacement;
+        }
+
+        double solve(double[] weights, double target, double sign, double high) {
+            if (sign*(opening(weights,high)-target) < 0) return Double.NaN;
+            double low = 0;
+            for (int i = 0; i < 30; i++) {
+                double mid = (low+high)/2;
+                if (sign*(opening(weights,mid)-target) < 0) low = mid;
+                else high = mid;
+            }
+            return high;
+        }
+
+        private double opening(double[] weights, double angle) {
+            double displacement = 0;
+            for (int i = 0; i < along.length; i++) displacement += opening(along[i],across[i],angle*weights[i]);
+            return displacement;
+        }
+
+        private static double opening(double along, double across, double angle) {
+            return along*(Math.cos(angle)-1)+across*Math.sin(angle);
+        }
     }
 
     private static void fixed(List<Strip> strips, TrackGeometry path, double from, double to, int side, double scale) {
@@ -346,6 +539,10 @@ public record NativeDoubleSlipLayout(TrackVector origin, double scale, List<Stri
         double blend = Math.max(0, 1-Math.abs(available-HEAD_WIDTH)/.008);
         double width = Math.min(available, HEAD_WIDTH) - .008*blend*blend*blend/6;
         return Math.max(0,width);
+    }
+
+    private static double footLimit(double available) {
+        return Math.clamp(available-FOOT_INNER-.004,-FOOT_INNER,FOOT_OUTER);
     }
 
     private static double aligned(TrackGeometry path, double guess, double offset, TrackVector point, TrackVector tangent) {

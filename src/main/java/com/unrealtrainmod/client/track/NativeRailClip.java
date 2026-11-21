@@ -47,7 +47,7 @@ final class NativeRailClip {
     static IndexedMesh clipAxis(IndexedMesh mesh, int axis, float start, float end) {
         return clip(mesh,axis,start,end,null).mesh();
     }
-    private static Section clip(IndexedMesh mesh, int axis, float start, float end, float[] parameters) {
+    static Section clip(IndexedMesh mesh, int axis, float start, float end, float[] parameters) {
         var result = new Output(parameters != null);
         var originals = new Node[mesh.colors().length];
         var crossings = new HashMap<Crossing, Node>();
