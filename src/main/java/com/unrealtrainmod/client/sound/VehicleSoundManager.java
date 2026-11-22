@@ -9,6 +9,8 @@ import com.unrealtrainmod.compat.ir.IrVehicleSnapshot;
 import com.unrealtrainmod.compat.ir.IrVehicleSounds;
 import com.unrealtrainmod.compat.ir.IrControlSoundState;
 import com.unrealtrainmod.compat.ir.IrAnimationDefinition;
+import com.unrealtrainmod.compat.rtm.script.RtmScriptCache;
+import com.unrealtrainmod.compat.rtm.script.RtmSoundScriptRuntime;
 import com.unrealtrainmod.entity.TrainEntity;
 import com.unrealtrainmod.vehicle.VehicleCatalog;
 import com.unrealtrainmod.vehicle.VehicleDefinition;
@@ -31,6 +33,8 @@ import net.neoforged.neoforge.event.level.LevelEvent;
 public final class VehicleSoundManager implements ResourceManagerReloadListener {
     public static final VehicleSoundManager INSTANCE = new VehicleSoundManager();
     private final Map<Integer, Controller> vehicles = new HashMap<>();
+    private final Map<Integer, RtmVehicleSoundPlayer> rtmVehicles = new HashMap<>();
+    private final RtmScriptCache rtmScripts = RtmSoundScriptRuntime.cache();
     private Level level;
     private long generation = PackageSoundLibrary.generation();
 
@@ -55,6 +59,14 @@ public final class VehicleSoundManager implements ResourceManagerReloadListener 
                 iterator.remove();
             }
         }
+        rtmVehicles.values().removeIf(controller -> {
+            var entity = controller.entity;
+            var model = VehicleCatalog.find(entity.getModelId());
+            if (!entity.isRemoved() && mc.level.getEntity(entity.getId()) == entity
+                    && model != null && model.rtmSounds() == controller.definition) return false;
+            controller.close();
+            return true;
+        });
         boolean enabled = mc.options.getSoundSourceVolume(SoundSource.MASTER) > 0
                 && mc.options.getSoundSourceVolume(SoundSource.NEUTRAL) > 0;
         Vec3 listener = mc.gameRenderer.getMainCamera().getPosition();
@@ -62,6 +74,11 @@ public final class VehicleSoundManager implements ResourceManagerReloadListener 
             if (!(tracked instanceof TrainEntity entity) || entity.isRemoved()) continue;
             var model = VehicleCatalog.find(entity.getModelId());
             if (model == null) continue;
+            if (model.rtmSounds() != null) {
+                rtmVehicles.computeIfAbsent(entity.getId(), id -> new RtmVehicleSoundPlayer(entity, model.rtmSounds()))
+                        .tick(listener, enabled, rtmScripts);
+                continue;
+            }
             // Establish the initial edge baseline from tracked state, not the pre-spawn placeholder.
             if (entity.irSnapshot() == IrVehicleSnapshot.EMPTY) continue;
             var controller = vehicles.get(entity.getId());
@@ -92,6 +109,9 @@ public final class VehicleSoundManager implements ResourceManagerReloadListener 
     public void clear() {
         vehicles.values().forEach(Controller::close);
         vehicles.clear();
+        rtmVehicles.values().forEach(RtmVehicleSoundPlayer::close);
+        rtmVehicles.clear();
+        rtmScripts.clear();
         AnimationSoundTimings.clear();
         level = null;
     }

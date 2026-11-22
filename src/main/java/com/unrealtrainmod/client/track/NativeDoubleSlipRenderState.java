@@ -6,6 +6,8 @@ import com.unrealtrainmod.track.assembly.SwitchPosition;
 import com.unrealtrainmod.track.assembly.TrackAssemblyDefinition;
 import com.unrealtrainmod.track.geometry.TrackVector;
 import com.unrealtrainmod.track.mesh.NativeDoubleSlipLayout;
+import com.unrealtrainmod.track.mesh.NativeDoubleSlipLayout.Blade;
+import com.unrealtrainmod.track.mesh.NativeDoubleSlipLayout.Control;
 import com.unrealtrainmod.track.mesh.NativeTurnoutLayout;
 import com.unrealtrainmod.track.mesh.RailMeshAccumulator;
 import com.unrealtrainmod.track.mesh.RailTrackMeshBuilder.Source;
@@ -20,14 +22,18 @@ import net.minecraft.world.level.ChunkPos;
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
 
+import static com.unrealtrainmod.track.assembly.TrackAssemblyDefinition.DOUBLE_SLIP_MACHINE_ONE;
+import static com.unrealtrainmod.track.assembly.TrackAssemblyDefinition.DOUBLE_SLIP_MACHINE_TWO;
+import static com.unrealtrainmod.track.assembly.TrackAssemblyDefinition.DOUBLE_SLIP_MACHINE_THREE;
+import static com.unrealtrainmod.track.assembly.TrackAssemblyDefinition.DOUBLE_SLIP_MACHINE_FOUR;
 import static com.unrealtrainmod.track.mesh.NativeRailCurve.add;
 import static com.unrealtrainmod.track.mesh.NativeRailCurve.dot;
 
 /** Preparation and ownership for slip rails. World submission uses the ordinary native turnout caches. */
 public final class NativeDoubleSlipRenderState implements AutoCloseable {
-    public static final String THUMBNAIL_RECIPE = "native-double-slip-r11-full-sleepers-25";
+    public static final String THUMBNAIL_RECIPE = "native-double-slip-r11-long-moving-rails-33";
     final NativeDoubleSlipLayout layout;
-    final Map<String, NativeTurnoutRenderState> switches = new LinkedHashMap<>();
+    final Map<String, NativeTurnoutRenderState> machines = new LinkedHashMap<>();
     final Map<Long, RailTrackMeshData> fixed;
     NativeTurnoutLoading.Trace loading;
 
@@ -58,8 +64,8 @@ public final class NativeDoubleSlipRenderState implements AutoCloseable {
         chunks.forEach((chunk, output) -> data.put(chunk, output.finish()));
         fixed = Map.copyOf(data);
         try {
-            for (var control : layout.controls()) try (var prepared = new PreparedControl(layout, control, originals)) {
-                switches.put(control.name(), new NativeTurnoutRenderState(prepared.layout, prepared.sources, TrackStaticBuffers.WORLD));
+            for (var machine : machineControls(layout)) try (var prepared = new PreparedMachine(layout, machine, originals)) {
+                machines.put(machine.name(), new NativeTurnoutRenderState(prepared.layout, prepared.sources, TrackStaticBuffers.WORLD));
             }
         } catch (RuntimeException | Error failure) { close(); throw failure; }
     }
@@ -95,14 +101,33 @@ public final class NativeDoubleSlipRenderState implements AutoCloseable {
 
     void attachLoading(NativeTurnoutLoading.Trace trace) {
         loading = trace;
-        switches.values().forEach(state -> state.attachLoading(trace));
+        machines.values().forEach(state -> state.attachLoading(trace));
     }
 
-    void removeChunk(long chunk) { switches.values().forEach(state -> state.removeChunk(chunk)); }
-    void invalidateGpu() { switches.values().forEach(NativeTurnoutRenderState::invalidateGpu); }
+    void removeChunk(long chunk) { machines.values().forEach(state -> state.removeChunk(chunk)); }
+    void invalidateGpu() { machines.values().forEach(NativeTurnoutRenderState::invalidateGpu); }
     @Override public void close() {
-        switches.values().forEach(NativeTurnoutRenderState::close);
-        switches.clear();
+        machines.values().forEach(NativeTurnoutRenderState::close);
+        machines.clear();
+    }
+
+    private static List<Control> machineControls(NativeDoubleSlipLayout layout) {
+        // Each port provides its slip blade, through blade and central short rail in that order.
+        var a = layout.controls().get(0).blades();
+        var b = layout.controls().get(1).blades();
+        var c = layout.controls().get(2).blades();
+        var d = layout.controls().get(3).blades();
+        return List.of(
+                new Control(DOUBLE_SLIP_MACHINE_ONE, List.of(a.getFirst(), a.get(1),
+                        oppositeMovement(c.getFirst()), oppositeMovement(c.get(1)))),
+                new Control(DOUBLE_SLIP_MACHINE_TWO, List.of(a.getLast(), oppositeMovement(c.getLast()))),
+                new Control(DOUBLE_SLIP_MACHINE_THREE, List.of(b.getLast(), oppositeMovement(d.getLast()))),
+                new Control(DOUBLE_SLIP_MACHINE_FOUR, List.of(b.getFirst(), b.get(1),
+                        oppositeMovement(d.getFirst()), oppositeMovement(d.get(1)))));
+    }
+
+    private static Blade oppositeMovement(Blade blade) {
+        return new Blade(blade.links(), !blade.opensInNormal());
     }
 
     record Frame(TrackVector start, TrackVector end, double yaw, double length, NativeTurnoutCurves.SlipShape shape) {
@@ -136,13 +161,13 @@ public final class NativeDoubleSlipRenderState implements AutoCloseable {
         }
     }
 
-    private static final class PreparedControl implements AutoCloseable {
+    private static final class PreparedMachine implements AutoCloseable {
         final NativeTurnoutLayout layout;
         final Map<String,List<Source>> sources = new LinkedHashMap<>();
-        PreparedControl(NativeDoubleSlipLayout slip, NativeDoubleSlipLayout.Control control, Map<String,List<Source>> originals) {
+        PreparedMachine(NativeDoubleSlipLayout slip, Control machine, Map<String,List<Source>> originals) {
             var parts = new ArrayList<NativeTurnoutLayout.Part>();
             try {
-                for (var blade : control.blades()) {
+                for (var blade : machine.blades()) {
                     NativeTurnoutLayout.Motion next = null;
                     for (var link : blade.links().reversed()) {
                         if (link.visibleFrom() == 1) break;
@@ -173,10 +198,10 @@ public final class NativeDoubleSlipRenderState implements AutoCloseable {
             for (var source : sources) NativeTurnoutMeshes.append(output,source,source.mesh(),transform,position,normal);
         });
         var positions = TrackAssemblyDefinition.DOUBLE_SLIP.initialState().controls();
-        for (var control : layout.controls()) try (var prepared = new PreparedControl(layout,control,originals)) {
+        for (var machine : machineControls(layout)) try (var prepared = new PreparedMachine(layout,machine,originals)) {
             var sources = NativeTurnoutMeshes.prepare(prepared.layout,prepared.sources);
             try {
-                float movement = positions.get(control.name()) == SwitchPosition.REVERSE ? 1 : 0;
+                float movement = positions.get(machine.name()) == SwitchPosition.REVERSE ? 1 : 0;
                 NativeCrossoverMeshes.appendData(output,origin,
                         NativeTurnoutMeshes.build(prepared.layout,sources,null,true,movement));
             } finally { NativeTurnoutMeshes.release(sources); }

@@ -32,7 +32,7 @@ public final class TrainPreviewRenderer implements AutoCloseable {
         queue.clear();
         try {
             return renderer.capture(model.bounds(), -90, 22, true,
-                    PreviewRenderer.VEHICLE_THUMBNAIL_SAMPLE_SCALE, pose -> draw(model, pose));
+                    PreviewRenderer.VEHICLE_THUMBNAIL_SAMPLE_SCALE, false, pose -> draw(model, pose));
         } finally {
             queue.clear();
         }

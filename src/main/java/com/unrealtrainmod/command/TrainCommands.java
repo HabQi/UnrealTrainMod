@@ -16,6 +16,8 @@ import com.mojang.brigadier.suggestion.SuggestionsBuilder;
 import com.unrealtrainmod.entity.TrainEntity;
 import com.unrealtrainmod.compat.ir.IrControlDefinition;
 import com.unrealtrainmod.compat.ir.IrVehicleDefinition;
+import com.unrealtrainmod.compat.rtm.RtmRollsign;
+import com.unrealtrainmod.compat.rtm.RtmVehicleSounds.Announcement;
 import com.unrealtrainmod.track.block.TrackBlockManager;
 import com.unrealtrainmod.train.TrainAnchor;
 import com.unrealtrainmod.train.TrainCarEnd;
@@ -43,6 +45,8 @@ import static com.mojang.brigadier.arguments.BoolArgumentType.bool;
 import static com.mojang.brigadier.arguments.BoolArgumentType.getBool;
 import static com.mojang.brigadier.arguments.DoubleArgumentType.doubleArg;
 import static com.mojang.brigadier.arguments.DoubleArgumentType.getDouble;
+import static com.mojang.brigadier.arguments.IntegerArgumentType.getInteger;
+import static com.mojang.brigadier.arguments.IntegerArgumentType.integer;
 import static net.minecraft.commands.Commands.argument;
 import static net.minecraft.commands.Commands.literal;
 
@@ -101,6 +105,8 @@ public final class TrainCommands {
                 .then(literal("reverse").then(vehicleArgument()
                         .executes(context -> execute(context, "reverse", TrainManager::reverse))))
                 .then(door)
+                .then(rollsignCommands())
+                .then(announcementCommands())
                 .then(irCommands())
                 .then(literal("info").then(vehicleArgument().executes(TrainCommands::info)))
                 .then(literal("debug")
@@ -113,6 +119,76 @@ public final class TrainCommands {
                             return 1;
                         })));
         event.getDispatcher().register(literal("utm").requires(source -> source.hasPermission(2)).then(train));
+    }
+
+    private static LiteralArgumentBuilder<CommandSourceStack> rollsignCommands() {
+        return literal("rollsign").then(vehicleArgument()
+                .then(literal("list").executes(context -> {
+                    var vehicle = vehicle(context);
+                    var sign = rollsign(vehicle);
+                    sendRollsign(context, vehicle, sign);
+                    for (int i = 0; i < sign.names().size(); i++) {
+                        var option = Component.translatable(PREFIX + "rollsign.entry", i, sign.names().get(i));
+                        context.getSource().sendSuccess(() -> option, false);
+                    }
+                    return sign.names().size();
+                }))
+                .then(literal("set").then(argument("index", integer(0)).executes(context -> {
+                    var vehicle = vehicle(context);
+                    var sign = rollsign(vehicle);
+                    int index = getInteger(context, "index");
+                    if (index >= sign.names().size()) throw error("rollsign_index", sign.names().size() - 1);
+                    vehicle.setRollsignIndex(index);
+                    sendRollsign(context, vehicle, sign);
+                    return 1;
+                }))));
+    }
+
+    private static RtmRollsign rollsign(TrainEntity vehicle) throws CommandSyntaxException {
+        var definition = VehicleCatalog.find(vehicle.getModelId());
+        if (definition == null || definition.rollsign() == null) throw error("rollsign_unsupported");
+        return definition.rollsign();
+    }
+
+    private static void sendRollsign(CommandContext<CommandSourceStack> context, TrainEntity vehicle, RtmRollsign sign) {
+        int index = sign.frame(vehicle.rollsignIndex());
+        context.getSource().sendSuccess(() -> Component.translatable(PREFIX + "rollsign.current",
+                vehicle.getUUID().toString(), index, sign.names().get(index)), false);
+    }
+
+    private static LiteralArgumentBuilder<CommandSourceStack> announcementCommands() {
+        return literal("announcement").then(vehicleArgument()
+                .then(literal("list").executes(context -> {
+                    var announcements = announcements(vehicle(context));
+                    for (int i = 0; i < announcements.size(); i++) {
+                        var entry = announcements.get(i);
+                        if (entry.sound() == null) continue;
+                        var line = Component.translatable(PREFIX + "announcement.entry", i, entry.name());
+                        context.getSource().sendSuccess(() -> line, false);
+                    }
+                    return announcements.size();
+                }))
+                .then(literal("play").then(argument("index", integer(0)).executes(context -> {
+                    var vehicle = vehicle(context);
+                    var announcements = announcements(vehicle);
+                    int index = getInteger(context, "index");
+                    if (index >= announcements.size() || announcements.get(index).sound() == null) {
+                        throw error("announcement_index", index);
+                    }
+                    vehicle.playAnnouncement(index);
+                    context.getSource().sendSuccess(() -> Component.translatable(PREFIX + "announcement.played",
+                            index, announcements.get(index).name()), false);
+                    return 1;
+                }))));
+    }
+
+    private static List<Announcement> announcements(TrainEntity vehicle)
+            throws CommandSyntaxException {
+        var model = VehicleCatalog.find(vehicle.getModelId());
+        if (model == null || model.rtmSounds() == null || model.rtmSounds().announcements().isEmpty()) {
+            throw error("announcement_unsupported");
+        }
+        return model.rtmSounds().announcements();
     }
 
     private static LiteralArgumentBuilder<CommandSourceStack> irCommands() {

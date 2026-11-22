@@ -5,6 +5,7 @@
 package com.unrealtrainmod.registry;
 
 import com.unrealtrainmod.UnrealTrainMod;
+import com.unrealtrainmod.track.construction.TrackConstructionType;
 import net.minecraft.core.component.DataComponentType;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.ResourceLocation;
@@ -20,6 +21,9 @@ public final class ModDataComponents {
     public static final DeferredHolder<DataComponentType<?>, DataComponentType<ResourceLocation>> SELECTED_RAIL_MODEL =
             TYPES.register("selected_rail_model", () -> DataComponentType.<ResourceLocation>builder()
                     .persistent(ResourceLocation.CODEC).networkSynchronized(ResourceLocation.STREAM_CODEC).build());
+    public static final DeferredHolder<DataComponentType<?>, DataComponentType<TrackConstructionType>> SELECTED_RAIL_VARIANT =
+            TYPES.register("selected_rail_variant", () -> DataComponentType.<TrackConstructionType>builder()
+                    .persistent(TrackConstructionType.CODEC).build());
 
     public static final DeferredHolder<DataComponentType<?>, DataComponentType<ResourceLocation>> SELECTED_CONNECTOR_MODEL =
             TYPES.register("selected_connector_model", () -> DataComponentType.<ResourceLocation>builder()

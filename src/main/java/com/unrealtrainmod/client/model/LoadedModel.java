@@ -14,6 +14,7 @@ import com.unrealtrainmod.model.ModelData;
 import com.unrealtrainmod.vehicle.VehicleAction;
 import com.unrealtrainmod.vehicle.VehicleDefinition;
 import com.unrealtrainmod.compat.ir.IrVehicleDefinition;
+import com.unrealtrainmod.compat.rtm.RtmRollsign;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -47,6 +48,9 @@ public record LoadedModel(List<Instance> instances, ModelBounds bounds, IrVehicl
         public Map<VehicleAction, ActionSelection> actionSelections() { return prepared.actionSelections(); }
         public Map<String, PartSelection> partsByName() { return prepared.partsByName(); }
         public Map<IrVehicleDefinition, IrModelBinding> irBindings() { return prepared.irBindings(); }
+        public List<PreparedModel.RollsignFrame> rollsigns(RtmRollsign sign) {
+            return sign == null ? List.of() : prepared.rollsigns().getOrDefault(sign, List.of());
+        }
         public List<com.unrealtrainmod.client.renderer.RenderBatch> batches() { return prepared.batches(); }
 
         public boolean texturesReady() {
@@ -105,7 +109,8 @@ public record LoadedModel(List<Instance> instances, ModelBounds bounds, IrVehicl
             if (gpu != null) { gpu.close(); gpu = null; }
         }
     }
-    public record Instance(Source model, VehicleDefinition.Instance definition, PartSelection visibleParts, IrModelBinding irBinding) {
+    public record Instance(Source model, VehicleDefinition.Instance definition, PartSelection visibleParts,
+                           IrModelBinding irBinding, List<PreparedModel.RollsignFrame> rollsigns) {
         public ModelData.Position offset() { return definition.offset(); }
     }
 }

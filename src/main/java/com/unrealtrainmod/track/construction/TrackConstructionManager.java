@@ -8,7 +8,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import com.unrealtrainmod.track.model.RailCatalog;
 import com.unrealtrainmod.UnrealTrainMod;
-import com.unrealtrainmod.registry.ModDataComponents;
+import com.unrealtrainmod.item.RailPlacerItem;
 import com.unrealtrainmod.network.payload.TrackConstructionPayload;
 import com.unrealtrainmod.network.payload.TrackConstructionPayload.Feedback;
 import com.unrealtrainmod.network.payload.TrackConstructionPayload.Phase;
@@ -76,7 +76,7 @@ public final class TrackConstructionManager {
         if (event.getHand() == InteractionHand.MAIN_HAND
                 && (event.getItemStack().is(UnrealTrainMod.TRACK_BUILDER.get())
                 || event.getItemStack().is(UnrealTrainMod.RAIL_PLACER.get())
-                || event.getItemStack().getItem() instanceof com.unrealtrainmod.item.TurnoutBuilderItem
+                || event.getItemStack().is(UnrealTrainMod.TURNOUT_BUILDER.get())
                 || event.getItemStack().is(UnrealTrainMod.TRACK_WRENCH.get()))) {
             event.setUseBlock(TriState.FALSE);
         }
@@ -492,8 +492,9 @@ public final class TrackConstructionManager {
             publish(player, session, Feedback.LINE_NOT_READY);
             return;
         }
-        var modelId = player.getMainHandItem().get(ModDataComponents.SELECTED_RAIL_MODEL.get());
-        if (com.unrealtrainmod.track.model.NativeTurnoutCatalog.contains(modelId)) {
+        var selection = RailPlacerItem.selection(player.getMainHandItem());
+        var modelId = selection.modelId();
+        if (!selection.forOrdinaryTrack()) {
             publish(player, session, Feedback.MODEL_UNSUPPORTED);
             return;
         }

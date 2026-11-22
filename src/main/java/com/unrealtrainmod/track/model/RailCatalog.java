@@ -24,13 +24,21 @@ public final class RailCatalog {
         byId = index;
     }
 
-    public static boolean supportsAssembly(ResourceLocation id, TrackConstructionType kind) {
-        if (kind == TrackConstructionType.DOUBLE_SLIP) return NativeTurnoutCatalog.DOUBLE_SLIP_R11.equals(id);
-        if (kind == TrackConstructionType.SCISSORS_CROSSOVER) return NativeTurnoutCatalog.SCISSORS_R11.equals(id);
-        if (NativeTurnoutCatalog.contains(id)) return NativeTurnoutCatalog.supports(id, kind);
-        var rail = find(id);
-        return rail != null && (rail.source().format() != RailDefinition.Format.MQO
-                || kind == TrackConstructionType.SIMPLE_TURNOUT);
+    public record Selection(ResourceLocation modelId, TrackConstructionType variant) {
+        public TrackConstructionType constructionType() {
+            if (variant != null) {
+                var rail = find(modelId);
+                return rail != null && rail.source().format() == RailDefinition.Format.IR_OBJ
+                        && (variant == TrackConstructionType.DIAMOND_CROSSING || variant == TrackConstructionType.SINGLE_CROSSOVER)
+                        ? variant : null;
+            }
+            var nativeType = NativeTurnoutCatalog.constructionType(modelId);
+            return nativeType != null ? nativeType : find(modelId) != null ? TrackConstructionType.SIMPLE_TURNOUT : null;
+        }
+
+        public boolean forOrdinaryTrack() {
+            return variant == null && !NativeTurnoutCatalog.contains(modelId);
+        }
     }
 
     public static List<RailDefinition> all() { return models; }

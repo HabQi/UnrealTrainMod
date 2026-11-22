@@ -11,7 +11,7 @@ import com.unrealtrainmod.model.MaterialRenderMode;
 /** Conservative alpha queries for nearest-filtered, repeating textures. Exists only during preparation. */
 final class TextureAlpha {
     private static final int PARTIAL = 1, OPAQUE = 2;
-    static final TextureAlpha WHITE = new TextureAlpha(OPAQUE);
+    static final TextureAlpha FULLY_OPAQUE = new TextureAlpha(OPAQUE);
     private final int width, height, stride;
     private final int constantMask;
     private final int[] partial, opaque;

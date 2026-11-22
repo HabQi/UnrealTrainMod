@@ -50,7 +50,8 @@ public final class RailModelScreen extends BaseTrainScreen {
         this.slot = slot;
         this.dimension = dimension;
         originalStack = stack;
-        selected = RailSelection.find(RailPlacerItem.selectedModel(stack));
+        var selection = RailPlacerItem.selection(stack);
+        selected = models.stream().filter(model -> model.matches(selection)).findFirst().orElse(null);
         if (selected == null && !models.isEmpty()) selected = models.getFirst();
     }
 
@@ -117,7 +118,7 @@ public final class RailModelScreen extends BaseTrainScreen {
         pendingRequest = UUID.randomUUID();
         status = Component.translatable("gui.unrealtrainmod.models.pending");
         updateWidgets();
-        PacketDistributor.sendToServer(new SelectRailModelPayload(pendingRequest, slot, selected.id()));
+        PacketDistributor.sendToServer(new SelectRailModelPayload(pendingRequest, slot, selected.id(), selected.variant()));
     }
 
     public void acceptResult(RailModelSelectionResultPayload payload) {

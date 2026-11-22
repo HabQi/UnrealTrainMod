@@ -27,7 +27,7 @@ import org.slf4j.LoggerFactory;
 public final class IrisCompat {
     private static MethodHandle inUse, shadowPass, modelView, projection, frustum;
     private static MethodHandle wrapEntity, handActive, originalBuffer;
-    private static VarHandle previewShaderBypass;
+    private static VarHandle previewShaderBypass, extendedVertexFormat;
     private static Class<?> bufferWrapper;
     private static final IdentityHashMap<RenderType, RenderType> ENTITY_TYPES = new IdentityHashMap<>();
     private static final MethodHandle[] getIdentity = new MethodHandle[3], setIdentity = new MethodHandle[3];
@@ -71,10 +71,12 @@ public final class IrisCompat {
             LoggerFactory.getLogger(IrisCompat.class).error("Cannot connect to the installed Iris API", exception);
         }
         try {
-            var bypass = Class.forName("net.irisshaders.iris.vertices.ImmediateState").getField("bypass");
-            previewShaderBypass = MethodHandles.publicLookup().unreflectVarHandle(bypass);
+            var state = Class.forName("net.irisshaders.iris.vertices.ImmediateState");
+            var lookup = MethodHandles.publicLookup();
+            previewShaderBypass = lookup.unreflectVarHandle(state.getField("bypass"));
+            extendedVertexFormat = lookup.unreflectVarHandle(state.getField("renderWithExtendedVertexFormat"));
         } catch (ReflectiveOperationException exception) {
-            LoggerFactory.getLogger(IrisCompat.class).warn("Cannot isolate GUI preview shaders from Iris", exception);
+            LoggerFactory.getLogger(IrisCompat.class).warn("Cannot isolate GUI preview state from Iris", exception);
         }
     }
 
@@ -90,6 +92,18 @@ public final class IrisCompat {
 
     public record PreviewShaders(boolean previous) implements AutoCloseable {
         @Override public void close() { previewShaderBypass.set(previous); }
+    }
+
+    /** GUI rail pages carry native vertices. Iris can extend NEW_ENTITY when configuring a VAO. */
+    public static PreviewVertices previewVertices() {
+        if (!active || extendedVertexFormat == null) return null;
+        boolean previous = (boolean)extendedVertexFormat.get();
+        extendedVertexFormat.set(false);
+        return new PreviewVertices(previous);
+    }
+
+    public record PreviewVertices(boolean previous) implements AutoCloseable {
+        @Override public void close() { extendedVertexFormat.set(previous); }
     }
 
     public static boolean handPass() {

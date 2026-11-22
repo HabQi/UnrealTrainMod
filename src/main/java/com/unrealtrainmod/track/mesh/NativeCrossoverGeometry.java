@@ -43,14 +43,13 @@ public final class NativeCrossoverGeometry {
             for (var part : layout.parts()) {
                 var points = new ArrayList<Point>();
                 double length = part.bladeLength() > 0 ? part.bladeLength() : part.visibleLength();
+                var corners = motionCorners(part,length);
                 for (int step = 0; step <= 16; step++) {
                     var transform = part.transform(origin,scale,step/16f);
-                    // Pad between angular samples as well as the source foot width.
-                    double margin = .001;
-                    for (double x : new double[]{part.localX()-.07479225-margin,part.localX()+.07479225+margin})
-                        for (double z : new double[]{part.localZ()-margin,part.localZ()+length+margin}) {
-                            transform.transformPosition(vertex.set((float)x,0,(float)z)); points.add(new Point(vertex.x,vertex.z));
-                        }
+                    for (var corner : corners) {
+                        transform.transformPosition(vertex.set((float)corner.x(),(float)corner.y(),(float)corner.z()));
+                        points.add(new Point(vertex.x,vertex.z));
+                    }
                 }
                 areas.add(polygon(hull(points)));
             }
@@ -72,6 +71,36 @@ public final class NativeCrossoverGeometry {
                                 .in(controls.get(control),part.name()));
             }
         }
+    }
+
+    private static List<TrackVector> motionCorners(NativeTurnoutLayout.Part part, double length) {
+        // Pad between angular samples as well as the source foot width.
+        double margin = .001;
+        var corners = new ArrayList<TrackVector>();
+        if (part.railBend() == null || !part.railBend().longSection()) {
+            for (double x : new double[]{part.localX()-.07479225-margin,part.localX()+.07479225+margin})
+                for (double z : new double[]{part.localZ()-margin,part.localZ()+length+margin})
+                    corners.add(new TrackVector(x,0,z));
+            return corners;
+        }
+        // The longer strip is linear between two swept end sections. Include
+        // their tilted feet when testing clearance against the other cores.
+        var curve = part.railBend().curve();
+        var origin = new TrackVector(part.localX(),0,part.localZ());
+        for (double station : new double[]{0,length}) {
+            var knot = curve.at(station);
+            var tangent = multiply(knot.first(),1/Math.sqrt(dot(knot.first(),knot.first())));
+            var lateral = cross(curve.up(),tangent);
+            lateral = multiply(lateral,1/Math.sqrt(dot(lateral,lateral)));
+            var up = cross(tangent,lateral);
+            var center = add(knot.point(),origin,1);
+            for (double x : new double[]{-.075,.075}) for (double y : new double[]{-.176,0}) {
+                var p = add(add(center,lateral,x),up,y);
+                for (double dx : new double[]{-margin,margin}) for (double dz : new double[]{-margin,margin})
+                    corners.add(new TrackVector(p.x()+dx,p.y(),p.z()+dz));
+            }
+        }
+        return corners;
     }
     /** Single crossovers have no central crossing hardware that can legitimately overlap two cores. */
     static void validateHardware(List<NativeDiamondLayout.Part> parts, double scale,

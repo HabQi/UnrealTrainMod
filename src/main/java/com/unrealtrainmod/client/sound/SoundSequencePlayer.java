@@ -50,8 +50,15 @@ final class SoundSequencePlayer {
     }
 
     void updateEvent(TrainEntity entity, long counter, Vec3 listener, boolean enabled) {
-        update(entity, false, counter, true, true, false, 1, 1,
-                PackageSoundInstance.position(entity, offset).distanceToSqr(listener), enabled);
+        updateEvent(entity, counter, PackageSoundInstance.position(entity, offset).distanceToSqr(listener), enabled);
+    }
+
+    void updateEvent(TrainEntity entity, long counter, double distanceSquared, boolean enabled) {
+        update(entity, false, counter, true, true, false, 1, 1, distanceSquared, enabled);
+    }
+
+    void startEvent(TrainEntity entity, long counter, double distanceSquared, boolean enabled) {
+        update(entity, false, counter, true, true, true, 1, 1, distanceSquared, enabled);
     }
 
     private void update(TrainEntity entity, boolean requested, long counter, boolean eventOnly, boolean pulse, boolean pendingEvent,

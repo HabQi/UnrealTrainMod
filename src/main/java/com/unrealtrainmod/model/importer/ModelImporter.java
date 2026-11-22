@@ -58,6 +58,8 @@ public final class ModelImporter {
             options += ":contact-v" + ContactFaceEliminator.VERSION + ":" + eliminate;
             if (eliminate) options += ":" + maxTextureSize + ":" + source.cullFaces()
                     + ":" + new TreeMap<>(source.materialRenderModes());
+        } else {
+            options += ":mqo-v" + MqoParser.VEHICLE_IMPORT_VERSION;
         }
         var geometry = cache.load(source.model(), "mesh", options, ModelCacheCodecs.VEHICLE_GEOMETRY,
                 () -> loadGeometry(source, eliminate, opaqueTextures));
@@ -105,7 +107,7 @@ public final class ModelImporter {
             bindings = imported.textures();
         } else {
             try (var input = MqoModelInput.open(source.model().open(), source.model().entry())) {
-                model = parseMqo(input);
+                model = MqoParser.parseVehicle(input, StandardCharsets.UTF_8);
             }
         }
         var components = ir ? IrModelComponents.read(model, source.scale(), source.model().toString()) : List.<IrModelComponent>of();

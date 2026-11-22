@@ -28,6 +28,7 @@ import com.unrealtrainmod.vehicle.VehicleMotionSpec;
 import com.unrealtrainmod.vehicle.VehiclePerformanceSpec;
 import com.unrealtrainmod.vehicle.VehiclePartRole;
 import com.unrealtrainmod.track.geometry.TrackVector;
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
@@ -127,7 +128,8 @@ final class RtmVehicleAdapter {
             var definition = new VehicleDefinition(id, name, config, RtmButtonTexture.read(json, archive, prefix, config),
                     GsonHelper.getAsString(json, "trainType", ""), parts, bounds,
                     readMotionSpec(json, bounds, bogiePositions), VehiclePerformanceSpec.DEFAULT,
-                    readInteriorSpec(json, bounds, name), com.unrealtrainmod.compat.ir.IrVehicleDefinition.NONE);
+                    readInteriorSpec(json, bounds, name), com.unrealtrainmod.compat.ir.IrVehicleDefinition.NONE,
+                    RtmRollsign.read(json, archive, prefix, config), RtmVehicleSounds.read(json, archive, prefix, config));
             definitions.put(id, definition);
             report.registered(LoadReport.Kind.RTM_VEHICLE);
         } catch (IOException | RuntimeException exception) {
@@ -141,9 +143,10 @@ final class RtmVehicleAdapter {
         var asset = source.model();
         var bounds = boundsCache.get(asset);
         if (bounds == null) {
-            bounds = cache.load(asset, "bounds", "rtm-vehicle:" + ModelSource.MQO_SCALE, ModelCacheCodecs.BOUNDS, () -> {
+            String options = "rtm-vehicle:" + MqoParser.VEHICLE_IMPORT_VERSION + ":" + source.scale();
+            bounds = cache.load(asset, "bounds", options, ModelCacheCodecs.BOUNDS, () -> {
                 try (var input = MqoModelInput.open(archive.open(asset.entry()), asset.entry())) {
-                    return MqoParser.scanBounds(input, StandardCharsets.UTF_8, ModelSource.MQO_SCALE);
+                    return MqoParser.scanVehicleBounds(input, StandardCharsets.UTF_8, source.scale());
                 }
             });
             boundsCache.put(asset, bounds);
@@ -373,39 +376,44 @@ final class RtmVehicleAdapter {
             var texture = element.getAsJsonArray();
             if (texture.size() < 2) throw new IOException("Expected material name and texture path");
             String material = texture.get(0).getAsString();
-            var image = archive.resolve(prefix, texture.get(1).getAsString());
+            String path = texture.get(1).getAsString();
+            var image = resolveTexture(archive, prefix, path, asset, material, "using the missing texture placeholder");
             var flags = texture.size() > 2 ? Arrays.stream(texture.get(2).getAsString().split(","))
                     .map(String::strip).toList() : List.<String>of();
             ModelTexture.Lights lights = null;
             if (flags.contains("Light")) {
                 if (texture.size() > 6) throw new IOException(model + ": at most three light textures are supported");
-                var layers = new PackageAsset[3];
-                for (int layer = 0; layer < layers.length; layer++) {
-                    if (texture.size() > 3) {
-                        if (layer + 3 < texture.size()) {
-                            layers[layer] = archive.resolve(prefix, texture.get(layer + 3).getAsString());
-                        }
-                    } else if (flags.contains("OneTex")) {
-                        layers[layer] = image;
-                    } else {
-                        String path = texture.get(1).getAsString();
-                        int dot = path.lastIndexOf('.');
-                        String lightPath = (dot <= path.lastIndexOf('/') ? path : path.substring(0, dot))
-                                + "_light" + layer + ".png";
-                        try {
-                            layers[layer] = archive.resolve(prefix, lightPath);
-                        } catch (IOException exception) {
-                            LOGGER.warn("RTM {} material '{}': ignoring missing light layer {}: {}",
-                                    asset, material, layer, lightPath);
-                        }
+                boolean explicitLayers = texture.size() > 3;
+                if (!explicitLayers && flags.contains("OneTex")) {
+                    lights = new ModelTexture.Lights(image, image, image);
+                } else {
+                    var layers = new PackageAsset[3];
+                    int dot = path.lastIndexOf('.');
+                    String stem = dot <= path.lastIndexOf('/') ? path : path.substring(0, dot);
+                    int layerCount = explicitLayers ? texture.size() - 3 : layers.length;
+                    for (int layer = 0; layer < layerCount; layer++) {
+                        String lightPath = explicitLayers ? texture.get(layer + 3).getAsString()
+                                : stem + "_light" + layer + ".png";
+                        layers[layer] = resolveTexture(archive, prefix, lightPath, asset, material,
+                                "skipping light layer " + layer);
                     }
+                    lights = new ModelTexture.Lights(layers[0], layers[1], layers[2]);
                 }
-                lights = new ModelTexture.Lights(layers[0], layers[1], layers[2]);
             }
             textures.put(material, new ModelTexture(image, flags.contains("AlphaBlend"), lights));
         }
         return new ModelSource(asset, textures, readMaterialRenderModes(json, model), smoothing, cullFaces,
                 ModelSource.Format.MQO, ModelSource.MQO_SCALE, renderer);
+    }
+
+    private static PackageAsset resolveTexture(PackageArchive archive, String prefix, String path,
+                                               PackageAsset model, String material, String fallback) throws IOException {
+        try {
+            return archive.resolve(prefix, path);
+        } catch (FileNotFoundException exception) {
+            LOGGER.warn("RTM {} material '{}': {}; {}", model, material, exception.getMessage(), fallback);
+            return null;
+        }
     }
 
     private static Map<String, MaterialRenderMode> readMaterialRenderModes(JsonObject json, String model) throws IOException {

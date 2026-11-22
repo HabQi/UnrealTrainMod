@@ -7,6 +7,7 @@ package com.unrealtrainmod.client.model;
 import com.unrealtrainmod.client.renderer.RenderBatch;
 import com.unrealtrainmod.vehicle.VehicleAction;
 import com.unrealtrainmod.compat.ir.IrVehicleDefinition;
+import com.unrealtrainmod.compat.rtm.RtmRollsign;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -16,4 +17,6 @@ public record PreparedModel(List<ModelPart> parts, PartSelection visibleParts,
                             Map<Set<String>, PartSelection> bodyParts,
                             Map<VehicleAction, ActionSelection> actionSelections,
                             Map<String, PartSelection> partsByName, Map<IrVehicleDefinition, IrModelBinding> irBindings,
-                            List<RenderBatch> batches) {}
+                            Map<RtmRollsign, List<RollsignFrame>> rollsigns, List<RenderBatch> batches) {
+    public record RollsignFrame(PartSelection lit, PartSelection fullBright) {}
+}

@@ -25,24 +25,12 @@ public final class NativeTurnoutCatalog {
                 : SINGLE_CROSSOVER_R11.equals(id) ? "native_single_crossover" : SCISSORS_R11.equals(id) ? "native_scissors"
                 : DIAMOND_R11.equals(id) ? "native_diamond" : "native_turnout");
     }
-    public static boolean supports(ResourceLocation id, TrackConstructionType kind) {
-        return R11.equals(id) && kind == TrackConstructionType.SIMPLE_TURNOUT
-                || DIAMOND_R11.equals(id) && kind == TrackConstructionType.DIAMOND_CROSSING
-                || SCISSORS_R11.equals(id) && kind == TrackConstructionType.SCISSORS_CROSSOVER
-                || SINGLE_CROSSOVER_R11.equals(id) && kind == TrackConstructionType.SINGLE_CROSSOVER
-                || DOUBLE_SLIP_R11.equals(id) && kind == TrackConstructionType.DOUBLE_SLIP;
-    }
-
-    /** The held placer wins; construction tools use the first placer in hotbar order. */
-    public static ResourceLocation constructionModel(net.minecraft.world.entity.player.Player player) {
-        var held = player.getMainHandItem();
-        var placer = com.unrealtrainmod.UnrealTrainMod.RAIL_PLACER.get();
-        var component = com.unrealtrainmod.registry.ModDataComponents.SELECTED_RAIL_MODEL.get();
-        if (held.is(placer)) return held.get(component);
-        for (int slot = 0; slot < 9; slot++) {
-            var stack = player.getInventory().getItem(slot);
-            if (stack.is(placer)) return stack.get(component);
-        }
+    public static TrackConstructionType constructionType(ResourceLocation id) {
+        if (R11.equals(id)) return TrackConstructionType.SIMPLE_TURNOUT;
+        if (DIAMOND_R11.equals(id)) return TrackConstructionType.DIAMOND_CROSSING;
+        if (SINGLE_CROSSOVER_R11.equals(id)) return TrackConstructionType.SINGLE_CROSSOVER;
+        if (SCISSORS_R11.equals(id)) return TrackConstructionType.SCISSORS_CROSSOVER;
+        if (DOUBLE_SLIP_R11.equals(id)) return TrackConstructionType.DOUBLE_SLIP;
         return null;
     }
 }

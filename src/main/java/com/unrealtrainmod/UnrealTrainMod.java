@@ -24,7 +24,6 @@ import com.unrealtrainmod.item.VehicleItem;
 import com.unrealtrainmod.item.TrackBuilderItem;
 import com.unrealtrainmod.item.TurnoutBuilderItem;
 import com.unrealtrainmod.track.construction.TurnoutConstructionManager;
-import com.unrealtrainmod.track.construction.TrackConstructionType;
 import com.unrealtrainmod.item.TrackWrenchItem;
 import com.unrealtrainmod.item.RailPlacerItem;
 import com.unrealtrainmod.track.construction.TrackConstructionManager;
@@ -35,6 +34,7 @@ import com.unrealtrainmod.network.ModPayloads;
 import com.unrealtrainmod.network.TrackSyncManager;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.network.chat.Component;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.MobCategory;
 import net.minecraft.world.item.CreativeModeTab;
@@ -95,15 +95,7 @@ public class UnrealTrainMod {
     public static final DeferredItem<com.unrealtrainmod.item.BlueprintItem> BLUEPRINT = ITEMS.registerItem(
             "blueprint", com.unrealtrainmod.item.BlueprintItem::new, new Item.Properties().stacksTo(1));
     public static final DeferredItem<TurnoutBuilderItem> TURNOUT_BUILDER = ITEMS.registerItem(
-            "turnout_builder", p -> new TurnoutBuilderItem(TrackConstructionType.SIMPLE_TURNOUT, p), new Item.Properties().stacksTo(1));
-    public static final DeferredItem<TurnoutBuilderItem> DIAMOND_CROSSING_BUILDER = ITEMS.registerItem(
-            "diamond_crossing_builder", p -> new TurnoutBuilderItem(TrackConstructionType.DIAMOND_CROSSING, p), new Item.Properties().stacksTo(1));
-    public static final DeferredItem<TurnoutBuilderItem> SINGLE_CROSSOVER_BUILDER = ITEMS.registerItem(
-            "single_crossover_builder", p -> new TurnoutBuilderItem(TrackConstructionType.SINGLE_CROSSOVER, p), new Item.Properties().stacksTo(1));
-    public static final DeferredItem<TurnoutBuilderItem> SCISSORS_CROSSOVER_BUILDER = ITEMS.registerItem(
-            "scissors_crossover_builder", p -> new TurnoutBuilderItem(TrackConstructionType.SCISSORS_CROSSOVER, p), new Item.Properties().stacksTo(1));
-    public static final DeferredItem<TurnoutBuilderItem> DOUBLE_SLIP_BUILDER = ITEMS.registerItem(
-            "double_slip_builder", p -> new TurnoutBuilderItem(TrackConstructionType.DOUBLE_SLIP, p), new Item.Properties().stacksTo(1));
+            "turnout_builder", TurnoutBuilderItem::new, new Item.Properties().stacksTo(1));
     public static final DeferredItem<HacksawItem> HACKSAW = ITEMS.registerItem(
             "hacksaw", HacksawItem::new, new Item.Properties().stacksTo(1));
     public static final DeferredItem<CrowbarItem> CROWBAR = ITEMS.registerItem(
@@ -128,10 +120,6 @@ public class UnrealTrainMod {
                 output.accept(WIRE.get());
                 output.accept(BLUEPRINT.get());
                 output.accept(TURNOUT_BUILDER.get());
-                output.accept(DIAMOND_CROSSING_BUILDER.get());
-                output.accept(SINGLE_CROSSOVER_BUILDER.get());
-                output.accept(SCISSORS_CROSSOVER_BUILDER.get());
-                output.accept(DOUBLE_SLIP_BUILDER.get());
                 output.accept(HACKSAW.get());
                 output.accept(CROWBAR.get());
                 output.accept(VEHICLE_MOVER.get());
@@ -144,6 +132,10 @@ public class UnrealTrainMod {
         ResourceLoader.load(FMLPaths.MODSDIR.get(), FMLPaths.CONFIGDIR.get());
 
         BLOCKS.register(modEventBus);
+        for (String oldId : java.util.List.of("diamond_crossing_builder", "single_crossover_builder",
+                "scissors_crossover_builder", "double_slip_builder")) {
+            ITEMS.addAlias(ResourceLocation.fromNamespaceAndPath(MODID, oldId), TURNOUT_BUILDER.getId());
+        }
         ITEMS.register(modEventBus);
         ENTITY_TYPES.register(modEventBus);
         ModDataComponents.TYPES.register(modEventBus);

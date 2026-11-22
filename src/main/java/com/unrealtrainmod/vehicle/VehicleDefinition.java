@@ -8,6 +8,8 @@ import com.unrealtrainmod.model.ModelBounds;
 import com.unrealtrainmod.model.ModelData;
 import com.unrealtrainmod.model.ModelSource;
 import com.unrealtrainmod.compat.ir.IrVehicleDefinition;
+import com.unrealtrainmod.compat.rtm.RtmRollsign;
+import com.unrealtrainmod.compat.rtm.RtmVehicleSounds;
 import com.unrealtrainmod.resource.PackageAsset;
 import com.unrealtrainmod.track.geometry.TrackVector;
 import java.util.List;
@@ -16,7 +18,7 @@ import net.minecraft.resources.ResourceLocation;
 public record VehicleDefinition(ResourceLocation id, String name, PackageAsset config, PackageAsset buttonTexture, String trainType,
                                 List<Instance> parts, ModelBounds bounds, VehicleMotionSpec motionSpec,
                                 VehiclePerformanceSpec performanceSpec, VehicleInteriorSpec interiorSpec,
-                                IrVehicleDefinition ir) {
+                                IrVehicleDefinition ir, RtmRollsign rollsign, RtmVehicleSounds rtmSounds) {
     public VehicleDefinition {
         parts = List.copyOf(parts);
         if (ir != IrVehicleDefinition.NONE) ir = ir.withMaxSpeedKmh(performanceSpec.maxSpeed() * 3.6);
@@ -46,17 +48,17 @@ public record VehicleDefinition(ResourceLocation id, String name, PackageAsset c
                     new TrackVector(0, 0, z), part.bounds(), part.actions());
         }).toList();
         return new VehicleDefinition(id, name, config, buttonTexture, trainType, calibrated, bounds, spec, performanceSpec,
-                interiorSpec, ir);
+                interiorSpec, ir, rollsign, rtmSounds);
     }
 
     public VehicleDefinition withPerformanceSpec(VehiclePerformanceSpec spec) {
         return new VehicleDefinition(id, name, config, buttonTexture, trainType, parts, bounds, motionSpec, spec,
-                interiorSpec, ir);
+                interiorSpec, ir, rollsign, rtmSounds);
     }
 
     public VehicleDefinition withInteriorSpec(VehicleInteriorSpec spec) {
         return new VehicleDefinition(id, name, config, buttonTexture, trainType, parts, bounds, motionSpec,
-                performanceSpec, spec, ir);
+                performanceSpec, spec, ir, rollsign, rtmSounds);
     }
 
     public String packName() { return config.archive().getFileName().toString(); }

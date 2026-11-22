@@ -294,20 +294,11 @@ public final class TrackGraph {
 
     public record PreparedAssembly(TrackAssemblyInstance instance, List<TrackNode> nodes, List<TrackSegment> segments) {}
 
-    /** Pure preparation shared by server validation and the atomic placement. Curves point into the draft. */
+    /** Uses the draft's resolved geometry for both preview validation and atomic placement. */
     public PreparedAssembly prepareAssembly(TrackConstructionType kind, List<TrackPlacementEndpoint> endpoints,
-                                             double gauge, List<TrackCurveParameters> curves, List<Boolean> edited,
-                                             double yaw, String modelId) {
-        var geometry = AssemblyPlacementGeometry.create(kind, endpoints.stream().map(TrackPlacementEndpoint::position).toList(),
-                gauge, curves, yaw);
-        return prepareAssembly(kind, endpoints, gauge, curves, edited, yaw, modelId, geometry);
-    }
-
-    /** The preview's resolved geometry is committed unchanged, rather than inferring automatic handles again. */
-    public PreparedAssembly prepareAssembly(TrackConstructionType kind, List<TrackPlacementEndpoint> endpoints,
-            double gauge, List<TrackCurveParameters> curves, List<Boolean> edited, double yaw, String modelId,
+            double gauge, List<TrackCurveParameters> curves, List<Boolean> edited, String modelId,
             TrackAssemblyDefinition.Geometry geometry) {
-        if (!kind.implemented() || endpoints.size() != kind.pointCount()) throw new IllegalArgumentException("Incomplete structure");
+        if (endpoints.size() != kind.pointCount()) throw new IllegalArgumentException("Incomplete structure");
         var definition = AssemblyPlacementGeometry.definition(kind);
         var preparedNodes = new LinkedHashMap<UUID, TrackNode>();
         var ports = new LinkedHashMap<String, TrackPort>();
@@ -352,15 +343,9 @@ public final class TrackGraph {
     }
 
     public TrackAssemblyInstance createAssembly(TrackConstructionType kind, List<TrackPlacementEndpoint> endpoints,
-                                                 double gauge, List<TrackCurveParameters> curves, List<Boolean> edited,
-                                                 double yaw, String modelId) {
-        return commitAssembly(prepareAssembly(kind, endpoints, gauge, curves, edited, yaw, modelId));
-    }
-
-    public TrackAssemblyInstance createAssembly(TrackConstructionType kind, List<TrackPlacementEndpoint> endpoints,
-            double gauge, List<TrackCurveParameters> curves, List<Boolean> edited, double yaw, String modelId,
+            double gauge, List<TrackCurveParameters> curves, List<Boolean> edited, String modelId,
             TrackAssemblyDefinition.Geometry geometry) {
-        return commitAssembly(prepareAssembly(kind, endpoints, gauge, curves, edited, yaw, modelId, geometry));
+        return commitAssembly(prepareAssembly(kind, endpoints, gauge, curves, edited, modelId, geometry));
     }
 
     private TrackAssemblyInstance commitAssembly(PreparedAssembly prepared) {

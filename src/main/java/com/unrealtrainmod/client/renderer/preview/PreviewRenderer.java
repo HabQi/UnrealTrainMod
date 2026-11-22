@@ -31,13 +31,16 @@ import org.lwjgl.opengl.GL30;
 
 /** Shared depth-enabled GUI target; callers retain ownership of their scene geometry. */
 public final class PreviewRenderer implements AutoCloseable {
-    // Base framing stays at 40x16 blocks; sample scales only change pixel density.
+    // Fixed-scale captures use 40x16 blocks. Sample scales only change pixel density.
     public static final int THUMBNAIL_WIDTH = 640;
     public static final int THUMBNAIL_HEIGHT = 256;
     public static final float THUMBNAIL_PIXELS_PER_BLOCK = 16;
     public static final int VEHICLE_THUMBNAIL_SAMPLE_SCALE = 2;
     public static final int RAIL_THUMBNAIL_SAMPLE_SCALE = 3;
     public static final float THUMBNAIL_DISTANCE = 128;
+    private static final float[] TRANSPARENT_CLEAR = {0, 0, 0, 0};
+    private static final float[] PANEL_CLEAR = {0.045f, 0.065f, 0.09f, 1};
+    private static final float[] DEPTH_CLEAR = {1};
     private TextureTarget target;
 
     /** Front elevation with a stable block-to-pixel mapping for engineering editors. */
@@ -95,11 +98,11 @@ public final class PreviewRenderer implements AutoCloseable {
 
     /** Returns owned, upright RGBA pixels with only the outer transparent margin removed. */
     public NativeImage capture(ModelBounds bounds, float yaw, float pitch, boolean translucent,
-                               int sampleScale, Consumer<PoseStack> drawScene) {
+                               int sampleScale, boolean fitBounds, Consumer<PoseStack> drawScene) {
         int width = THUMBNAIL_WIDTH * sampleScale;
         int height = THUMBNAIL_HEIGHT * sampleScale;
         return renderScene(width, height, true, () -> {
-            drawScene.accept(thumbnailPose(bounds, yaw, pitch));
+            drawScene.accept(thumbnailPose(bounds, yaw, pitch, fitBounds));
             int rowLength = GL11.glGetInteger(GL11.GL_PACK_ROW_LENGTH);
             int skipRows = GL11.glGetInteger(GL11.GL_PACK_SKIP_ROWS);
             int skipPixels = GL11.glGetInteger(GL11.GL_PACK_SKIP_PIXELS);
@@ -107,8 +110,7 @@ public final class PreviewRenderer implements AutoCloseable {
                 GlStateManager._pixelStore(GL11.GL_PACK_ROW_LENGTH, 0);
                 GlStateManager._pixelStore(GL11.GL_PACK_SKIP_ROWS, 0);
                 GlStateManager._pixelStore(GL11.GL_PACK_SKIP_PIXELS, 0);
-                RenderSystem.bindTexture(target.getColorTextureId());
-                pixels.downloadTexture(0, false);
+                downloadTarget(pixels);
                 pixels.flipY();
                 return trim(pixels, translucent);
             } finally {
@@ -135,8 +137,7 @@ public final class PreviewRenderer implements AutoCloseable {
                 GlStateManager._pixelStore(GL11.GL_PACK_ROW_LENGTH, 0);
                 GlStateManager._pixelStore(GL11.GL_PACK_SKIP_ROWS, 0);
                 GlStateManager._pixelStore(GL11.GL_PACK_SKIP_PIXELS, 0);
-                RenderSystem.bindTexture(target.getColorTextureId());
-                pixels.downloadTexture(0, false);
+                downloadTarget(pixels);
                 pixels.flipY();
                 return pixels;
             } catch (RuntimeException | Error exception) {
@@ -148,6 +149,12 @@ public final class PreviewRenderer implements AutoCloseable {
                 GlStateManager._pixelStore(GL11.GL_PACK_SKIP_PIXELS, skipPixels);
             }
         });
+    }
+
+    private void downloadTarget(NativeImage pixels) {
+        RenderSystem.activeTexture(GL13.GL_TEXTURE0);
+        RenderSystem.bindTexture(target.getColorTextureId());
+        pixels.downloadTexture(0, false);
     }
 
     private static PoseStack perspectivePose(ModelBounds bounds, PreviewCamera camera, int width, int height) {
@@ -166,16 +173,25 @@ public final class PreviewRenderer implements AutoCloseable {
         return pose;
     }
 
-    private static PoseStack thumbnailPose(ModelBounds bounds, float yaw, float pitch) {
+    private static PoseStack thumbnailPose(ModelBounds bounds, float yaw, float pitch, boolean fitBounds) {
         float halfWidth = THUMBNAIL_WIDTH / (2 * THUMBNAIL_PIXELS_PER_BLOCK);
         float halfHeight = THUMBNAIL_HEIGHT / (2 * THUMBNAIL_PIXELS_PER_BLOCK);
+        if (fitBounds) {
+            var rotation = new Matrix4f().rotationX((float)Math.toRadians(pitch)).rotateY((float)Math.toRadians(yaw));
+            float width = Math.abs(rotation.m00()) * bounds.width() + Math.abs(rotation.m10()) * bounds.height()
+                    + Math.abs(rotation.m20()) * bounds.length();
+            float height = Math.abs(rotation.m01()) * bounds.width() + Math.abs(rotation.m11()) * bounds.height()
+                    + Math.abs(rotation.m21()) * bounds.length();
+            float scale = Math.max(1, Math.max(width / (2 * halfWidth), height / (2 * halfHeight)) * 1.05f);
+            halfWidth *= scale;
+            halfHeight *= scale;
+        }
         RenderSystem.setProjectionMatrix(new Matrix4f().ortho(-halfWidth, halfWidth,
                 -halfHeight, halfHeight, 0.05f, THUMBNAIL_DISTANCE * 2), VertexSorting.DISTANCE_TO_ORIGIN);
         var pose = new PoseStack();
         pose.translate(0, 0, -THUMBNAIL_DISTANCE);
         pose.mulPose(Axis.XP.rotationDegrees(pitch));
         pose.mulPose(Axis.YP.rotationDegrees(yaw));
-        // The bounds only center the model; neither framing nor magnification depends on their size.
         pose.translate(-bounds.centerX(), -bounds.centerY(), -bounds.centerZ());
         return pose;
     }
@@ -222,8 +238,8 @@ public final class PreviewRenderer implements AutoCloseable {
         RenderSystem.backupGlState(state);
         int drawTarget = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
         int readTarget = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
-        int viewportX = GlStateManager.Viewport.x(), viewportY = GlStateManager.Viewport.y();
-        int viewportWidth = GlStateManager.Viewport.width(), viewportHeight = GlStateManager.Viewport.height();
+        int[] viewport = new int[4];
+        GL11.glGetIntegerv(GL11.GL_VIEWPORT, viewport);
         int activeTexture = GL11.glGetInteger(GL13.GL_ACTIVE_TEXTURE);
         int boundTexture = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
         int program = GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM);
@@ -258,11 +274,10 @@ public final class PreviewRenderer implements AutoCloseable {
             } else if (target.width != width || target.height != height) {
                 target.resize(width, height, Minecraft.ON_OSX);
             }
-            if (transparent) target.setClearColor(0, 0, 0, 0);
-            else target.setClearColor(0.045f, 0.065f, 0.09f, 1);
-            RenderSystem.clearDepth(1);
-            target.clear(Minecraft.ON_OSX);
             target.bindWrite(true);
+            // Clear the bound preview attachments without inheriting the world's clear color.
+            GL30.glClearBufferfv(GL11.GL_COLOR, 0, transparent ? TRANSPARENT_CLEAR : PANEL_CLEAR);
+            GL30.glClearBufferfv(GL11.GL_DEPTH, 0, DEPTH_CLEAR);
             modelView.identity();
             RenderSystem.applyModelViewMatrix();
             RenderSystem.resetTextureMatrix();
@@ -283,7 +298,7 @@ public final class PreviewRenderer implements AutoCloseable {
             RenderSystem.setTextureMatrix(textureMatrix);
             GlStateManager._glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, drawTarget);
             GlStateManager._glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, readTarget);
-            RenderSystem.viewport(viewportX, viewportY, viewportWidth, viewportHeight);
+            RenderSystem.viewport(viewport[0], viewport[1], viewport[2], viewport[3]);
             RenderSystem.setShaderTexture(0, texture0);
             RenderSystem.setShaderTexture(1, texture1);
             RenderSystem.setShaderTexture(2, texture2);

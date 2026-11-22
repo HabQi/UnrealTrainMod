@@ -189,6 +189,7 @@ public final class TrackCurveScreen extends Screen {
     private void preview() {
         if (open.turnout()) {
             var state = ClientTurnoutConstruction.INSTANCE;
+            if (!state.matches(open.dimension(), open.revision())) return;
             state.editPreview(open.endpoint(), automatic ? null : parsed, horizontalEdited);
             if (automatic) {
                 parsed = state.automaticParameters(open.endpoint());
@@ -339,7 +340,7 @@ public final class TrackCurveScreen extends Screen {
         if (!horizontalValid || !verticalValid) return Component.translatable(Feedback.INVALID_PARAMETERS.translationKey());
         Feedback feedback = open.turnout() ? ClientTurnoutConstruction.INSTANCE.previewFeedback()
                 : ClientTrackConstruction.INSTANCE.previewFeedback();
-        if (feedback != null && feedback != Feedback.START && feedback != Feedback.READY && feedback != Feedback.TURNOUT_A && feedback != Feedback.TURNOUT_B) {
+        if (feedback != null && feedback != Feedback.START && feedback != Feedback.READY) {
             return Component.translatable(feedback.translationKey());
         }
         if (open.turnout() && !automatic) return label("turnout_handle_hint");

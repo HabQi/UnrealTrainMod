@@ -35,10 +35,12 @@ public final class ServerPayloadHandlers {
         } else if (payload.hotbarSlot() < 0 || payload.hotbarSlot() > 8
                 || player.getInventory().selected != payload.hotbarSlot() || !stack.is(UnrealTrainMod.RAIL_PLACER.get())) {
             result = ModelSelectionResultPayload.Result.INVALID_ITEM;
-        } else if (!RailCatalog.contains(payload.modelId())) {
+        } else if (new RailCatalog.Selection(payload.modelId(), payload.variant()).constructionType() == null) {
             result = ModelSelectionResultPayload.Result.UNKNOWN_MODEL;
         } else {
             stack.set(ModDataComponents.SELECTED_RAIL_MODEL.get(), payload.modelId());
+            if (payload.variant() == null) stack.remove(ModDataComponents.SELECTED_RAIL_VARIANT.get());
+            else stack.set(ModDataComponents.SELECTED_RAIL_VARIANT.get(), payload.variant());
             player.inventoryMenu.broadcastChanges();
         }
         context.reply(new RailModelSelectionResultPayload(payload.requestId(), result));

@@ -30,6 +30,7 @@ public final class TrainConsist {
     // Null only for a legacy two-car record awaiting model-dependent end migration.
     private List<TrainCoupling> couplings;
     private Map<TrainCoupling.End, TrainCoupling.End> peers = Map.of();
+    private Map<UUID, Integer> formationIndices = Map.of();
     private TrainRouteWindow window;
     private double configuredSpeed;
     private boolean simulationActive;
@@ -71,7 +72,33 @@ public final class TrainConsist {
             endpoints.put(link.second(), link.first());
         }
         peers = Map.copyOf(endpoints);
+        formationIndices = indexFormation();
     }
+
+    int formationIndex(UUID vehicle) { return formationIndices.getOrDefault(vehicle, -1); }
+
+    /** The member list retains its reference car first. Walk the couplers for physical order. */
+    private Map<UUID, Integer> indexFormation() {
+        if (couplings == null || couplings.size() != cars.size() - 1) return Map.of();
+        for (var car : cars) {
+            var back = car.direction() > 0 ? TrainCarEnd.REAR : TrainCarEnd.FRONT;
+            if (peer(car.entityId(), back) != null) continue;
+            var indices = new HashMap<UUID, Integer>();
+            var exit = new TrainCoupling.End(car.entityId(), opposite(back));
+            for (int index = 0; exit != null && index < cars.size(); index++) {
+                indices.put(exit.vehicle(), index);
+                var entry = peers.get(exit);
+                exit = entry == null ? null : new TrainCoupling.End(entry.vehicle(), opposite(entry.end()));
+            }
+            return exit == null && indices.size() == cars.size() ? Map.copyOf(indices) : Map.of();
+        }
+        return Map.of();
+    }
+
+    private static TrainCarEnd opposite(TrainCarEnd end) {
+        return end == TrainCarEnd.FRONT ? TrainCarEnd.REAR : TrainCarEnd.FRONT;
+    }
+
     public TrainAnchor anchor() { return cars.getFirst().anchor(); }
     public TrainCarState member(UUID entityId) {
         return cars.stream().filter(car -> car.entityId().equals(entityId)).findFirst().orElse(null);

@@ -5,7 +5,6 @@
 package com.unrealtrainmod.item;
 
 import com.unrealtrainmod.track.construction.TurnoutConstructionManager;
-import com.unrealtrainmod.track.construction.TrackConstructionType;
 import java.util.List;
 import net.minecraft.ChatFormatting;
 import net.minecraft.network.chat.Component;
@@ -21,12 +20,9 @@ import net.minecraft.world.item.context.UseOnContext;
 import net.minecraft.world.level.Level;
 
 public final class TurnoutBuilderItem extends Item {
-    private final TrackConstructionType type;
-    public TurnoutBuilderItem(TrackConstructionType type, Properties properties) {
+    public TurnoutBuilderItem(Properties properties) {
         super(properties);
-        this.type = type;
     }
-    public TrackConstructionType constructionType() { return type; }
     @Override public InteractionResult useOn(UseOnContext context) {
         if (context.getHand() != InteractionHand.MAIN_HAND) return InteractionResult.FAIL;
         if (context.getPlayer() instanceof ServerPlayer player) TurnoutConstructionManager.interact(player, context);
@@ -38,20 +34,8 @@ public final class TurnoutBuilderItem extends Item {
         return InteractionResultHolder.sidedSuccess(player.getItemInHand(hand), level.isClientSide);
     }
     @Override public void appendHoverText(ItemStack stack, TooltipContext context, List<Component> lines, TooltipFlag flags) {
-        if (!type.implemented()) {
-            lines.add(Component.translatable("item.unrealtrainmod.turnout_builder.unimplemented").withStyle(ChatFormatting.GRAY));
-            lines.add(Component.translatable("item.unrealtrainmod.turnout_builder.cancel").withStyle(ChatFormatting.GRAY));
-            return;
-        }
-        String prefix = switch (type) {
-            case DIAMOND_CROSSING -> "diamond_crossing_builder";
-            case SINGLE_CROSSOVER -> "single_crossover_builder";
-            case SCISSORS_CROSSOVER -> "scissors_crossover_builder";
-            case DOUBLE_SLIP -> "double_slip_builder";
-            default -> "turnout_builder";
-        };
         for (String key : List.of("select", "preview", "cancel", "permission")) {
-            lines.add(Component.translatable("item.unrealtrainmod." + prefix + "." + key).withStyle(ChatFormatting.GRAY));
+            lines.add(Component.translatable("item.unrealtrainmod.turnout_builder." + key).withStyle(ChatFormatting.GRAY));
         }
     }
 }

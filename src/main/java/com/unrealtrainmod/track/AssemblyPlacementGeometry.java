@@ -98,7 +98,7 @@ public final class AssemblyPlacementGeometry {
     /** Partial drafts remain editable even before all ports have been selected. */
     public static TrackAssemblyDefinition.Geometry create(TrackConstructionType kind, List<TrackVector> points,
                                                            double gauge, List<TrackCurveParameters> curves, double yaw) {
-        if (!kind.implemented() || points.isEmpty() || points.size() > kind.pointCount() || curves.size() != points.size()) {
+        if (points.isEmpty() || points.size() > kind.pointCount() || curves.size() != points.size()) {
             throw new IllegalArgumentException("Invalid structure draft");
         }
         for (int i = 0; i < points.size(); i++) {

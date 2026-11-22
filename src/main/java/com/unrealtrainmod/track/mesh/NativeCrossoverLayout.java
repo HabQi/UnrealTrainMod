@@ -62,7 +62,7 @@ public record NativeCrossoverLayout(Kind kind, TrackVector origin, double scale,
         }
     }
     public record Sleeper(String name, TrackVector center, double yaw) {}
-    record SleeperZone(int path, int reference, boolean reversed, int inner, double tip, double heel, double frog) {}
+    record SleeperZone(int path, int reference, boolean reversed, int inner, double tip, double heel, double frog, double mainGuardEnd) {}
     private record Hit(double a, double b, TrackVector point, double angle) {}
     public int partCount() { return switches.values().stream().mapToInt(s -> s.parts().size()).sum()+fixedRails.size()+connections.size()+fixedParts.size()+sleepers.size()+paths.stream().mapToInt(p -> p.nodes().size()).sum(); }
 
@@ -116,7 +116,7 @@ public record NativeCrossoverLayout(Kind kind, TrackVector origin, double scale,
         var fixedParts = solution.parts(); var fixedRails = solution.rails(); var switches = solution.switches();
         List<Sleeper> sleepers;
         try (var stage = NativeLayoutProfile.stage(kind.label()+"/sleepers")) {
-            sleepers = complete ? NativeCrossoverSleepers.build(paths,solution.zones(),scale) : List.of();
+            sleepers = complete ? NativeCrossoverSleepers.build(kind,paths,solution.zones(),scale) : List.of();
             if (stage != null) stage.value("sleepers", sleepers.size());
         }
         AABB bounds = null;

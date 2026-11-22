@@ -36,7 +36,7 @@ final class NativeTurnoutMeshes {
                 var sources = new ArrayList<Source>(); result.put(part, sources);
                 for (var source : originalsForPart) sources.add(part.bladeLength() > 0
                         ? NativeTurnoutModels.blade(source, originals.get(part.name().equals("L1") ? "railL" : "railR").getFirst(), part.bladeLength(), part.bladeContact())
-                        : part.railBend() != null ? (part.moving()
+                        : part.railBend() != null ? (part.moving() && !part.railBend().longSection()
                                 ? NativeTurnoutModels.rail(source, (float)part.visibleLength(), part.railBend())
                                 : NativeTurnoutModels.fixedRail(source, part.visibleLength(), part.railBend())) : NativeTurnoutModels.retain(source));
             }

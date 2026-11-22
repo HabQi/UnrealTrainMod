@@ -4,104 +4,104 @@
     {
       "name": "L0",
       "file": "l0.obj",
-      "triangles": 222
+      "triangles": 150
     },
     {
       "name": "L1",
       "file": "l1.obj",
-      "triangles": 222,
+      "triangles": 150,
       "parameters": "l1.parameters.json"
     },
     {
       "name": "R0",
       "file": "r0.obj",
-      "triangles": 222
+      "triangles": 150
     },
     {
       "name": "R1",
       "file": "r1.obj",
-      "triangles": 222,
+      "triangles": 150,
       "parameters": "r1.parameters.json"
     },
     {
       "name": "ballast01",
       "file": "ballast01.obj",
-      "triangles": 432
+      "triangles": 240
     },
     {
       "name": "ballast02",
       "file": "ballast02.obj",
-      "triangles": 432
+      "triangles": 240
     },
     {
       "name": "ballast03",
       "file": "ballast03.obj",
-      "triangles": 432
+      "triangles": 240
     },
     {
       "name": "ballast04",
       "file": "ballast04.obj",
-      "triangles": 432
+      "triangles": 240
     },
     {
       "name": "guardL",
       "file": "guardl.obj",
-      "triangles": 524
+      "triangles": 340
     },
     {
       "name": "guardL_short",
       "file": "guardl_short.obj",
-      "triangles": 548
+      "triangles": 364
     },
     {
       "name": "guardR",
       "file": "guardr.obj",
-      "triangles": 524
+      "triangles": 340
     },
     {
       "name": "guardR_short",
       "file": "guardr_short.obj",
-      "triangles": 548
+      "triangles": 364
     },
     {
       "name": "noseL10",
       "file": "nosel10.obj",
-      "triangles": 188
+      "triangles": 128
     },
     {
       "name": "noseL20",
       "file": "nosel20.obj",
-      "triangles": 188
+      "triangles": 128
     },
     {
       "name": "noseL2_5",
       "file": "nosel2_5.obj",
-      "triangles": 188
+      "triangles": 128
     },
     {
       "name": "noseL5",
       "file": "nosel5.obj",
-      "triangles": 188
+      "triangles": 128
     },
     {
       "name": "noseR10",
       "file": "noser10.obj",
-      "triangles": 188
+      "triangles": 128
     },
     {
       "name": "noseR20",
       "file": "noser20.obj",
-      "triangles": 188
+      "triangles": 128
     },
     {
       "name": "noseR2_5",
       "file": "noser2_5.obj",
-      "triangles": 188
+      "triangles": 128
     },
     {
       "name": "noseR5",
       "file": "noser5.obj",
-      "triangles": 188
+      "triangles": 128
     },
     {
       "name": "railL",
@@ -121,166 +121,156 @@
       "triangles": 16
     },
     {
-      "name": "sideL",
-      "file": "sidel.obj",
-      "triangles": 60
-    },
-    {
-      "name": "sideR",
-      "file": "sider.obj",
-      "triangles": 60
-    },
-    {
       "name": "sleeper_support",
       "file": "sleeper_support.obj",
-      "triangles": 1014
+      "triangles": 354
     },
     {
       "name": "sleeper_point01",
       "file": "sleeper_point01.obj",
-      "triangles": 1260
+      "triangles": 476
     },
     {
       "name": "sleeper_point02L",
       "file": "sleeper_point02l.obj",
-      "triangles": 676
+      "triangles": 236
     },
     {
       "name": "sleeper_point02R",
       "file": "sleeper_point02r.obj",
-      "triangles": 676
+      "triangles": 236
     },
     {
       "name": "sleeper_point03L",
       "file": "sleeper_point03l.obj",
-      "triangles": 948,
+      "triangles": 276,
       "sourceDuplicateTrianglesRemoved": 20
     },
     {
       "name": "sleeper_point03R",
       "file": "sleeper_point03r.obj",
-      "triangles": 948,
+      "triangles": 276,
       "sourceDuplicateTrianglesRemoved": 20
     },
     {
       "name": "wingFrontL",
       "file": "wingfrontl.obj",
-      "triangles": 252
+      "triangles": 172
     },
     {
       "name": "wingFrontL_short",
       "file": "wingfrontl_short.obj",
-      "triangles": 252
+      "triangles": 172
     },
     {
       "name": "wingFrontR",
       "file": "wingfrontr.obj",
-      "triangles": 252
+      "triangles": 172
     },
     {
       "name": "wingFrontR_short",
       "file": "wingfrontr_short.obj",
-      "triangles": 252
+      "triangles": 172
     },
     {
       "name": "wingL10",
       "file": "wingl10.obj",
-      "triangles": 270
+      "triangles": 188
     },
     {
       "name": "wingL10_short",
       "file": "wingl10_short.obj",
-      "triangles": 270
+      "triangles": 188
     },
     {
       "name": "wingL2_5",
       "file": "wingl2_5.obj",
-      "triangles": 270
+      "triangles": 188
     },
     {
       "name": "wingL2_5_short",
       "file": "wingl2_5_short.obj",
-      "triangles": 270
+      "triangles": 188
     },
     {
       "name": "wingL5",
       "file": "wingl5.obj",
-      "triangles": 270
+      "triangles": 188
     },
     {
       "name": "wingL5_short",
       "file": "wingl5_short.obj",
-      "triangles": 270
+      "triangles": 188
     },
     {
       "name": "wingLf",
       "file": "winglf.obj",
-      "triangles": 1004
+      "triangles": 648
     },
     {
       "name": "wingLf_short",
       "file": "winglf_short.obj",
-      "triangles": 800
+      "triangles": 536
     },
     {
       "name": "wingLm",
       "file": "winglm.obj",
-      "triangles": 296
+      "triangles": 204
     },
     {
       "name": "wingLr",
       "file": "winglr.obj",
-      "triangles": 124
+      "triangles": 84
     },
     {
       "name": "wingR10",
       "file": "wingr10.obj",
-      "triangles": 270
+      "triangles": 188
     },
     {
       "name": "wingR10_short",
       "file": "wingr10_short.obj",
-      "triangles": 270
+      "triangles": 188
     },
     {
       "name": "wingR2_5",
       "file": "wingr2_5.obj",
-      "triangles": 270
+      "triangles": 188
     },
     {
       "name": "wingR2_5_short",
       "file": "wingr2_5_short.obj",
-      "triangles": 270
+      "triangles": 188
     },
     {
       "name": "wingR5",
       "file": "wingr5.obj",
-      "triangles": 270
+      "triangles": 188
     },
     {
       "name": "wingR5_short",
       "file": "wingr5_short.obj",
-      "triangles": 270
+      "triangles": 188
     },
     {
       "name": "wingRf",
       "file": "wingrf.obj",
-      "triangles": 1004
+      "triangles": 648
     },
     {
       "name": "wingRf_short",
       "file": "wingrf_short.obj",
-      "triangles": 800
+      "triangles": 536
     },
     {
       "name": "wingRm",
       "file": "wingrm.obj",
-      "triangles": 296
+      "triangles": 204
     },
     {
       "name": "wingRr",
       "file": "wingrr.obj",
-      "triangles": 124
+      "triangles": 84
     }
   ]
 }

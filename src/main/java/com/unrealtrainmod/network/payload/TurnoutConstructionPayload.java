@@ -17,40 +17,46 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
-/** Private draft with one inward horizontal control per selected port. */
+/** Private draft. Controls are present only once the server has assigned ports. */
 public record TurnoutConstructionPayload(ResourceLocation dimension, UUID revision, TrackConstructionType kind,
-        List<TrackPlacementEndpoint> points, double gauge, List<TrackCurveParameters> curves, List<TrackCurveParameters> resolvedCurves,
-        double yaw, Feedback feedback, Feedback validation)
+        List<TrackPlacementEndpoint> points, double gauge, List<TrackCurveParameters> curves, boolean resolved, boolean alternate,
+        Feedback feedback, Feedback validation)
         implements CustomPacketPayload {
     public static final Type<TurnoutConstructionPayload> TYPE = new Type<>(
             ResourceLocation.fromNamespaceAndPath(UnrealTrainMod.MODID, "turnout_construction"));
     public static final StreamCodec<RegistryFriendlyByteBuf, TurnoutConstructionPayload> STREAM_CODEC = StreamCodec.of(
             (b, p) -> {
-                b.writeResourceLocation(p.dimension()); b.writeUUID(p.revision()); b.writeEnum(p.kind()); b.writeVarInt(p.points().size());
-                for (int i = 0; i < p.points().size(); i++) {
-                    TrackConstructionPayload.writeEndpoint(b, p.points().get(i));
-                    TrackPayloadCodec.writeCurve(b, p.curves().get(i));
-                }
-                b.writeBoolean(!p.resolvedCurves().isEmpty());
-                for (var curve : p.resolvedCurves()) TrackPayloadCodec.writeCurve(b, curve);
-                b.writeDouble(p.gauge()); b.writeDouble(p.yaw()); b.writeEnum(p.feedback()); b.writeEnum(p.validation());
+                b.writeResourceLocation(p.dimension());
+                b.writeUUID(p.revision());
+                b.writeBoolean(p.kind() != null);
+                if (p.kind() != null) b.writeEnum(p.kind());
+                b.writeVarInt(p.points().size());
+                for (var point : p.points()) TrackConstructionPayload.writeEndpoint(b, point);
+                b.writeBoolean(p.ordered());
+                for (var curve : p.curves()) TrackPayloadCodec.writeCurve(b, curve);
+                b.writeDouble(p.gauge());
+                b.writeBoolean(p.resolved());
+                b.writeBoolean(p.alternate());
+                b.writeEnum(p.feedback());
+                b.writeEnum(p.validation());
             }, b -> {
-                var dimension = b.readResourceLocation(); var revision = b.readUUID(); var kind = b.readEnum(TrackConstructionType.class);
+                var dimension = b.readResourceLocation();
+                var revision = b.readUUID();
+                var kind = b.readBoolean() ? b.readEnum(TrackConstructionType.class) : null;
                 int count = b.readVarInt();
-                if (!kind.implemented() || count < 0 || count > kind.pointCount()) throw new IllegalArgumentException("Invalid structure draft");
-                var points = new ArrayList<TrackPlacementEndpoint>(); var curves = new ArrayList<TrackCurveParameters>();
+                if (count < 0 || count > 4) throw new IllegalArgumentException("Invalid structure draft point count");
+                var points = new ArrayList<TrackPlacementEndpoint>(count);
+                var curves = new ArrayList<TrackCurveParameters>(count);
                 for (int i = 0; i < count; i++) {
                     points.add(java.util.Objects.requireNonNull(TrackConstructionPayload.readEndpoint(b)));
-                    curves.add(TrackPayloadCodec.readCurve(b));
                 }
-                var resolved = new ArrayList<TrackCurveParameters>();
                 if (b.readBoolean()) {
-                    if (kind != TrackConstructionType.SINGLE_CROSSOVER || count != 4)
-                        throw new IllegalArgumentException("Resolved controls require a complete single crossover");
-                    for (int i = 0; i < count; i++) resolved.add(java.util.Objects.requireNonNull(TrackPayloadCodec.readCurve(b)));
+                    if (kind == null || count != kind.pointCount()) throw new IllegalArgumentException("Incomplete ordered structure");
+                    for (int i = 0; i < count; i++) curves.add(TrackPayloadCodec.readCurve(b));
                 }
-                return new TurnoutConstructionPayload(dimension, revision, kind, points, b.readDouble(), curves, resolved,
-                        b.readDouble(), b.readEnum(Feedback.class), b.readEnum(Feedback.class));
+                return new TurnoutConstructionPayload(dimension, revision, kind, points, b.readDouble(), curves,
+                        b.readBoolean(), b.readBoolean(), b.readEnum(Feedback.class), b.readEnum(Feedback.class));
             });
+    public boolean ordered() { return !curves.isEmpty(); }
     @Override public Type<TurnoutConstructionPayload> type() { return TYPE; }
 }

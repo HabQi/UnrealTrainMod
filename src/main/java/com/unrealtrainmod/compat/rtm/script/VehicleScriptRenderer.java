@@ -9,6 +9,9 @@ import java.util.List;
 
 /** Legacy {@code VehiclePartsRenderer} subset used by the first vehicle script chain. */
 public final class VehicleScriptRenderer extends RtmPartsRenderer {
+    /** The compatibility renderer invokes one script callback for the whole model. */
+    public final int currentMatId = 0;
+
     private ScriptDrawContext context;
     private final ScriptPartResolver parts;
 

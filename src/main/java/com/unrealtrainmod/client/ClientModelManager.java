@@ -96,7 +96,8 @@ public final class ClientModelManager extends SimplePreparableReloadListener<Pre
                                 instance.actions().collectPartNames(names);
                                 selection = source.bodyParts().getOrDefault(Set.copyOf(names), source.visibleParts());
                             }
-                            return new LoadedModel.Instance(source, instance, selection, irBinding);
+                            var rollsigns = source.rollsigns(instance.role() == VehiclePartRole.BODY ? vehicle.rollsign() : null);
+                            return new LoadedModel.Instance(source, instance, selection, irBinding, rollsigns);
                         }).toList();
                 loaded.put(vehicle.id(), new LoadedModel(instances, vehicle.bounds(), vehicle.ir()));
             }

@@ -18,6 +18,7 @@ import com.unrealtrainmod.client.track.ClientRailModelManager;
 import com.unrealtrainmod.client.track.RailPreviewRenderer;
 import com.unrealtrainmod.model.ModelSource;
 import com.unrealtrainmod.model.ContactFaceEliminator;
+import com.unrealtrainmod.model.MqoParser;
 import com.unrealtrainmod.resource.PackageAsset;
 import com.unrealtrainmod.resource.ResourceIds;
 import com.unrealtrainmod.track.model.NativeTurnoutCatalog;
@@ -65,6 +66,7 @@ public final class ClientThumbnailManager extends SimplePreparableReloadListener
             + ":vehicle-gui-ppb=" + VEHICLE_GUI_PIXELS_PER_BLOCK + ":rail-gui-ppb=" + RAIL_GUI_PIXELS_PER_BLOCK
             + ":distance=" + PreviewRenderer.THUMBNAIL_DISTANCE
             + ":vehicle=-90,22:display=0.85:rail=-180,90:ortho:trim:straight-alpha";
+    private static final String RAIL_CAPTURE_RECIPE = ":rail-target-clear-1:native=-90,90:fit-bounds:vanilla-vertices-1";
     public enum Kind { VEHICLE, RAIL }
     public record Key(Kind kind, ResourceLocation id) {}
     public record Entry(ResourceLocation texture, Path file) {}
@@ -136,7 +138,7 @@ public final class ClientThumbnailManager extends SimplePreparableReloadListener
         var entry = entries.get(key);
         try {
             var pixels = key.kind() == Kind.VEHICLE ? vehicles.capture(ClientModelManager.INSTANCE.model(key.id()))
-                    : rails.capture(ClientRailModelManager.INSTANCE.model(key.id()));
+                    : rails.capture(ClientRailModelManager.INSTANCE.model(key.id()), NativeTurnoutCatalog.contains(key.id()));
             if (pixels == null) return;
             if (!ready || generation != current) {
                 pixels.close();
@@ -171,11 +173,13 @@ public final class ClientThumbnailManager extends SimplePreparableReloadListener
         }
         var configs = new LinkedHashMap<Key, PackageAsset>();
         var irVehicles = new HashSet<Key>();
+        var rollsignVehicles = new HashSet<Key>();
         boolean eliminateContactFaces = ClientConfig.ELIMINATE_CONTACT_FACES.get();
         for (var definition : VehicleCatalog.all()) {
             var key = new Key(Kind.VEHICLE, definition.id());
             configs.put(key, definition.config());
-            if (definition.ir() != null) irVehicles.add(key);
+            if (definition.parts().getFirst().source().format() == ModelSource.Format.IR_OBJ) irVehicles.add(key);
+            if (definition.rollsign() != null) rollsignVehicles.add(key);
         }
         for (var definition : RailCatalog.all()) {
             if (definition.source().format() == RailDefinition.Format.IR_OBJ) {
@@ -188,15 +192,15 @@ public final class ClientThumbnailManager extends SimplePreparableReloadListener
         try {
             try {
                 String source = com.unrealtrainmod.client.track.NativeTurnoutModels.fingerprint(resources);
-                for (var id : com.unrealtrainmod.track.model.NativeTurnoutCatalog.all()) {
+                for (var id : NativeTurnoutCatalog.all()) {
                     var key = new Key(Kind.RAIL, id);
                     String layout = com.unrealtrainmod.track.model.NativeTurnoutCatalog.DOUBLE_SLIP_R11.equals(id)
                             ? com.unrealtrainmod.client.track.NativeDoubleSlipRenderState.THUMBNAIL_RECIPE
                             : com.unrealtrainmod.track.model.NativeTurnoutCatalog.SINGLE_CROSSOVER_R11.equals(id)
                             ? com.unrealtrainmod.client.track.NativeCrossoverModels.SINGLE_RECIPE : com.unrealtrainmod.track.model.NativeTurnoutCatalog.SCISSORS_R11.equals(id)
                             ? com.unrealtrainmod.client.track.NativeCrossoverModels.RECIPE : com.unrealtrainmod.track.model.NativeTurnoutCatalog.DIAMOND_R11.equals(id)
-                            ? com.unrealtrainmod.client.track.NativeDiamondModels.RECIPE : "native-turnout";
-                    String digest = ResourceIds.hash(RECIPE + "\n" + layout + "\n" + source);
+                            ? com.unrealtrainmod.client.track.NativeDiamondModels.RECIPE : "native-turnout-long-switch-links-2";
+                    String digest = ResourceIds.hash(RECIPE + RAIL_CAPTURE_RECIPE + "\n" + id + "\n" + layout + "\n" + source);
                     var entry = new Entry(ResourceLocation.fromNamespaceAndPath(UnrealTrainMod.MODID, "thumbnail/" + digest),
                             directory.resolve(digest + ".png"));
                     preparedEntries.put(key, entry);
@@ -212,11 +216,14 @@ public final class ClientThumbnailManager extends SimplePreparableReloadListener
                 String fingerprint = fingerprints.get(archive);
                 if (fingerprint == null) continue;
                 int sampleScale = sampleScale(config.getKey().kind());
-                String recipe = RECIPE;
+                String recipe = config.getKey().kind() == Kind.RAIL ? RECIPE + RAIL_CAPTURE_RECIPE : RECIPE;
                 if (irVehicles.contains(config.getKey())) {
                     recipe += ":contact-v" + ContactFaceEliminator.VERSION + ":" + eliminateContactFaces;
                     if (eliminateContactFaces) recipe += ":" + ClientConfig.MAX_PACKAGE_TEXTURE_SIZE.get();
+                } else if (config.getKey().kind() == Kind.VEHICLE) {
+                    recipe += ":mqo-v" + MqoParser.VEHICLE_IMPORT_VERSION;
                 }
+                if (rollsignVehicles.contains(config.getKey())) recipe += ":rollsign-v1";
                 String digest = ResourceIds.hash(recipe + ":sample-scale=" + sampleScale + "\n"
                         + config.getKey().kind() + "\n" + config.getKey().id() + "\n"
                         + config.getValue().entry() + "\n" + fingerprint);
@@ -306,7 +313,7 @@ public final class ClientThumbnailManager extends SimplePreparableReloadListener
     private static ListEntryImage upload(Key key, ResourceLocation id, NativeImage pixels) {
         float guiPixelsPerBlock = key.kind() == Kind.VEHICLE ? VEHICLE_GUI_PIXELS_PER_BLOCK * 0.85f : RAIL_GUI_PIXELS_PER_BLOCK;
         float scale = guiPixelsPerBlock / (PreviewRenderer.THUMBNAIL_PIXELS_PER_BLOCK * sampleScale(key.kind()));
-        var image = key.kind() == Kind.RAIL && NativeTurnoutCatalog.DOUBLE_SLIP_R11.equals(key.id())
+        var image = key.kind() == Kind.RAIL && NativeTurnoutCatalog.contains(key.id())
                 ? new ListEntryImage(id, pixels.getWidth(), pixels.getHeight())
                 : new ListEntryImage(id, pixels.getWidth(), pixels.getHeight(), scale);
         int active = GlStateManager._getActiveTexture();

@@ -6,6 +6,7 @@ package com.unrealtrainmod.model;
 
 import com.unrealtrainmod.resource.PackageAsset;
 
+/** A null asset denotes a declared RTM base texture missing from its ZIP. */
 public record ModelTexture(PackageAsset asset, boolean alphaBlend, Lights lights) {
     public ModelTexture(PackageAsset asset, boolean alphaBlend) { this(asset, alphaBlend, null); }
 

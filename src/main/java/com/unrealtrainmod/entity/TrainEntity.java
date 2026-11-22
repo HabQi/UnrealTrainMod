@@ -73,6 +73,10 @@ public final class TrainEntity extends Entity {
             SynchedEntityData.defineId(TrainEntity.class, EntityDataSerializers.BYTE);
     private static final EntityDataAccessor<CompoundTag> IR_STATE =
             SynchedEntityData.defineId(TrainEntity.class, EntityDataSerializers.COMPOUND_TAG);
+    private static final EntityDataAccessor<Integer> ROLLSIGN =
+            SynchedEntityData.defineId(TrainEntity.class, EntityDataSerializers.INT);
+    private static final EntityDataAccessor<CompoundTag> RTM_ANNOUNCEMENT =
+            SynchedEntityData.defineId(TrainEntity.class, EntityDataSerializers.COMPOUND_TAG);
     /** Legacy RTM advances a door by one unit per tick for {@code MAX_DOOR_MOVE = 60} ticks. */
     private static final int DOOR_MOVE_TICKS = 60;
     private TrainAnchor railAnchor;
@@ -89,6 +93,7 @@ public final class TrainEntity extends Entity {
     /** Server-side transition bookkeeping shared by the synced state and late observers. */
     private final DoorState leftDoor = new DoorState(), rightDoor = new DoorState();
     private boolean doorStateLoaded;
+    private long doorOpenSounds, doorCloseSounds;
     private VehicleRuntimeState runtimeState = VehicleRuntimeState.IDLE;
     private final IrVehicleState irState = new IrVehicleState();
     private IrVehicleSnapshot irSnapshot = IrVehicleSnapshot.EMPTY;
@@ -107,6 +112,8 @@ public final class TrainEntity extends Entity {
         builder.define(RUNTIME_STATE, new CompoundTag());
         builder.define(LIGHTS, (byte) 0);
         builder.define(IR_STATE, new CompoundTag());
+        builder.define(ROLLSIGN, 0);
+        builder.define(RTM_ANNOUNCEMENT, new CompoundTag());
     }
 
     public ResourceLocation getModelId() {
@@ -115,7 +122,14 @@ public final class TrainEntity extends Entity {
     }
 
     public void setModelId(ResourceLocation id) {
+        if (!id.equals(getModelId())) entityData.set(ROLLSIGN, 0);
         entityData.set(MODEL_ID, id.toString());
+    }
+
+    public int rollsignIndex() { return entityData.get(ROLLSIGN); }
+
+    public void setRollsignIndex(int index) {
+        if (!level().isClientSide) entityData.set(ROLLSIGN, index);
     }
 
     public TrainAnchor getRailAnchor() { return railAnchor; }
@@ -248,6 +262,11 @@ public final class TrainEntity extends Entity {
         state.changeProgress = state.progressAt(now);
         state.open = open;
         state.changeTick = now;
+        var model = VehicleCatalog.find(getModelId());
+        if (model != null && model.rtmSounds() != null) {
+            if (open && model.rtmSounds().doorOpen() != null) doorOpenSounds++;
+            if (!open && model.rtmSounds().doorClose() != null) doorCloseSounds++;
+        }
         syncDoorState();
         return true;
     }
@@ -282,7 +301,22 @@ public final class TrainEntity extends Entity {
         var tag = new CompoundTag();
         leftDoor.save(tag, "Left");
         rightDoor.save(tag, "Right");
+        if (doorOpenSounds != 0) tag.putLong("OpenSounds", doorOpenSounds);
+        if (doorCloseSounds != 0) tag.putLong("CloseSounds", doorCloseSounds);
         entityData.set(DOOR_STATE, tag);
+    }
+
+    public long doorOpenSoundEvents() { return entityData.get(DOOR_STATE).getLong("OpenSounds"); }
+    public long doorCloseSoundEvents() { return entityData.get(DOOR_STATE).getLong("CloseSounds"); }
+    public long announcementEvents() { return entityData.get(RTM_ANNOUNCEMENT).getLong("Events"); }
+    public int announcementIndex() { return entityData.get(RTM_ANNOUNCEMENT).getInt("Index"); }
+
+    public void playAnnouncement(int index) {
+        if (level().isClientSide) return;
+        var tag = new CompoundTag();
+        tag.putInt("Index", index);
+        tag.putLong("Events", announcementEvents() + 1);
+        entityData.set(RTM_ANNOUNCEMENT, tag);
     }
 
     public void setRailAnchor(TrainAnchor anchor) {
@@ -465,6 +499,8 @@ public final class TrainEntity extends Entity {
         var id = ResourceLocation.tryParse(tag.getString("ModelId"));
         entityData.set(MODEL_ID, id == null ? "" : id.toString());
         entityData.set(LIGHTS, (byte) (tag.getByte("Lights") & 3));
+        int rollsign = tag.getInt("Rollsign");
+        entityData.set(ROLLSIGN, rollsign >= 0 && rollsign <= 127 ? rollsign : 0);
         try { irState.loadValues(tag.getCompound("IrControls")); }
         catch (IllegalArgumentException exception) {
             LOGGER.warn("Vehicle {} has invalid IR controls: {}", getUUID(), exception.getMessage());
@@ -491,6 +527,8 @@ public final class TrainEntity extends Entity {
         leftDoor.load(tag, "DoorLeft", doorNow);
         rightDoor.load(tag, "DoorRight", doorNow);
         doorStateLoaded = false;
+        doorOpenSounds = doorCloseSounds = 0;
+        entityData.set(RTM_ANNOUNCEMENT, new CompoundTag());
         if (tag.contains("TrainId")) {
             if (tag.hasUUID("TrainId")) trainId = tag.getUUID("TrainId");
             else {
@@ -529,6 +567,7 @@ public final class TrainEntity extends Entity {
     protected void addAdditionalSaveData(CompoundTag tag) {
         tag.putString("ModelId", entityData.get(MODEL_ID));
         tag.putByte("Lights", entityData.get(LIGHTS));
+        if (rollsignIndex() != 0) tag.putInt("Rollsign", rollsignIndex());
         tag.put("IrControls", irState.saveValues());
         tag.putBoolean("FrontCouplingEnabled", frontCouplingEnabled);
         tag.putBoolean("RearCouplingEnabled", rearCouplingEnabled);

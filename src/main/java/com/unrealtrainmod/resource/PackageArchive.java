@@ -4,6 +4,7 @@
  */
 package com.unrealtrainmod.resource;
 
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Path;
@@ -53,7 +54,7 @@ public final class PackageArchive implements AutoCloseable {
             throw new IOException("Invalid package resource path: " + reference);
         }
         String entry = prefix + "assets/" + namespace + "/" + resourcePath;
-        if (!contains(entry)) throw new IOException("Missing resource: " + entry);
+        if (!contains(entry)) throw new FileNotFoundException("Missing resource: " + entry);
         return new PackageAsset(path, entry);
     }
 

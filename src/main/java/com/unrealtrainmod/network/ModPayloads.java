@@ -43,7 +43,7 @@ public final class ModPayloads {
     private ModPayloads() {}
 
     public static void register(RegisterPayloadHandlersEvent event) {
-        var registrar = event.registrar("47");
+        var registrar = event.registrar("49");
         com.unrealtrainmod.wiring.WiringPayloads.register(registrar);
         com.unrealtrainmod.blueprint.BlueprintPayloads.register(registrar);
         registrar.playToServer(TrainControlInputPayload.TYPE, TrainControlInputPayload.STREAM_CODEC,
@@ -70,8 +70,8 @@ public final class ModPayloads {
                 (payload, context) -> NeoForge.EVENT_BUS.post(new TrackSyncEvent(payload)));
         registrar.playToClient(TrainDebugPayload.TYPE, TrainDebugPayload.STREAM_CODEC,
                 (payload, context) -> NeoForge.EVENT_BUS.post(new TrackSyncEvent(payload)));
-        registrar.playToServer(com.unrealtrainmod.network.payload.ConfirmSingleCrossoverPayload.TYPE,
-                com.unrealtrainmod.network.payload.ConfirmSingleCrossoverPayload.STREAM_CODEC, (payload, context) -> {
+        registrar.playToServer(com.unrealtrainmod.network.payload.ConfirmTurnoutPayload.TYPE,
+                com.unrealtrainmod.network.payload.ConfirmTurnoutPayload.STREAM_CODEC, (payload, context) -> {
                     if (context.player() instanceof net.minecraft.server.level.ServerPlayer player)
                         com.unrealtrainmod.track.construction.TurnoutConstructionManager.confirm(player, payload);
                 });

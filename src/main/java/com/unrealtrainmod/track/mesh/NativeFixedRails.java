@@ -82,8 +82,19 @@ public final class NativeFixedRails {
             return result;
         }
     }
-    private static void split(NativeRailCurve curve, double from, double to, double scale, double startMiter, double endMiter, HashMap<Double,Frame> frames,
-                              List<Double> output, double[] maxError) {
+    private record StripError(double profileSquared, double spanSquared) {
+        boolean fits(double scale) {
+            double limit = (MAX_LENGTH+1e-6)*scale;
+            return profileSquared <= ERROR*ERROR*scale*scale && spanSquared <= limit*limit;
+        }
+    }
+
+    static boolean fitsStrip(NativeRailCurve curve, double from, double to, double scale) {
+        return measure(curve,from,to,scale,0,0,new HashMap<>()).fits(scale);
+    }
+
+    private static StripError measure(NativeRailCurve curve, double from, double to, double scale, double startMiter, double endMiter,
+                                      HashMap<Double,Frame> frames) {
         var a = frames.computeIfAbsent(from,s -> frame(curve,s)); var b = frames.computeIfAbsent(to,s -> frame(curve,s));
         double error = 0, span = 0;
         for (int corner = 0; corner < 4; corner++) {
@@ -126,15 +137,21 @@ public final class NativeFixedRails {
                 error = Math.max(error,dx*dx+dy*dy+dz*dz);
             }
         }
-        double limit = (MAX_LENGTH+1e-6)*scale;
         if (!Double.isFinite(error) || !Double.isFinite(span))
             throw new IllegalArgumentException("Invalid fixed rail frame: from="+from+", to="+to+", startMiter="+startMiter+", endMiter="+endMiter);
-        if (error > ERROR*ERROR*scale*scale || span > limit*limit) {
+        return new StripError(error,span);
+    }
+
+    private static void split(NativeRailCurve curve, double from, double to, double scale, double startMiter, double endMiter,
+                              HashMap<Double,Frame> frames, List<Double> output, double[] maxError) {
+        var error = measure(curve,from,to,scale,startMiter,endMiter,frames);
+        if (!error.fits(scale)) {
             double middle = (from+to)/2;
             if (to-from <= 1e-6*scale || middle == from || middle == to)
-                throw new IllegalArgumentException("Fixed rail cannot meet strip budget: from="+from+", to="+to+", error="+Math.sqrt(error)+", length="+Math.sqrt(span));
+                throw new IllegalArgumentException("Fixed rail cannot meet strip budget: from="+from+", to="+to+", error="
+                        +Math.sqrt(error.profileSquared())+", length="+Math.sqrt(error.spanSquared()));
             split(curve,from,middle,scale,startMiter,0,frames,output,maxError);
             split(curve,middle,to,scale,0,endMiter,frames,output,maxError);
-        } else { output.add(to); maxError[0] = Math.max(maxError[0],Math.sqrt(error)); maxError[1] = Math.max(maxError[1],Math.sqrt(span)); }
+        } else { output.add(to); maxError[0] = Math.max(maxError[0],Math.sqrt(error.profileSquared())); maxError[1] = Math.max(maxError[1],Math.sqrt(error.spanSquared())); }
     }
 }

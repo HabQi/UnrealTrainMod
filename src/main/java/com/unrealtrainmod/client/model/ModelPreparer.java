@@ -14,6 +14,8 @@ import com.unrealtrainmod.vehicle.VehicleActions;
 import com.unrealtrainmod.vehicle.VehicleDefinition;
 import com.unrealtrainmod.compat.ir.IrModelComponent;
 import com.unrealtrainmod.compat.ir.IrVehicleDefinition;
+import com.unrealtrainmod.compat.rtm.RtmRollsign;
+import com.unrealtrainmod.vehicle.VehiclePartRole;
 import com.unrealtrainmod.client.texture.PreparedTexture;
 import com.unrealtrainmod.client.RenderCategory;
 import com.unrealtrainmod.client.renderer.RenderBatch;
@@ -68,9 +70,13 @@ public final class ModelPreparer {
         var failed = new HashSet<ModelSource>();
         var actions = collectActions(definitions);
         var irDefinitions = new HashMap<ModelSource, Set<IrVehicleDefinition>>();
+        var rollsigns = new HashMap<ModelSource, Set<RtmRollsign>>();
         for (var definition : definitions) for (var instance : definition.parts()) {
             if (instance.source().format() == ModelSource.Format.IR_OBJ) {
                 irDefinitions.computeIfAbsent(instance.source(), ignored -> new HashSet<>()).add(definition.ir());
+            }
+            if (definition.rollsign() != null && instance.role() == VehiclePartRole.BODY) {
+                rollsigns.computeIfAbsent(instance.source(), ignored -> new LinkedHashSet<>()).add(definition.rollsign());
             }
         }
         try (var cache = new ModelCache("vehicles"); var textures = new TexturePool()) {
@@ -97,7 +103,8 @@ public final class ModelPreparer {
                     prepared.put(entry.getKey(), prepareSource(entry.getKey(), entry.getValue().parts(),
                             entry.getValue().irComponents(), regions,
                             actions.getOrDefault(entry.getKey(), List.of()),
-                            irDefinitions.getOrDefault(entry.getKey(), Set.of()), irPreparer));
+                            irDefinitions.getOrDefault(entry.getKey(), Set.of()), irPreparer,
+                            rollsigns.getOrDefault(entry.getKey(), Set.of()), textures));
                 } catch (RuntimeException e) {
                     LOGGER.error("Unable to prepare vehicle model {}", entry.getKey().model(), e);
                 }
@@ -141,11 +148,15 @@ public final class ModelPreparer {
                                 : mode != null ? "materialRenderModes default" : "legacy RTM alpha rules"));
                 var binding = imported.textures().get(material);
                 ResourceLocation texture = TextureLoader.WHITE;
-                TextureAlpha alpha = TextureAlpha.WHITE;
+                TextureAlpha alpha = TextureAlpha.FULLY_OPAQUE;
                 if (binding != null) {
-                    var shared = textures.load(binding.asset());
-                    texture = shared.id();
-                    alpha = shared.alpha();
+                    if (binding.asset() == null) {
+                        texture = textures.missingBase();
+                    } else {
+                        var shared = textures.load(binding.asset());
+                        texture = shared.id();
+                        alpha = shared.alpha();
+                    }
                 }
                 boolean alphaBlend = material.alpha() < 1 || (binding != null && binding.alphaBlend());
                 summary.alphaBlend |= binding != null && binding.alphaBlend();
@@ -242,7 +253,7 @@ public final class ModelPreparer {
                                                List<IrModelComponent> irComponents,
                                                Map<ResourceLocation, TextureAtlas.Region> regions,
                                                List<VehicleActions> actions, Set<IrVehicleDefinition> irDefinitions,
-                                               IrModelPreparer irPreparer) {
+                                               IrModelPreparer irPreparer, Set<RtmRollsign> rollsigns, TexturePool textures) {
         var originalVisible = parts.stream().filter(ModelPart::visible).flatMap(part -> part.batches().stream())
                 .filter(batch -> batch.category() == RenderCategory.CUTOUT).toList();
         int beforeAtlas = OpaqueBatchMerger.visibleBatchCount(parts);
@@ -300,6 +311,19 @@ public final class ModelPreparer {
         var irBindings = source.format() == ModelSource.Format.IR_OBJ
                 ? irPreparer.prepare(source, merged.parts(), irComponents, irDefinitions, allBatches)
                 : Map.<IrVehicleDefinition, IrModelBinding>of();
+        var rollsignFrames = new HashMap<RtmRollsign, List<PreparedModel.RollsignFrame>>();
+        for (var sign : rollsigns) {
+            try {
+                var frames = RtmRollsignPreparer.prepare(sign, textures);
+                for (var frame : frames) {
+                    allBatches.addAll(frame.lit().batches());
+                    allBatches.addAll(frame.fullBright().batches());
+                }
+                rollsignFrames.put(sign, frames);
+            } catch (IOException | RuntimeException exception) {
+                LOGGER.warn("Unable to prepare rollsign {} for {}: {}", sign.texture(), source.model(), exception.getMessage());
+            }
+        }
         var mergedVisible = merged.visibleBatches().stream().filter(batch -> batch.category() == RenderCategory.CUTOUT).toList();
         LOGGER.info("Model {}: visible CUTOUT batches {} -> {}; triangles {} -> {}",
                 source.model(), originalVisible.size(), mergedVisible.size(),
@@ -308,7 +332,8 @@ public final class ModelPreparer {
         LOGGER.info("Model {}: atlas visible CUTOUT batches {} -> {}",
                 source.model(), beforeAtlas, mergedVisible.size());
         return new PreparedModel(merged.parts(), visibleSelection, Map.copyOf(bodySelections),
-                Collections.unmodifiableMap(actionSelections), Map.copyOf(partsByName), irBindings, List.copyOf(allBatches));
+                Collections.unmodifiableMap(actionSelections), Map.copyOf(partsByName), irBindings,
+                Map.copyOf(rollsignFrames), List.copyOf(allBatches));
     }
 
     /** Resolve one ordered selection per node; repeated names intentionally retain repeated geometry. */

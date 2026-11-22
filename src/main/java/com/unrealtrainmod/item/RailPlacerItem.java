@@ -4,9 +4,11 @@
  */
 package com.unrealtrainmod.item;
 
-import com.unrealtrainmod.track.model.RailCatalog;
+import com.unrealtrainmod.UnrealTrainMod;
 import com.unrealtrainmod.registry.ModDataComponents;
 import com.unrealtrainmod.track.construction.TrackConstructionManager;
+import com.unrealtrainmod.track.model.NativeTurnoutCatalog;
+import com.unrealtrainmod.track.model.RailCatalog;
 import java.util.List;
 import net.minecraft.ChatFormatting;
 import net.minecraft.network.chat.Component;
@@ -29,6 +31,20 @@ public final class RailPlacerItem extends Item {
         return stack.get(ModDataComponents.SELECTED_RAIL_MODEL.get());
     }
 
+    public static RailCatalog.Selection selection(ItemStack stack) {
+        return new RailCatalog.Selection(selectedModel(stack), stack.get(ModDataComponents.SELECTED_RAIL_VARIANT.get()));
+    }
+
+    /** Prefer the held placer, then the hotbar and the main inventory in slot order. */
+    public static RailCatalog.Selection constructionSelection(Player player) {
+        var placer = UnrealTrainMod.RAIL_PLACER.get();
+        if (player.getMainHandItem().is(placer)) return selection(player.getMainHandItem());
+        for (var stack : player.getInventory().items) {
+            if (stack.is(placer)) return selection(stack);
+        }
+        return selection(ItemStack.EMPTY);
+    }
+
     @Override
     public InteractionResult useOn(UseOnContext context) {
         if (context.getHand() != InteractionHand.MAIN_HAND) return InteractionResult.FAIL;
@@ -48,13 +64,18 @@ public final class RailPlacerItem extends Item {
 
     @Override
     public void appendHoverText(ItemStack stack, TooltipContext context, List<Component> lines, TooltipFlag flags) {
-        var id = selectedModel(stack);
+        var selection = selection(stack);
+        var id = selection.modelId();
         var definition = RailCatalog.find(id);
-        lines.add(Component.translatable("item.unrealtrainmod.rail_placer.selected", id == null
+        var name = id == null
                 ? Component.translatable("item.unrealtrainmod.rail_placer.none")
-                : com.unrealtrainmod.track.model.NativeTurnoutCatalog.contains(id)
-                    ? Component.translatable(com.unrealtrainmod.track.model.NativeTurnoutCatalog.nameKey(id))
-                    : Component.literal(definition == null ? id.toString() : definition.railName())).withStyle(ChatFormatting.AQUA));
+                : NativeTurnoutCatalog.contains(id)
+                    ? Component.translatable(NativeTurnoutCatalog.nameKey(id))
+                    : Component.literal(definition == null ? id.toString() : definition.railName());
+        if (selection.variant() != null) {
+            name = Component.translatable("gui.unrealtrainmod.rail_models.variant." + selection.variant().getSerializedName(), name);
+        }
+        lines.add(Component.translatable("item.unrealtrainmod.rail_placer.selected", name).withStyle(ChatFormatting.AQUA));
         for (String key : List.of("select", "place", "cancel", "permission")) {
             lines.add(Component.translatable("item.unrealtrainmod.rail_placer." + key).withStyle(ChatFormatting.GRAY));
         }

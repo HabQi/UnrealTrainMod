@@ -8,7 +8,9 @@ import com.unrealtrainmod.track.geometry.TrackVector;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.TreeSet;
 import java.util.function.DoubleFunction;
+import java.util.function.ToIntFunction;
 
 import static com.unrealtrainmod.track.mesh.NativeRailCurve.add;
 import static com.unrealtrainmod.track.mesh.NativeRailCurve.dot;
@@ -25,12 +27,17 @@ public record NativeDoubleSlipLayout(TrackVector origin, double scale, List<Stri
     private static final double INNER_TOE_TRIM = .32;
     private static final double OUTER_TOE_TRIM = .90;
     private static final double INNER_FOOT_RELIEF = .060;
+    private static final double FOOT_RELIEF_START = INNER_TOE_TRIM+.06;
+    private static final double FOOT_RELIEF_END = FOOT_RELIEF_START+.10;
     private static final double INNER_HEEL = 3.222079;
     private static final double INNER_ARC_EXTENSION = 1;
     private static final double INNER_FLEX_EXTENSION = 1.5;
     private static final double FIXED_INNER_RAIL_RESERVE = .40;
     private static final double FLEX_SEGMENT_LENGTH = .15;
     private static final double MAX_JOINT_ROTATION = Math.toRadians(.1);
+    private static final double VISIBLE_JOINT_LIMIT = .00125;
+    private static final double CONTACT_TOLERANCE = .00025;
+    private static final double PREFERRED_INTERIOR_LENGTH = .10;
     private static final List<String> CONTROLS = List.of("switch_one", "switch_two", "switch_three", "switch_four");
 
     public record Section(TrackVector point, TrackVector tangent, double width, TrackVector across,
@@ -85,7 +92,7 @@ public record NativeDoubleSlipLayout(TrackVector origin, double scale, List<Stri
         var secondPath = new NativeDiamondLayout.Path(second);
         var frogs = NativeDiamondLayout.slipFrogs(firstPath,secondPath,ends,scale);
         var fixed = new ArrayList<Strip>();
-        var blades = prepareBlades(first,second,bends,ends,scale);
+        var blades = prepareBlades(first,second,bends,ends,scale,true);
         for (int i = 0; i < 4; i++) {
             var main = i < 2 ? first : second;
             int side = i % 2 == 0 ? -1 : 1;
@@ -124,7 +131,7 @@ public record NativeDoubleSlipLayout(TrackVector origin, double scale, List<Stri
 
     static void validateBlades(TrackGeometry first, TrackGeometry second, NativeDoubleSlipSolver.Solution solution,
                                NativeDiamondLayout.SlipEnds ends, double scale) {
-        prepareBlades(first,second,List.of(solution.first().get(1),solution.second().get(1)),ends,scale);
+        prepareBlades(first,second,List.of(solution.first().get(1),solution.second().get(1)),ends,scale,false);
     }
 
     private static double heel(TrackGeometry bend, double scale, double extension) {
@@ -135,7 +142,7 @@ public record NativeDoubleSlipLayout(TrackVector origin, double scale, List<Stri
     }
 
     private static Blades prepareBlades(TrackGeometry first, TrackGeometry second, List<TrackGeometry> bends,
-                                       NativeDiamondLayout.SlipEnds ends, double scale) {
+                                        NativeDiamondLayout.SlipEnds ends, double scale, boolean renderLayout) {
         var controls = new ArrayList<Control>();
         var cuts = new ArrayList<Cut>();
         double toe = scale;
@@ -159,7 +166,7 @@ public record NativeDoubleSlipLayout(TrackVector origin, double scale, List<Stri
                     station(main, innerCrossing, firstLine, reverse), station(main, outerCrossing, firstLine, reverse),
                     station(other, innerCrossing, !firstLine, false),innerCrossing.workingPoint());
             if (bend.getLength() <= 2 * heel) throw space("inner_blade_heels", CONTROLS.get(i), side, toe, bend.getLength(), 2 * heel);
-            controls.add(new Control(CONTROLS.get(i), blades(port, forwardSide, cuts, scale, toe, arcEnd, heel)));
+            controls.add(new Control(CONTROLS.get(i), blades(port, forwardSide, cuts, scale, toe, arcEnd, heel,renderLayout)));
         }
         var gapsByRail = new ArrayList<List<Gap>>(4);
         for (int i = 0; i < 4; i++) {
@@ -193,7 +200,7 @@ public record NativeDoubleSlipLayout(TrackVector origin, double scale, List<Stri
     }
 
     private static List<Blade> blades(Port port, int forwardSide, List<Cut> cuts, double scale, double toe,
-                                      double arcEnd, double heel) {
+                                       double arcEnd, double heel, boolean renderLayout) {
         var main = port.main();
         var bend = port.bend();
         int side = port.side();
@@ -224,7 +231,7 @@ public record NativeDoubleSlipLayout(TrackVector origin, double scale, List<Stri
             var horizontal = add(start, along, s*sinc(t*halfTurn));
             var point = new TrackVector(horizontal.x(), start.y()+t*chord.y(), horizontal.z());
             double available = availableWidth(point, direction, side, main, stockToe+s, side*offset, scale);
-            double relief = INNER_FOOT_RELIEF*(1-Math.clamp((s/scale-INNER_TOE_TRIM-.06)/.10,0,1));
+            double relief = INNER_FOOT_RELIEF*(1-Math.clamp((s/scale-FOOT_RELIEF_START)/(FOOT_RELIEF_END-FOOT_RELIEF_START),0,1));
             return new Section(point,direction,taperWidth(available),lateral(direction),footLimit(available),0,relief);
         };
         DoubleFunction<Section> through = s -> {
@@ -238,10 +245,10 @@ public record NativeDoubleSlipLayout(TrackVector origin, double scale, List<Stri
         addGap(cuts,port,-side,port.transition(),outerHeel,null);
         addGap(cuts,port,side,pivot,crossingEnd,crossingJoint(port));
 
-        var inner = flexible(slip, slipLength, side, true, scale);
+        var inner = flexible(slip, slipLength, side, true, scale,renderLayout);
         return List.of(extendSlipHeel(inner, port, arcEnd, heel, stockToe+slipLength, scale),
-                flexible(through, blueLength, -side, false, scale),
-                shortRail(port,nose,pivot,side*offset,forwardSide*offset,scale));
+                flexible(through, blueLength, -side, false, scale,renderLayout),
+                shortRail(port,nose,pivot,side*offset,forwardSide*offset,scale,renderLayout));
     }
 
     private static Blade extendSlipHeel(Blade blade, Port port, double from, double to, double stockStation, double scale) {
@@ -279,7 +286,8 @@ public record NativeDoubleSlipLayout(TrackVector origin, double scale, List<Stri
         return new Section(port.crossingPoint(),tangent,HEAD_WIDTH,multiply(across,1/dot(across,lateral(tangent))),FOOT_OUTER,0);
     }
 
-    private static Blade shortRail(Port port, double nose, double pivot, double offset, double otherOffset, double scale) {
+    private static Blade shortRail(Port port, double nose, double pivot, double offset, double otherOffset, double scale,
+                                   boolean renderLayout) {
         int side = -port.side();
         var tip = shortSection(port,nose,side,offset,otherOffset,scale,.60);
         var atPivot = port.main().sample(pivot);
@@ -291,12 +299,32 @@ public record NativeDoubleSlipLayout(TrackVector origin, double scale, List<Stri
         var rootTangent = multiply(atPivot.tangent(),-1);
         // The inner lip of the foot passes the fixed heel as the blade opens.
         var root = new Section(rootPoint,rootTangent,HEAD_WIDTH,lateral(rootTangent),FOOT_OUTER,-Math.tan(Math.abs(rotation)));
-        var links = new ArrayList<Link>();
+        DoubleFunction<Section> section = station -> shortSection(port,station,side,offset,otherOffset,scale,0);
         int segments = (int)Math.ceil((nose-pivot)/(.10*scale));
+        var original = sampleShortRail(tip,root,section,nose,pivot,side,rotation,segments);
+        if (!renderLayout) return original;
+
+        // A finer set of possible cuts can land on either side of the railhead
+        // and foot taper without turning every sample into a separate rail.
+        var best = longerRails(original,scale,true,blade -> -1);
+        int fineSegments = (int)Math.ceil((nose-pivot)/(.025*scale));
+        Blade fine;
+        try {
+            fine = sampleShortRail(tip,root,section,nose,pivot,side,rotation,fineSegments);
+        } catch (NativeDoubleSlipSolver.InvalidLayout failure) {
+            return best;
+        }
+        var refined = longerRails(fine,scale,true,blade -> -1);
+        return refined.links().size() < best.links().size() ? refined : best;
+    }
+
+    private static Blade sampleShortRail(Section tip, Section root, DoubleFunction<Section> section, double nose,
+                                        double pivot, int side, double rotation, int segments) {
+        var links = new ArrayList<Link>();
         var previous = tip;
         for (int i = 1; i <= segments; i++) {
             double station = nose+(pivot-nose)*i/segments;
-            var next = i == segments ? root : shortSection(port,station,side,offset,otherOffset,scale,0);
+            var next = i == segments ? root : section.apply(station);
             // Equal rotations make all links rotate as one rigid rail around the heel.
             links.add(new Link(new Strip(previous,next,side),rotation,0));
             previous = next;
@@ -328,20 +356,29 @@ public record NativeDoubleSlipLayout(TrackVector origin, double scale, List<Stri
         return reverse ? path.getLength() - station : station;
     }
 
-    private static Blade flexible(DoubleFunction<Section> section, double length, int side, boolean slip, double scale) {
+    private static Blade flexible(DoubleFunction<Section> section, double length, int side, boolean slip, double scale,
+                                  boolean renderLayout) {
         int flexCount = Math.max(3, (int)Math.ceil(length/(FLEX_SEGMENT_LENGTH*scale)));
         double target = FLEX_BLADE_OPENING * scale;
         while (true) {
             var strips = new ArrayList<Strip>();
             var weights = new ArrayList<Double>();
             var previous = section.apply(0);
-            for (int i = 1; i <= flexCount; i++) {
-                var next = section.apply(length*i/flexCount);
+            var stations = new TreeSet<Double>();
+            for (int i = 1; i <= flexCount; i++) stations.add(length*i/flexCount);
+            if (slip && renderLayout) {
+                if (FOOT_RELIEF_START*scale < length) stations.add(FOOT_RELIEF_START*scale);
+                if (FOOT_RELIEF_END*scale < length) stations.add(FOOT_RELIEF_END*scale);
+            }
+            double lastStation = 0;
+            for (double station : stations) {
+                var next = section.apply(station);
                 strips.add(new Strip(previous, next, side));
-                double u = (i-.5)/flexCount;
+                double u = (lastStation+station)/(2*length);
                 // The linear inner-blade profile establishes the baseline toe travel.
                 weights.add(slip ? 1-u : 1-u*u*u*(10+u*(-15+6*u)));
                 previous = next;
+                lastStation = station;
             }
             double low = 0, high = .25;
             if (travel(strips, weights, high*side, side) < target)
@@ -447,6 +484,230 @@ public record NativeDoubleSlipLayout(TrackVector origin, double scale, List<Stri
         return length(add(link.strip().end().point(),link.strip().start().point(),-1));
     }
 
+    private record RailSpan(int from, int to, Link rail) {
+        int size() { return to-from; }
+    }
+
+    private record RailPartition(RailSpan last, RailPartition previous, int count, double shortfall) {}
+
+    /** The fine chain is the reference for preparation only. Each accepted span emits one source rail. */
+    public static Blade longerRails(Blade reference, double scale, boolean rigid, ToIntFunction<Blade> obstruction) {
+        var original = reference.links();
+        int first = 0;
+        while (original.get(first).visibleFrom() == 1) first++;
+        var toe = original.get(first);
+        var links = original;
+        if (toe.visibleFrom() > 0) {
+            var strip = toe.strip();
+            var retained = strip.start().interpolate(strip.end(),toe.visibleFrom());
+            if (fitsToeCut(toe,retained,scale)) {
+                // Measure from the visible cut so the clipped remainder can share a longer rail.
+                var visible = new ArrayList<>(original);
+                visible.set(first,new Link(new Strip(retained,strip.end(),strip.side()),toe.rotation(),0));
+                links = visible;
+            }
+        }
+        var stations = new double[links.size()+1];
+        for (int i = first; i < links.size(); i++) stations[i+1] = stations[i]+segmentLength(links.get(i));
+        var precise = railMotions(links,first);
+        var spans = partitionRails(links,precise,stations,first,scale,rigid);
+        if (spans.isEmpty()) return reference;
+        while (spans.size() < links.size()-first) {
+            var candidate = new Blade(spans.stream().map(RailSpan::rail).toList(),reference.opensInNormal());
+            if (!rigid) candidate = matchOpening(reference,candidate);
+            int failed = candidate == null ? -1 : motionError(precise,candidate.links(),spans,stations,scale,rigid);
+            if (candidate != null && failed < 0) {
+                if (links != original && spans.getFirst().size() == 1) {
+                    var rails = new ArrayList<>(candidate.links());
+                    rails.set(0,new Link(toe.strip(),rails.getFirst().rotation(),toe.visibleFrom()));
+                    candidate = new Blade(List.copyOf(rails),candidate.opensInNormal());
+                }
+                failed = obstruction.applyAsInt(candidate);
+                if (failed < 0) return candidate;
+            }
+
+            // A downstream change can displace an unsimplified upstream link.
+            // If the reported span cannot split, refine the longest changed span.
+            if (failed < 0 || spans.get(failed).size() == 1) {
+                failed = -1;
+                double longest = 0;
+                for (int i = 0; i < spans.size(); i++) {
+                    var span = spans.get(i);
+                    double length = stations[span.to()]-stations[span.from()];
+                    if (span.size() > 1 && length > longest) { failed = i; longest = length; }
+                }
+            }
+            var span = spans.get(failed);
+            double halfway = (stations[span.from()]+stations[span.to()])*.5;
+            int cut = span.from()+1;
+            while (cut+1 < span.to() && stations[cut+1]-halfway < halfway-stations[cut]) cut++;
+            spans.set(failed,railSpan(links,precise,span.from(),cut,rigid));
+            spans.add(failed+1,railSpan(links,precise,cut,span.to(),rigid));
+        }
+        return reference;
+    }
+
+    private static boolean fitsToeCut(Link toe, Section retained, double scale) {
+        var strip = toe.strip();
+        double limit = NativeFixedRails.ERROR*scale;
+        for (int corner = 0; corner < 5; corner++) {
+            var start = profilePoint(strip.start(),strip.side(),corner,scale);
+            var end = profilePoint(strip.end(),strip.side(),corner,scale);
+            var cut = add(start,add(end,start,-1),toe.visibleFrom());
+            var error = add(profilePoint(retained,strip.side(),corner,scale),cut,-1);
+            if (dot(error,error) > limit*limit) return false;
+        }
+        return true;
+    }
+
+    private static ArrayList<RailSpan> partitionRails(List<Link> links, NativeTurnoutLayout.Motion[] precise,
+                                                     double[] stations, int first, double scale, boolean rigid) {
+        // Two spans that independently follow the profile may fail when joined.
+        // Keep the shortest partition ending in each possible final span.
+        var order = Comparator.comparingInt(RailPartition::count).thenComparingDouble(RailPartition::shortfall);
+        var endingAt = new ArrayList<List<RailPartition>>(links.size()+1);
+        for (int i = 0; i <= links.size(); i++) endingAt.add(new ArrayList<>());
+        for (int from = first; from < links.size(); from++) {
+            for (int to = from+1; to <= links.size(); to++) {
+                if (to > from+1 && (links.get(from).visibleFrom() != 0
+                        || stations[to]-stations[from] > NativeFixedRails.MAX_LENGTH*scale)) break;
+                if (to > from+1 && !fitsProfile(links,from,to,scale)) continue;
+                var span = railSpan(links,precise,from,to,rigid);
+                if (!rigid && to == links.size() && !fitsJoint(span.rail(),0)) continue;
+                // The toe cut and heel can legitimately require a short end rail.
+                double missing = from == first || to == links.size() ? 0
+                        : Math.max(0,PREFERRED_INTERIOR_LENGTH*scale-segmentLength(span.rail()));
+                double shortfall = missing*missing;
+                if (from == first) endingAt.get(to).add(new RailPartition(span,null,1,shortfall));
+                else {
+                    RailPartition best = null;
+                    for (var previous : endingAt.get(from)) {
+                        if ((best == null || order.compare(previous,best) < 0)
+                                && fitsJoint(previous.last().rail(),span.rail().rotation())) best = previous;
+                    }
+                    if (best != null) endingAt.get(to).add(new RailPartition(span,best,best.count()+1,best.shortfall()+shortfall));
+                }
+            }
+        }
+        var result = new ArrayList<RailSpan>();
+        var best = endingAt.getLast().stream().min(order).orElse(null);
+        for (var partition = best; partition != null; partition = partition.previous()) result.add(partition.last());
+        return new ArrayList<>(result.reversed());
+    }
+
+    private static RailSpan railSpan(List<Link> links, NativeTurnoutLayout.Motion[] precise, int from, int to, boolean rigid) {
+        var a = links.get(from);
+        if (to == from+1) return new RailSpan(from,to,a);
+        var b = links.get(to-1);
+        var strip = new Strip(a.strip().start(),b.strip().end(),a.strip().side());
+        double rotation = a.rotation();
+        if (!rigid) {
+            var openEnd = to < links.size() ? precise[to].start(1) : strip.end().point();
+            var openChord = add(openEnd,precise[from].start(1),-1);
+            double angle = yaw(openChord)-yaw(add(strip.end().point(),strip.start().point(),-1));
+            rotation = Math.atan2(Math.sin(angle),Math.cos(angle));
+        }
+        return new RailSpan(from,to,new Link(strip,rotation,a.visibleFrom()));
+    }
+
+    private static boolean fitsProfile(List<Link> links, int from, int to, double scale) {
+        var a = links.get(from).strip(); var b = links.get(to-1).strip();
+        double limit = NativeFixedRails.ERROR*scale;
+        for (int corner = 0; corner < 5; corner++) {
+            var start = profilePoint(a.start(),a.side(),corner,scale);
+            var end = profilePoint(b.end(),a.side(),corner,scale);
+            var chord = add(end,start,-1);
+            double chordSquared = dot(chord,chord);
+            if (length(chord) > NativeFixedRails.MAX_LENGTH*scale) return false;
+            // The fine source strips interpolate between these sections, so their endpoints
+            // bound the error of the longer strip throughout each original interval.
+            for (int j = from+1; j < to; j++) {
+                var section = links.get(j).strip().start();
+                var exact = profilePoint(section,a.side(),corner,scale);
+                // End bevels shift vertices along the rail. Compare the actual edge line
+                // rather than treating a longitudinal shift as a change in profile.
+                double along = Math.clamp(dot(add(exact,start,-1),chord)/chordSquared,0,1);
+                var error = add(add(start,chord,along),exact,-1);
+                if (dot(error,error) > limit*limit) return false;
+                // Near an adjacent rail, preserve the side of the narrowed head and foot.
+                if ((corner == 1 && section.width() < HEAD_WIDTH || corner == 2 && section.footLimit() < FOOT_OUTER)
+                        && a.side()*dot(error,section.across()) > CONTACT_TOLERANCE*scale) return false;
+            }
+        }
+        return true;
+    }
+
+    private static TrackVector profilePoint(Section section, int side, int corner, double scale) {
+        double across = switch (corner) {
+            case 0 -> 0;
+            case 1 -> section.width();
+            case 2 -> Math.min(FOOT_OUTER*section.width()/HEAD_WIDTH,section.footLimit());
+            case 3 -> Math.min(-FOOT_INNER,section.footLimit());
+            default -> Math.min(.0084+HEAD_WIDTH/2,section.width());
+        };
+        double y = corner == 2 || corner == 3 ? -.176+section.footRelief() : corner == 4 ? -.13 : 0;
+        double bevel = section.bevel()*Math.max(0,Math.signum(section.bevel())*across);
+        var point = add(add(section.point(),section.across(),side*across*scale),section.tangent(),bevel*scale);
+        return new TrackVector(point.x(),point.y()+y*scale,point.z());
+    }
+
+    private static Blade matchOpening(Blade reference, Blade candidate) {
+        var toe = reference.links().stream().filter(link -> link.visibleFrom() < 1).findFirst().orElseThrow();
+        var normal = lateral(unit(add(toe.strip().end().point(),toe.strip().start().point(),-1)));
+        var rails = candidate.links();
+        double target = OpeningProjection.of(reference.links(),normal).original(reference.links());
+        double peak = rails.stream().mapToDouble(link -> Math.abs(link.rotation())).max().orElseThrow();
+        if (peak == 0) return target == 0 ? candidate : null;
+        var weights = rails.stream().mapToDouble(link -> link.rotation()/peak).toArray();
+        double angle = OpeningProjection.of(rails,normal).solve(weights,target,Math.signum(target),.25);
+        return Double.isNaN(angle) ? null : new Blade(rotatedLinks(rails,weights,angle),candidate.opensInNormal());
+    }
+
+    private static int motionError(NativeTurnoutLayout.Motion[] precise, List<Link> candidate, List<RailSpan> spans,
+                                   double[] stations, double scale, boolean rigid) {
+        var coarse = railMotions(candidate,0);
+        double limit = NativeFixedRails.ERROR*scale;
+        for (int i = 0; i < candidate.size(); i++) {
+            double next = i+1 < candidate.size() ? candidate.get(i+1).rotation() : 0;
+            // The central short rail has a relieved heel for its rigid pivot.
+            if ((!rigid || i+1 < candidate.size()) && !fitsJoint(candidate.get(i),next))
+                return i+1 < spans.size() && spans.get(i+1).size() > spans.get(i).size() ? i+1 : i;
+            var span = spans.get(i); var motion = coarse[i];
+            for (int sample = 0; sample <= 4; sample++) {
+                float opening = sample/4f;
+                var start = motion.start(opening);
+                var end = i+1 < coarse.length ? coarse[i+1].start(opening) : candidate.getLast().strip().end().point();
+                var chord = add(end,start,-1);
+                for (int j = span.from(); j < span.to(); j++) {
+                    double t = (stations[j]-stations[span.from()])/(stations[span.to()]-stations[span.from()]);
+                    var delta = add(add(start,chord,t),precise[j].start(opening),-1);
+                    if (dot(delta,delta) > limit*limit) return i;
+                }
+            }
+        }
+        return -1;
+    }
+
+    private static boolean fitsJoint(Link rail, double nextRotation) {
+        var section = rail.strip().end();
+        double head = section.width();
+        double foot = Math.min(FOOT_OUTER*head/HEAD_WIDTH,section.footLimit());
+        double reach = Math.max(Math.max(FOOT_INNER,head),Math.abs(foot))*Math.hypot(1,section.bevel());
+        return 2*reach*Math.abs(Math.sin((rail.rotation()-nextRotation)/2)) <= VISIBLE_JOINT_LIMIT;
+    }
+
+    private static NativeTurnoutLayout.Motion[] railMotions(List<Link> links, int first) {
+        var motions = new NativeTurnoutLayout.Motion[links.size()];
+        NativeTurnoutLayout.Motion next = null;
+        for (int i = links.size()-1; i >= first; i--) {
+            var link = links.get(i); var strip = link.strip();
+            var chord = add(strip.end().point(),strip.start().point(),-1);
+            next = NativeTurnoutLayout.Motion.horizontal(next,strip.end().point(),length(chord),yaw(chord),link.rotation(),false);
+            motions[i] = next;
+        }
+        return motions;
+    }
+
     private static List<Link> rotatedLinks(List<Link> links, double[] weights, double angle) {
         var spread = new ArrayList<Link>(links.size());
         for (int i = 0; i < links.size(); i++) {
@@ -531,7 +792,7 @@ public record NativeDoubleSlipLayout(TrackVector origin, double scale, List<Stri
                                          double guess, double offset, double scale) {
         double station = aligned(face, guess, offset, point, direction);
         double available = side * dot(add(edge(face,station,offset),point,-1), lateral(direction)) / scale;
-        if (available < -.00025) throw space("railhead_clearance", "slip", side, guess, available, HEAD_WIDTH);
+        if (available < -CONTACT_TOLERANCE) throw space("railhead_clearance", "slip", side, guess, available, HEAD_WIDTH);
         return available;
     }
 

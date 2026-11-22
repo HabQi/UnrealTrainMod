@@ -6,7 +6,6 @@ package com.unrealtrainmod.compat.rtm.script;
 
 import com.unrealtrainmod.entity.TrainEntity;
 import com.unrealtrainmod.resource.PackageAsset;
-import com.unrealtrainmod.train.TrainControlProfile;
 import com.unrealtrainmod.vehicle.VehicleDoor;
 import com.unrealtrainmod.vehicle.VehiclePartRole;
 
@@ -23,16 +22,15 @@ final class RtmVehicleAdapter {
     RtmVehicleView sample(TrainEntity entity, float partialTick, float wheelRotation, int light) {
         if (entity == null) return null;
         var state = entity.runtimeState();
-        int notch = state.emergencyBrake() ? -TrainControlProfile.BRAKE_NOTCHES
-                : state.trainBrake() > 0 ? -(int)Math.round(state.trainBrake() * TrainControlProfile.BRAKE_NOTCHES)
-                : (int)Math.round(state.throttle() * TrainControlProfile.POWER_NOTCHES);
+        int notch = RtmTrainState.notch(state);
         int doorState = (entity.isDoorOpen(VehicleDoor.RIGHT) ? 1 : 0)
                 | (entity.isDoorOpen(VehicleDoor.LEFT) ? 2 : 0);
         boolean body = role == VehiclePartRole.BODY;
-        view.update(entity.tickCount, light, (float)(state.speed() / 20.0), notch,
-                state.reverser() < 0 ? 1 : 0, doorState, wheelRotation,
+        view.update(entity.getId(), entity.tickCount, light, (float)(state.speed() / 20.0), notch,
+                state.reverser(), doorState, wheelRotation,
                 body ? entity.doorMovement(VehicleDoor.LEFT, partialTick) : 0,
-                body ? entity.doorMovement(VehicleDoor.RIGHT, partialTick) : 0);
+                body ? entity.doorMovement(VehicleDoor.RIGHT, partialTick) : 0,
+                state.formationIndex(), state.formationSize());
         return view;
     }
 }

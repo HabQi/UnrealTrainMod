@@ -120,7 +120,7 @@ final class IrVehicleAdapter {
         });
         return new VehicleDefinition(id, name, config, null, type, parts, bounds, spec,
                 properties.performance(), VehicleInteriorSpec.fromBounds(bounds, floorY),
-                IrVehicleDefinitions.read(json, rawParts, scale, archive, prefix, properties));
+                IrVehicleDefinitions.read(json, rawParts, scale, archive, prefix, properties), null, null);
     }
 
     private static double readFloorY(Map<String, ModelBounds> rawParts, double scale,

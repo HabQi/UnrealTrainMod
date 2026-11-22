@@ -14,10 +14,18 @@ import org.slf4j.LoggerFactory;
 
 /** Single-owner cache: vehicles use the render thread; each rail reload prepares its own independent domain. */
 public final class RtmScriptCache {
+    @FunctionalInterface
+    interface SourceLoader { RtmScriptSource.Prepared load(PackageAsset asset) throws IOException; }
+
     private static final Logger LOGGER = LoggerFactory.getLogger("UnrealTrainMod RTM scripts");
     private record Entry(RtmScriptProgram program, IOException failure) {}
     private final Map<PackageAsset, Entry> programs = new HashMap<>();
     private final Map<PackageAsset, ModelPreparation.Ticket<Entry>> pending = new HashMap<>();
+    private final SourceLoader loader;
+
+    public RtmScriptCache() { this(RtmScriptSource::load); }
+
+    RtmScriptCache(SourceLoader loader) { this.loader = loader; }
 
     /** The compiler owns a fresh engine until the complete program is handed to the render thread. */
     boolean request(PackageAsset asset) {
@@ -33,9 +41,9 @@ public final class RtmScriptCache {
         return true;
     }
 
-    private static Entry compile(PackageAsset asset) throws IOException {
+    private Entry compile(PackageAsset asset) throws IOException {
         LOGGER.debug("RTM script compilation cache miss: {}!{}", asset.archive(), asset.entry());
-        try { return new Entry(new RtmScriptProgram(RtmScriptSource.load(asset)), null); }
+        try { return new Entry(new RtmScriptProgram(loader.load(asset)), null); }
         catch (IOException exception) { throw exception; }
         catch (RuntimeException | LinkageError exception) { throw new IOException("Script compilation failed for " + asset, exception); }
     }
@@ -46,10 +54,10 @@ public final class RtmScriptCache {
         try {
             var entry = ticket.take();
             programs.put(asset, entry);
-            if (entry.failure != null) LOGGER.warn("Cannot compile vehicle script {}; using static model", asset, entry.failure);
+            if (entry.failure != null) LOGGER.warn("Cannot compile RTM script {}", asset, entry.failure);
         } catch (RuntimeException exception) {
             programs.put(asset, new Entry(null, new IOException("Background script preparation failed for " + asset, exception)));
-            LOGGER.warn("Cannot prepare vehicle script {}; using static model", asset, exception);
+            LOGGER.warn("Cannot prepare RTM script {}", asset, exception);
         } finally { ticket.close(); pending.remove(asset); }
     }
 

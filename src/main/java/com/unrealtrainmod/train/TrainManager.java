@@ -1458,16 +1458,18 @@ public final class TrainManager {
             var car = train == null ? null : train.member(id);
             boolean front = train != null && train.peer(id, TrainCarEnd.FRONT) != null;
             boolean rear = train != null && train.peer(id, TrainCarEnd.REAR) != null;
-            if (train == null || !attached.contains(id) || entity.getRailAnchor() == null
-                    || !matches(entity, train, car)) {
-                entity.setRuntimeState(VehicleRuntimeState.IDLE);
-                entity.updateIrState(front, rear);
-                continue;
+            boolean member = car != null && matches(entity, train, car);
+            int formationIndex = member ? train.formationIndex(id) : -1;
+            int formationSize = formationIndex >= 0 ? train.cars().size() : 0;
+            if (member && attached.contains(id) && entity.getRailAnchor() != null) {
+                int direction = car.direction();
+                var control = train.control();
+                entity.setRuntimeState(new VehicleRuntimeState(direction * train.actualSpeed(), control.throttle(),
+                        control.trainBrake(), control.emergencyBrake(), direction * control.reverser().direction(),
+                        formationIndex, formationSize));
+            } else {
+                entity.setRuntimeState(VehicleRuntimeState.IDLE.withFormation(formationIndex, formationSize));
             }
-            int direction = car.direction();
-            var control = train.control();
-            entity.setRuntimeState(new VehicleRuntimeState(direction * train.actualSpeed(), control.throttle(),
-                    control.trainBrake(), control.emergencyBrake(), direction * control.reverser().direction()));
             entity.updateIrState(front, rear);
         }
     }

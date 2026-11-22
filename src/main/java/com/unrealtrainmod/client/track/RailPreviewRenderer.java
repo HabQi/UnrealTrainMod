@@ -43,10 +43,11 @@ public final class RailPreviewRenderer implements AutoCloseable {
         }
     }
 
-    public NativeImage capture(ClientRailModelManager.Model selected) {
+    public NativeImage capture(ClientRailModelManager.Model selected, boolean wholeAssembly) {
         if (!prepare(selected)) return null;
         try (var shaders = IrisCompat.previewShaders()) {
-            return renderer.capture(bounds, -180, 90, false, PreviewRenderer.RAIL_THUMBNAIL_SAMPLE_SCALE, this::draw);
+            return renderer.capture(bounds, wholeAssembly ? -90 : -180, 90, false,
+                    PreviewRenderer.RAIL_THUMBNAIL_SAMPLE_SCALE, wholeAssembly, this::draw);
         } finally { clearMesh(); }
     }
 
@@ -95,7 +96,8 @@ public final class RailPreviewRenderer implements AutoCloseable {
     }
 
     private void draw(PoseStack pose) {
-        try (var state = new TrackRenderState(null)) {
+        // GUI buffer flushes can re-enable Iris's extended format before entering the scene.
+        try (var vertices = IrisCompat.previewVertices(); var state = new TrackRenderState(null)) {
             if (mesh.isEmpty()) return;
             queue.begin();
             queue.addStatic(mesh, new Matrix4f(pose.last().pose()), TrackRenderStats.STRUCTURE_TRACK);

@@ -284,7 +284,8 @@ final class TrackStaticBuffers implements AutoCloseable {
                 } finally { IrisCompat.restoreTrackIdentity(identity); }
             } else {
                 var format = group.key.source() == TrackRenderStats.NATIVE ? DefaultVertexFormat.POSITION_COLOR_LIGHTMAP : DefaultVertexFormat.NEW_ENTITY;
-                try (var bytes = new ByteBufferBuilder(stride * 3)) {
+                try (var formatScope = fullBright ? IrisCompat.previewVertices() : null;
+                     var bytes = new ByteBufferBuilder(stride * 3)) {
                     var slice = MemoryUtil.memByteBuffer(bytes.reserve(stride * 3), stride * 3);
                     slice.put(prepared.nativeVertices.duplicate().limit(stride * 3));
                     buffer.allocate(new MeshData(bytes.build(), new MeshData.DrawState(format, 3, 3,

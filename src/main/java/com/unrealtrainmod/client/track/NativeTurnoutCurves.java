@@ -18,6 +18,9 @@ import java.util.WeakHashMap;
 /** Source preparation only: deform existing vertices without longitudinal subdivision. */
 final class NativeTurnoutCurves {
     private static final double HEAD_HALF = 0.0354982;
+    private static final double WEB_BOTTOM_Y = -0.13127;
+    private static final double WEB_TOP_Y = -0.05001;
+    private static final double WEB_TOLERANCE = 0.00001;
     private NativeTurnoutCurves() {}
 
     private static void normal(float[] data, int i, double x, double y, double z) {
@@ -41,12 +44,29 @@ final class NativeTurnoutCurves {
         for (float value : values) if (Float.isNaN(value)) throw new IOException("Native rail vertex has no deformation parameter");
         PARAMETERS.put(mesh, values);
     }
+    private record WebSection(float left, float right) {}
+
     private static final class Profile {
         final TreeMap<Float, Float> values = new TreeMap<>();
+        final WebSection web;
         Profile(IndexedMesh rail) {
             var data = rail.vertices();
             var parameters = PARAMETERS.get(rail);
-            for (int i = 0; i < data.length; i += 8) if (Math.abs(data[i+7]) < 0.1f) values.put(parameters[i/8], data[i]);
+            float bottomLeft = Float.POSITIVE_INFINITY, bottomRight = Float.NEGATIVE_INFINITY;
+            float topLeft = Float.POSITIVE_INFINITY, topRight = Float.NEGATIVE_INFINITY;
+            for (int i = 0; i < data.length; i += 8) {
+                if (Math.abs(data[i+7]) < 0.1f) values.put(parameters[i/8], data[i]);
+                float x = data[i], y = data[i+1];
+                if (Math.abs(y-WEB_BOTTOM_Y) <= WEB_TOLERANCE) {
+                    bottomLeft = Math.min(bottomLeft,x);
+                    bottomRight = Math.max(bottomRight,x);
+                } else if (Math.abs(y-WEB_TOP_Y) <= WEB_TOLERANCE) {
+                    topLeft = Math.min(topLeft,x);
+                    topRight = Math.max(topRight,x);
+                }
+            }
+            web = bottomLeft < bottomRight && Math.abs(topLeft-bottomLeft) <= WEB_TOLERANCE
+                    && Math.abs(topRight-bottomRight) <= WEB_TOLERANCE ? new WebSection(bottomLeft,bottomRight) : null;
         }
         double target(float v) {
             float key = Math.clamp(v, values.firstKey(), values.lastKey());
@@ -99,8 +119,15 @@ final class NativeTurnoutCurves {
         var mesh = clipped.mesh(); var data = mesh.vertices();
         var shapes = new HashMap<Float, BladeSection>();
         var targets = new HashMap<Float, Double>();
+        double fitStart = profile.web == null ? -0.06 : WEB_TOP_Y + WEB_TOLERANCE;
+        double fitSpan = -0.025-fitStart;
         for (int i = 0; i < data.length; i += 8) {
-            double target = targets.computeIfAbsent(clipped.parameters()[i/8], profile::target);
+            double y = data[i+1];
+            // Clipping carries cap parameters into the web. Both edges of each
+            // side must instead follow that side of the fixed rail's web.
+            double target = profile.web != null && y >= WEB_BOTTOM_Y-WEB_TOLERANCE && y <= fitStart
+                    ? (data[i] < center ? profile.web.left() : profile.web.right())
+                    : targets.computeIfAbsent(clipped.parameters()[i/8], profile::target);
             var shape = shapes.computeIfAbsent(data[i+2], z -> section(z, tip, length, contact));
             double delta = target-data[i], nx = data[i+5];
             double nz = (1-shape.weight())*data[i+7]-nx*shape.tailSlope()*delta;
@@ -110,18 +137,20 @@ final class NativeTurnoutCurves {
             double fitted = center + side*(lower + (upper-lower)*ratio);
             double width = (upper-lower)/(2*HEAD_HALF);
             double fittedSlope = side*(lowerSlope + (upperSlope-lowerSlope)*ratio);
-            double h = Math.clamp((data[i + 1] + 0.06)/0.035, 0, 1), blend = h*h*(3-2*h);
-            double blendSlope = 6*h*(1-h)/0.035, change = fitted-data[i];
+            double h = Math.clamp((y-fitStart)/fitSpan, 0, 1), blend = h*h*(3-2*h);
+            double blendSlope = 6*h*(1-h)/fitSpan, change = fitted-data[i];
             double jacobian = 1-blend + blend*width;
             nx = data[i + 5];
             normal(data, i, nx, data[i + 6]*jacobian-nx*blendSlope*change,
                     data[i + 7]*jacobian-nx*blend*fittedSlope);
             data[i] += (float)(blend*change);
             double heightOffset = shape.heightOffset(), heightSlope = shape.heightSlope();
-            double heightJacobian = 1+heightOffset*blendSlope;
+            double heightT = Math.clamp((y + 0.06)/0.035, 0, 1);
+            double heightBlend = heightT*heightT*(3-2*heightT);
+            double heightJacobian = 1+heightOffset*6*heightT*(1-heightT)/0.035;
             normal(data, i, data[i+5]*heightJacobian, data[i+6],
-                    data[i+7]*heightJacobian-data[i+6]*heightSlope*blend);
-            data[i+1] += (float)(heightOffset*blend);
+                    data[i+7]*heightJacobian-data[i+6]*heightSlope*heightBlend);
+            data[i+1] += (float)(heightOffset*heightBlend);
         }
         sweep(data, (float)tip, center, contact.curve(), new HashMap<>());
         return mesh;

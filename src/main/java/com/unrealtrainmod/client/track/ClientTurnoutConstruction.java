@@ -5,15 +5,15 @@
 package com.unrealtrainmod.client.track;
 
 import com.unrealtrainmod.UnrealTrainMod;
-import com.unrealtrainmod.item.TurnoutBuilderItem;
+import com.unrealtrainmod.item.RailPlacerItem;
 import com.unrealtrainmod.network.TrackSyncEvent;
+import com.unrealtrainmod.network.payload.ConfirmTurnoutPayload;
 import com.unrealtrainmod.network.payload.TurnoutConstructionPayload;
 import com.unrealtrainmod.network.payload.TrackConstructionPayload.Feedback;
 import com.unrealtrainmod.track.TrackCurveParameters;
 import com.unrealtrainmod.track.TrackPlacementEndpoint;
 import com.unrealtrainmod.track.AssemblyPlacementGeometry;
 import com.unrealtrainmod.track.assembly.TrackAssemblyDefinition;
-import com.unrealtrainmod.track.construction.TrackConstructionType;
 import com.unrealtrainmod.track.block.TrackBlockVolume;
 import com.unrealtrainmod.track.geometry.TrackVector;
 import com.unrealtrainmod.track.model.NativeTurnoutCatalog;
@@ -56,16 +56,29 @@ public final class ClientTurnoutConstruction implements ResourceManagerReloadLis
         }
         if (payload.feedback() == Feedback.CLEARED) return;
         boolean success = switch (payload.feedback()) {
-            case TURNOUT_A, TURNOUT_B, CROSSING_POINT, CROSSOVER_POINT, SCISSORS_POINT, DOUBLE_SLIP_POINT, READY, CREATED, CANCELLED, NATIVE_CROSSOVER_ADJUSTED -> true;
+            case READY, CREATED, CANCELLED, NATIVE_CROSSOVER_ADJUSTED -> true;
             default -> false;
         };
-        var message = payload.feedback() == Feedback.CROSSING_POINT || payload.feedback() == Feedback.CROSSOVER_POINT
-                || payload.feedback() == Feedback.SCISSORS_POINT || payload.feedback() == Feedback.DOUBLE_SLIP_POINT
-                ? Component.translatable(payload.feedback().translationKey(), payload.points().size(), payload.kind().pointCount())
-                : Component.translatable(payload.feedback().translationKey());
+        var message = switch (payload.feedback()) {
+            case READY -> Component.translatable("item.unrealtrainmod.turnout_builder.ready");
+            case TURNOUT_POINTS -> Component.translatable(payload.feedback().translationKey(), payload.points().size());
+            case TURNOUT_POINT_COUNT -> Component.translatable(payload.feedback().translationKey(),
+                    payload.points().size(), payload.kind().pointCount());
+            default -> Component.translatable(payload.feedback().translationKey());
+        };
+        if (payload.alternate()) {
+            message.append(" · ").append(Component.translatable("item.unrealtrainmod.turnout_builder.alternate"));
+        }
         mc.player.displayClientMessage(message
-                .withStyle((payload.feedback() == Feedback.NATIVE_DOUBLE_SLIP_PENDING || payload.feedback() == Feedback.NATIVE_CROSSOVER_SOLVING) ? ChatFormatting.YELLOW
+                .withStyle(inProgress(payload.feedback()) ? ChatFormatting.YELLOW
                         : success ? ChatFormatting.GREEN : ChatFormatting.RED), true);
+    }
+
+    static boolean inProgress(Feedback feedback) {
+        return switch (feedback) {
+            case START, TURNOUT_POINTS, TURNOUT_POINT_COUNT, TURNOUT_SOLVING, NATIVE_CROSSOVER_SOLVING -> true;
+            default -> false;
+        };
     }
 
     public boolean matches(ResourceLocation dimension, UUID revision) {
@@ -78,26 +91,27 @@ public final class ClientTurnoutConstruction implements ResourceManagerReloadLis
     public void editPreview(int endpoint, TrackCurveParameters curve, boolean edited) {
         if (draft == null) return;
         geometry = null; volume = Map.of(); feedback = draft.validation(); previewCurves = List.of();
-        var curves = new ArrayList<>(!edited && !draft.resolvedCurves().isEmpty() ? draft.resolvedCurves() : draft.curves());
+        if (!draft.ordered()) return;
+        var curves = new ArrayList<>(draft.curves());
         if (edited) curves.set(endpoint, curve);
         var points = draft.points().stream().map(TrackPlacementEndpoint::position).toList();
-        previewCurves = AssemblyPlacementGeometry.defaults(draft.kind(), points, curves, draft.yaw());
+        previewCurves = AssemblyPlacementGeometry.defaults(draft.kind(), points, curves, 0);
+        if (!edited && !draft.resolved()) return;
         try {
-            geometry = AssemblyPlacementGeometry.create(draft.kind(), points, draft.gauge(), curves, draft.yaw());
+            geometry = AssemblyPlacementGeometry.create(draft.kind(), points, draft.gauge(), curves, 0);
             volume = footprint(geometry);
-            if (draft.points().size() == draft.kind().pointCount()) {
+            if (edited) {
                 AssemblyPlacementGeometry.validate(AssemblyPlacementGeometry.definition(draft.kind()), geometry);
+                feedback = Feedback.START;
             }
-            if (edited) feedback = Feedback.START;
         } catch (NativeDoubleSlipSolver.InvalidLayout exception) {
-            feedback = switch (exception.problem()) {
+            if (edited || feedback == Feedback.READY) feedback = switch (exception.problem()) {
                 case INTERSECTION -> Feedback.NATIVE_DOUBLE_SLIP_INTERSECTION;
                 case ANGLE -> Feedback.NATIVE_DOUBLE_SLIP_ANGLE;
                 case SPACE -> Feedback.NATIVE_DOUBLE_SLIP_SPACE;
             };
         } catch (IllegalArgumentException exception) {
-            if (edited || feedback != Feedback.NATIVE_CROSSOVER_SOLVING && feedback != Feedback.NATIVE_CROSSOVER_NO_SOLUTION)
-                feedback = Feedback.INVALID_GEOMETRY;
+            if (edited || feedback == Feedback.READY) feedback = Feedback.INVALID_GEOMETRY;
         }
     }
 
@@ -109,31 +123,30 @@ public final class ClientTurnoutConstruction implements ResourceManagerReloadLis
         return cells;
     }
 
-    /** Includes automatic shared handles and isolated points, even while the draft is invalid. */
+    /** Returns the current automatic or manual handle shown by the curve editor. */
     public TrackCurveParameters automaticParameters(int endpoint) {
         return previewCurves.get(endpoint);
     }
 
     TrackVector stationDirection(int index) {
-        return TotalStationRenderer.horizontalDirection(previewCurves.get(index).angle());
+        return TotalStationRenderer.horizontalDirection(draft.ordered() ? previewCurves.get(index).angle() : 0);
     }
 
     boolean isActive() {
         var player = Minecraft.getInstance().player;
         return draft != null && Minecraft.getInstance().level == world && player != null && player.isAlive()
-                && ((player.getMainHandItem().getItem() instanceof TurnoutBuilderItem tool && tool.constructionType() == draft.kind())
+                && (player.getMainHandItem().is(UnrealTrainMod.TURNOUT_BUILDER.get())
                 || player.getMainHandItem().is(UnrealTrainMod.TRACK_WRENCH.get())
                 || player.getMainHandItem().is(UnrealTrainMod.RAIL_PLACER.get()));
     }
     public void confirmPlacement(net.neoforged.neoforge.event.entity.player.PlayerInteractEvent.RightClickBlock event) {
         if (!event.getLevel().isClientSide() || event.getHand() != net.minecraft.world.InteractionHand.MAIN_HAND
                 || event.getEntity().isShiftKeyDown() || !event.getItemStack().is(UnrealTrainMod.RAIL_PLACER.get())
-                || draft == null || draft.kind() != TrackConstructionType.SINGLE_CROSSOVER
-                || !NativeTurnoutCatalog.SINGLE_CROSSOVER_R11.equals(NativeTurnoutCatalog.constructionModel(event.getEntity()))) return;
+                || draft == null || event.getLevel() != world) return;
         event.setCanceled(true);
         event.setCancellationResult(net.minecraft.world.InteractionResult.SUCCESS);
         net.neoforged.neoforge.network.PacketDistributor.sendToServer(
-                new com.unrealtrainmod.network.payload.ConfirmSingleCrossoverPayload(draft.dimension(), draft.revision(), event.getPos()));
+                new ConfirmTurnoutPayload(draft.dimension(), draft.revision(), event.getPos()));
     }
 
     public void onTick(ClientTickEvent.Post event) {
@@ -153,12 +166,10 @@ public final class ClientTurnoutConstruction implements ResourceManagerReloadLis
     Map<BlockPos, Integer> volume() { return volume; }
     public Feedback previewFeedback() {
         var player = Minecraft.getInstance().player;
-        if (geometry != null && draft.points().size() == draft.kind().pointCount() && player != null) {
-            var selected = NativeTurnoutCatalog.constructionModel(player);
-            if (NativeTurnoutCatalog.contains(selected)) {
-                if (!NativeTurnoutCatalog.supports(selected,draft.kind())) return Feedback.MODEL_UNSUPPORTED;
-                if (ClientRailModelManager.INSTANCE.model(selected) == null) return Feedback.MISSING_MODEL;
-            }
+        if (geometry != null && player != null) {
+            var selected = RailPlacerItem.constructionSelection(player);
+            if (NativeTurnoutCatalog.contains(selected.modelId())
+                    && ClientRailModelManager.INSTANCE.model(selected.modelId()) == null) return Feedback.MISSING_MODEL;
         }
         // Geometry edits remain pending until the server validates the applied parameters.
         return feedback;

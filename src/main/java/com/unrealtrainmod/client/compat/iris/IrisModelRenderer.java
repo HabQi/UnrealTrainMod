@@ -520,14 +520,17 @@ public final class IrisModelRenderer {
             var gpu = IrisGeometryCache.requestVehicleOpaque(material.solidMesh, material.firstSolid, material.solidCount, material.forceOpaque);
             ready &= IrisGeometryCache.acceptedOpaque(gpu, material.solidMesh, material.forceOpaque);
             if (material.forceOpaque) ready &= IrisMaterials.ready(batch.texture(), IrisMaterials.Mask.OPAQUE);
-            else if (batch.category() == RenderCategory.MIXED) ready &= IrisMaterials.ready(batch.texture(), IrisMaterials.Mask.SOLID);
+            else if (batch.category() == RenderCategory.MIXED) {
+                ready &= IrisMaterials.ready(batch.texture(), IrisMaterials.Mask.SOLID);
+                // Fully opaque vertex colors can still sample translucent pixels from a mixed texture.
+                ready &= IrisMaterials.ready(batch.texture(), IrisMaterials.Mask.BLEND);
+            }
         }
         if (batch.isLightLayer()) {
             var gpu = IrisGeometryCache.requestVehicleLight(batch.mesh(), batch.firstIndex(), batch.indexCount());
             ready &= IrisGeometryCache.accepted(gpu, batch.mesh(), batch.firstIndex(), batch.indexCount(), false, true);
         } else if (material.clippedCount != 0) {
             ready &= IrisMaterials.ready(batch.texture(), IrisMaterials.Mask.CLIPPED);
-            if (batch.category() == RenderCategory.MIXED) ready &= IrisMaterials.ready(batch.texture(), IrisMaterials.Mask.BLEND);
             if (ClientConfig.TRANSLUCENT_RENDER_MODE.get() == ClientConfig.TranslucentRenderMode.PERFORMANCE) {
                 var gpu = IrisGeometryCache.requestVehicle(material.clippedMesh, material.firstClipped, material.clippedCount, false);
                 ready &= IrisGeometryCache.accepted(gpu, material.clippedMesh, material.firstClipped, material.clippedCount, false, false);

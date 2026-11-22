@@ -31,6 +31,11 @@ final class NativeCrossoverParts {
                 if (stage != null) { stage.value("mainPath", paths.get(owners[0]).name()); stage.value("branchPath", paths.get(owners[1]).name()); stage.value("reversed", reversed); }
                 int firstPart = parts.size();
                 var core = NativeTurnoutLayout.core(main,branch,gauge); var moving = new ArrayList<NativeTurnoutLayout.Part>();
+                var mainZone = core.blades().getFirst();
+                var frogFrame = main.sample(mainZone.frog());
+                var frogLocal = add(frogFrame.position(),origin,-1);
+                String mainGuard = mainZone.inner() > 0 ? "guardR_short" : "guardL_short";
+                double mainGuardEnd = mainZone.frog();
                 for (var part : core.layout().parts()) {
                     if (part.moving()) moving.add(part);
                     else if (part.name().equals("railL") || part.name().equals("railR"))
@@ -41,14 +46,19 @@ final class NativeCrossoverParts {
                         if (part.name().equals("wingLf") || part.name().equals("wingRf")) {
                             String side = part.name().substring(4,5);
                             parts.add(new NativeDiamondLayout.Part("wingFront"+side+"_short",position,part.yaw(),part.localX(),part.localZ(),0));
-                            parts.add(new NativeDiamondLayout.Part("guard"+side+"_short",lowerGuard(position),part.yaw(),part.localX(),part.localZ(),0));
+                            var guard = new NativeDiamondLayout.Part("guard"+side+"_short",lowerGuard(position),part.yaw(),part.localX(),part.localZ(),0);
+                            parts.add(guard);
+                            if (kind == NativeCrossoverLayout.Kind.SCISSORS && guard.name().equals(mainGuard)) {
+                                for (var point : footprint(guard,scale))
+                                    mainGuardEnd = Math.max(mainGuardEnd, mainZone.frog()+dot(add(point,frogLocal,-1),frogFrame.tangent()));
+                            }
                         } else parts.add(new NativeDiamondLayout.Part(part.name(),position,part.yaw(),part.localX(),part.localZ(),0));
                     }
                 }
                 for (int i = firstPart; i < parts.size(); i++) hardwareOwners.put(parts.get(i),control);
                 switches.put(kind.controls.get(control),new NativeTurnoutLayout(origin,scale,moving,0));
                 for (var zone : core.blades()) zones.add(new NativeCrossoverLayout.SleeperZone(owners[zone.branch() ? 1 : 0],
-                        owners[0],reversed,zone.inner(),zone.tip(),zone.heel(),zone.frog()));
+                        owners[0],reversed,zone.inner(),zone.tip(),zone.heel(),zone.frog(),mainGuardEnd));
                 for (int which = 0; which < 2; which++) for (var exit : which == 0 ? core.main() : core.branch()) {
                     int owner = owners[which], side = reversed ? -exit.side() : exit.side();
                     double length = paths.get(owner).length(), distance = reversed ? length-exit.distance() : exit.distance();

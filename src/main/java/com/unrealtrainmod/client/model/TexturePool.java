@@ -28,6 +28,8 @@ import net.minecraft.resources.ResourceLocation;
 /** Reload-local pixel sharing. Only canonical images are owned and transferred for upload. */
 final class TexturePool implements AutoCloseable {
     private static final Logger LOGGER = LoggerFactory.getLogger(TexturePool.class);
+    private static final ResourceLocation MISSING_BASE = ResourceLocation.fromNamespaceAndPath(
+            UnrealTrainMod.MODID, "textures/model/missing.png");
     record Entry(ResourceLocation id, NativeImage image, TextureAlpha alpha, PbrSource pbr) {}
     private record PixelKey(int width, int height, long hash) {}
     private record LightPair(ResourceLocation head, ResourceLocation tail) {}
@@ -43,6 +45,17 @@ final class TexturePool implements AutoCloseable {
     private ResourceLocation defaultFlare;
 
     boolean isFullyOpaque(PackageAsset asset) throws IOException { return load(asset).alpha().isFullyOpaque(); }
+
+    ResourceLocation missingBase() throws IOException {
+        if (!images.containsKey(MISSING_BASE)) {
+            String path = "/assets/" + MISSING_BASE.getNamespace() + "/" + MISSING_BASE.getPath();
+            try (var input = TexturePool.class.getResourceAsStream(path)) {
+                if (input == null) throw new IOException("Missing built-in texture: " + MISSING_BASE);
+                images.put(MISSING_BASE, new PreparedTexture(NativeImage.read(input), null));
+            }
+        }
+        return MISSING_BASE;
+    }
 
     Entry load(PackageAsset asset) throws IOException {
         var cached = assets.get(asset);

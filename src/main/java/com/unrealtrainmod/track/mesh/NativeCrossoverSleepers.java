@@ -12,7 +12,7 @@ final class NativeCrossoverSleepers {
     private NativeCrossoverSleepers() {}
     private record Placement(int path, NativeCrossoverLayout.Node node) {}
 
-    static List<NativeCrossoverLayout.Sleeper> build(List<NativeCrossoverLayout.Path> paths,
+    static List<NativeCrossoverLayout.Sleeper> build(NativeCrossoverLayout.Kind kind, List<NativeCrossoverLayout.Path> paths,
                                                   List<NativeCrossoverLayout.SleeperZone> zones, double scale) {
         var reference = paths.getFirst(); var output = new ArrayList<NativeCrossoverLayout.Sleeper>();
         var range = NativeCrossoverLayout.referenceRange(paths); double first = range[0], last = range[1];
@@ -35,7 +35,7 @@ final class NativeCrossoverSleepers {
                 }
                 if (a < 0) {
                     var item = pending.removeFirst();
-                    place(output,item,Math.atan2(item.node().tangent().x(),item.node().tangent().z()),-1,0,paths,zones,scale);
+                    place(output,item,Math.atan2(item.node().tangent().x(),item.node().tangent().z()),-1,0,kind,paths,zones,scale);
                     continue;
                 }
                 var own = pending.get(a); var other = pending.get(b); var path = paths.get(other.path());
@@ -48,7 +48,7 @@ final class NativeCrossoverSleepers {
                 double station = (lo+hi)/2;
                 pending.remove(b); pending.remove(a);
                 if (!onPath(path,station,scale)) {
-                    for (var item : List.of(own,other)) place(output,item,Math.atan2(item.node().tangent().x(),item.node().tangent().z()),-1,0,paths,zones,scale);
+                    for (var item : List.of(own,other)) place(output,item,Math.atan2(item.node().tangent().x(),item.node().tangent().z()),-1,0,kind,paths,zones,scale);
                     continue;
                 }
                 other = new Placement(other.path(),path.extended(station));
@@ -60,8 +60,8 @@ final class NativeCrossoverSleepers {
                 if (dot(own.node().tangent(),other.node().tangent()) < .5 || dot(residual,residual) > 1e-10*scale*scale)
                     throw new NativeCrossoverLayout.InvalidLayout(NativeCrossoverLayout.Problem.SPACE,
                             NativeLayoutDiagnostic.at("sleeper_pair",paths.get(own.path()).name(),0,own.node().station(),station,1e-5*scale));
-                place(output,own,yaw,other.path(),across,paths,zones,scale);
-                place(output,other,yaw,own.path(),-across,paths,zones,scale);
+                place(output,own,yaw,other.path(),across,kind,paths,zones,scale);
+                place(output,other,yaw,own.path(),-across,kind,paths,zones,scale);
             }
         }
         return List.copyOf(output);
@@ -70,13 +70,17 @@ final class NativeCrossoverSleepers {
         return station+.25*scale >= -1e-5*scale && station-.25*scale < path.length();
     }
     private static void place(List<NativeCrossoverLayout.Sleeper> output, Placement item, double yaw, int partner,
-                              double across, List<NativeCrossoverLayout.Path> paths,
+                              double across, NativeCrossoverLayout.Kind layoutKind, List<NativeCrossoverLayout.Path> paths,
                               List<NativeCrossoverLayout.SleeperZone> zones, double scale) {
         double length = paths.get(item.path()).length(), station = item.node().station();
+        var forward = new TrackVector(Math.sin(yaw),0,Math.cos(yaw));
+        double halfPair = .25*scale*Math.abs(dot(forward,item.node().tangent()));
+        boolean centralMain = layoutKind == NativeCrossoverLayout.Kind.SCISSORS && item.path() < 2;
         for (var zone : zones) if (zone.path() == item.path()) {
             double directed = zone.reversed() ? length-station : station;
+            // Both sleeper centers must be on the central side of each turnout's main-line guard.
+            centralMain &= directed-halfPair >= zone.mainGuardEnd()-1e-5*scale;
             var reference = paths.get(zone.reference());
-            var forward = new TrackVector(Math.sin(yaw),0,Math.cos(yaw));
             double referenceStation = NativeCrossoverLayout.station(reference,item.node().point(),forward);
             var frame = reference.at(referenceStation);
             referenceStation += dot(add(item.node().point(),frame.point(),-1),forward)/dot(frame.tangent(),forward);
@@ -93,7 +97,7 @@ final class NativeCrossoverSleepers {
         boolean diamond = item.path() >= 2 && partner >= 2;
         // Coincident rows use the same stable path order as NativeDiamondLayout.
         boolean right = across > 1e-5*scale || Math.abs(across) <= 1e-5*scale && item.path() < partner;
-        String name = diamond ? "sleeper_point02"+(right ? "R" : "L") : "sleeper_point01";
+        String name = diamond ? "sleeper_point02"+(right ? "R" : "L") : centralMain ? "sleeper_point02L" : "sleeper_point01";
         output.add(new NativeCrossoverLayout.Sleeper(name,item.node().point(),yaw));
     }
 }

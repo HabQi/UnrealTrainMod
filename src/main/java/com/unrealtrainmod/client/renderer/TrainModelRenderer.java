@@ -22,6 +22,7 @@ import net.neoforged.neoforge.event.level.LevelEvent;
 /** World submissions are deferred so all visible trains share the same opaque and translucent stages. */
 public final class TrainModelRenderer {
     private static final ModelRenderQueue WORLD = new ModelRenderQueue();
+    private static final SurfaceLighting ROLLSIGN_FULL_BRIGHT = new SurfaceLighting(1, 0);
 
     private TrainModelRenderer() {}
 
@@ -80,6 +81,13 @@ public final class TrainModelRenderer {
                     } else {
                         // A working body script owns every body part, including any part named by a door action.
                         VehicleActionRenderer.submit(queue, instance, entity, partialTick, pose, light, true);
+                    }
+                    var rollsigns = instance.rollsigns();
+                    if (!rollsigns.isEmpty()) {
+                        int index = entity == null ? 0 : entity.rollsignIndex();
+                        var frame = rollsigns.get(index >= 0 && index < rollsigns.size() ? index : 0);
+                        queue.submitGeometry(instance.model(), frame.lit(), pose, light);
+                        queue.submitGeometry(instance.model(), frame.fullBright(), pose.last(), light, false, ROLLSIGN_FULL_BRIGHT);
                     }
                 } finally {
                     pose.popPose();

@@ -17,10 +17,13 @@ import java.util.Map;
 import org.joml.Vector3d;
 import org.joml.Vector4d;
 
+import static com.unrealtrainmod.track.mesh.NativeRailCurve.add;
+
 /** Trim only the visible through-blade toe against the baked guards, before registering any static pages. */
 final class NativeDoubleSlipGuardClearance {
     private static final int SWEEP_STEPS = 128;
     private static final double CLEARANCE = .001;
+    private static final double TOE_SETBACK = .18;
     private NativeDoubleSlipGuardClearance() {}
 
     static List<Control> resolve(NativeDoubleSlipLayout layout, Map<String,List<Source>> originals, List<Source> guards) {
@@ -31,13 +34,30 @@ final class NativeDoubleSlipGuardClearance {
             var stock = trim(blades.get(1),control.name(),layout,originals,obstacles);
             var spread = NativeDoubleSlipLayout.spreadThroughOpening(stock);
             var through = spread == stock ? stock : trim(spread,control.name(),layout,originals,obstacles);
-            controls.add(new Control(control.name(),List.of(blades.getFirst(),through,blades.getLast())));
+            through = extendToeTrim(through, TOE_SETBACK * layout.scale());
+            var inner = NativeDoubleSlipLayout.longerRails(blades.getFirst(),layout.scale(),false,blade -> -1);
+            var outer = NativeDoubleSlipLayout.longerRails(through,layout.scale(),false,blade -> {
+                var hit = obstruction(blade,layout,originals,obstacles);
+                return hit == null ? -1 : hit.link();
+            });
+            controls.add(new Control(control.name(),List.of(inner,outer,blades.getLast())));
         }
         return List.copyOf(controls);
     }
 
     private static Blade trim(Blade blade, String control, NativeDoubleSlipLayout layout,
                               Map<String,List<Source>> originals, List<Guard> guards) {
+        var hit = obstruction(blade,layout,originals,guards);
+        if (hit == null) return blade;
+        if (hit.link() == blade.links().size()-1)
+            throw new IllegalArgumentException("Double slip guard reaches the fixed heel of "+control);
+        return cutToe(blade,hit.link(),Math.min(1,Math.nextUp((float)hit.end())));
+    }
+
+    private record Obstruction(int link, double end) {}
+
+    private static Obstruction obstruction(Blade blade, NativeDoubleSlipLayout layout,
+                                           Map<String,List<Source>> originals, List<Guard> guards) {
         var links = blade.links();
         double scale = layout.scale();
         Motion motion = null;
@@ -66,19 +86,38 @@ final class NativeDoubleSlipGuardClearance {
                 var rail = NativeTurnoutCurves.slipGeometry(source.mesh(),frame.shape());
                 last = Math.max(last,endOfOverlap(rail,motion,layout,near,padding));
             }
-            if (last <= link.visibleFrom()) continue;
-            if (i == links.size()-1)
-                throw new IllegalArgumentException("Double slip guard reaches the fixed heel of "+control);
+            if (last > link.visibleFrom()) return new Obstruction(i,last);
+        }
+        return null;
+    }
 
-            var trimmed = new ArrayList<>(links);
-            for (int j = 0; j < i; j++) {
-                var hidden = links.get(j);
-                trimmed.set(j,new Link(hidden.strip(),hidden.rotation(),1));
+    private static Blade extendToeTrim(Blade blade, double distance) {
+        var links = blade.links();
+        // Walk toward the heel from the existing cut and keep the entire heel link.
+        for (int i = 0; i + 1 < links.size(); i++) {
+            var link = links.get(i);
+            if (link.visibleFrom() == 1) continue;
+            var strip = link.strip();
+            double length = NativeDoubleSlipLayout.length(add(strip.end().point(), strip.start().point(), -1));
+            double remaining = (1.0 - link.visibleFrom()) * length;
+            if (distance <= remaining || i + 2 == links.size()) {
+                float from = (float)Math.min(1, link.visibleFrom() + distance / length);
+                return cutToe(blade, i, from);
             }
-            trimmed.set(i,new Link(link.strip(),link.rotation(),Math.min(1,Math.nextUp((float)last))));
-            return new Blade(List.copyOf(trimmed),blade.opensInNormal());
+            distance -= remaining;
         }
         return blade;
+    }
+
+    private static Blade cutToe(Blade blade, int index, float visibleFrom) {
+        var links = new ArrayList<>(blade.links());
+        for (int i = 0; i < index; i++) {
+            var link = links.get(i);
+            links.set(i, new Link(link.strip(), link.rotation(), 1));
+        }
+        var link = links.get(index);
+        links.set(index, new Link(link.strip(), link.rotation(), visibleFrom));
+        return new Blade(List.copyOf(links), blade.opensInNormal());
     }
 
     private static double endOfOverlap(SlipGeometry rail, Motion motion, NativeDoubleSlipLayout layout,

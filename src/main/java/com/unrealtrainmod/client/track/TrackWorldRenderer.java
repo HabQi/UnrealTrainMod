@@ -187,7 +187,7 @@ public final class TrackWorldRenderer {
                     else if (entry.doubleSlipState != null) {
                         var layout = entry.doubleSlipState.layout;
                         int parts = layout.fixed().size()+layout.fittings().parts().size();
-                        for (var control : entry.doubleSlipState.switches.values()) parts += control.layout.parts().size();
+                        for (var machine : entry.doubleSlipState.machines.values()) parts += machine.layout.parts().size();
                         stats.nativeLayout(parts, parts);
                     }
                 }
@@ -207,9 +207,9 @@ public final class TrackWorldRenderer {
                 }
                 if (entry.doubleSlipState != null) {
                     if (entry.doubleSlipState.loading != entry.loading) entry.doubleSlipState.attachLoading(entry.loading);
-                    for (var control : entry.doubleSlipState.switches.entrySet()) {
-                        control.getValue().movement(entry.animations.get(control.getKey()).position(time));
-                        natives.add(control.getValue());
+                    for (var machine : entry.doubleSlipState.machines.entrySet()) {
+                        machine.getValue().movement(entry.animations.get(machine.getKey()).position(time));
+                        natives.add(machine.getValue());
                     }
                 }
                 boolean scripted = entry.script != null && model != null && model.scripted() && !entry.scriptFailed;

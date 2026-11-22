@@ -38,11 +38,7 @@ public final class TurnoutConstructionRenderer {
         if (!state.isActive()) return;
         var feedback = state.previewFeedback();
         int color = feedback == Feedback.READY ? 0xFF50E070
-                : (feedback == Feedback.START || feedback == Feedback.TURNOUT_A
-                        || feedback == Feedback.TURNOUT_B || feedback == Feedback.CROSSING_POINT
-                        || feedback == Feedback.CROSSOVER_POINT || feedback == Feedback.SCISSORS_POINT
-                        || feedback == Feedback.DOUBLE_SLIP_POINT || feedback == Feedback.NATIVE_DOUBLE_SLIP_PENDING
-                        || feedback == Feedback.NATIVE_CROSSOVER_SOLVING) ? 0xFFFFCC55 : 0xFFFF5555;
+                : ClientTurnoutConstruction.inProgress(feedback) ? 0xFFFFCC55 : 0xFFFF5555;
         var previousShader = RenderSystem.getShader();
         float[] previousColor = RenderSystem.getShaderColor().clone();
         var view = RenderSystem.getModelViewStack();
@@ -99,7 +95,7 @@ public final class TurnoutConstructionRenderer {
             buffers.endBatch(TrackRenderTypes.PREVIEW);
             var font = Minecraft.getInstance().font;
             for (int i = 0; i < draft.points().size(); i++) {
-                String name = java.util.List.of("A", "B", "C", "D").get(i);
+                String name = draft.ordered() ? String.valueOf((char) ('A' + i)) : Integer.toString(i + 1);
                 var point = draft.points().get(i).position();
                 var pose = new PoseStack();
                 pose.translate(point.x() - camera.x, point.y() - camera.y + 1.5, point.z() - camera.z);
@@ -113,26 +109,15 @@ public final class TurnoutConstructionRenderer {
                         || feedback == Feedback.NATIVE_SCISSORS_INTERSECTION
                         || feedback == Feedback.NATIVE_SCISSORS_ANGLE || feedback == Feedback.NATIVE_SCISSORS_SPACE
                         || feedback == Feedback.MODEL_UNSUPPORTED || feedback == Feedback.MISSING_MODEL
-                        || feedback == Feedback.NATIVE_DOUBLE_SLIP_PENDING
                         || feedback == Feedback.NATIVE_DOUBLE_SLIP_INTERSECTION
                         || feedback == Feedback.NATIVE_DOUBLE_SLIP_ANGLE || feedback == Feedback.NATIVE_DOUBLE_SLIP_SPACE
                         || feedback == Feedback.NATIVE_CROSSOVER_SOLVING || feedback == Feedback.NATIVE_CROSSOVER_NO_SOLUTION)) {
                     label += " " + Component.translatable(feedback.translationKey()).getString();
                 }
-                if (draft.kind() == TrackConstructionType.DIAMOND_CROSSING
-                        || draft.kind() == TrackConstructionType.SINGLE_CROSSOVER || draft.kind() == TrackConstructionType.SCISSORS_CROSSOVER
-                        || draft.kind() == TrackConstructionType.DOUBLE_SLIP) {
-                    String prefix = switch (draft.kind()) {
-                        case DOUBLE_SLIP -> "double_slip_builder";
-                        case SCISSORS_CROSSOVER -> "scissors_crossover_builder";
-                        case DIAMOND_CROSSING -> "diamond_crossing_builder";
-                        default -> "single_crossover_builder";
-                    };
-                    label += " " + net.minecraft.network.chat.Component.translatable("item.unrealtrainmod." + prefix + "."
-                            + (i < 2 ? "line_one" : "line_two")).getString();
-                } else {
-                    if (i == 1) label += " " + net.minecraft.network.chat.Component.translatable("commands.unrealtrainmod.turnout.line_one").getString();
-                    if (i == 2) label += " " + net.minecraft.network.chat.Component.translatable("commands.unrealtrainmod.turnout.line_two").getString();
+                if (draft.ordered() && draft.kind() != TrackConstructionType.SIMPLE_TURNOUT) {
+                    label += " " + Component.translatable("item.unrealtrainmod.turnout_builder." + (i < 2 ? "line_one" : "line_two")).getString();
+                } else if (draft.ordered() && i > 0) {
+                    label += " " + Component.translatable("commands.unrealtrainmod.turnout." + (i == 1 ? "line_one" : "line_two")).getString();
                 }
                 font.drawInBatch(label, -font.width(label) / 2f, 0, color, true, pose.last().pose(),
                         buffers, Font.DisplayMode.NORMAL, 0x80000000, 0xF000F0);

@@ -7,8 +7,8 @@ import com.unrealtrainmod.track.mesh.RailMeshAccumulator;
 
 /** Icons assemble the shared whole-model geometry without preparing world chunk partitions. */
 public final class NativeCrossoverModels {
-    public static final String RECIPE = "native-scissors-17-fixed3m-stable-support-atlas1024";
-    public static final String SINGLE_RECIPE = "native-single-crossover-1-shared-r11";
+    public static final String RECIPE = "native-scissors-19-long-switch-links";
+    public static final String SINGLE_RECIPE = "native-single-crossover-2-long-switch-links";
     private NativeCrossoverModels() {}
     static ClientRailModelManager.Model prepare(ClientRailModelManager.Model original) {
         return prepare(original, NativeCrossoverLayout.Kind.SCISSORS);

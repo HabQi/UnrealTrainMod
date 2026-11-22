@@ -20,21 +20,20 @@ import java.util.regex.Pattern;
 
 /** Minimal text MQO importer. Editor visibility is ignored; unsupported geometry modifiers fail explicitly. */
 public final class MqoParser {
+    public static final int VEHICLE_IMPORT_VERSION = 1;
     private static final Pattern CODE_PAGE = Pattern.compile("(?im)^[ \\t]*CodePage[ \\t]+([\\w-]+)");
     private static final int MAX_COUNT = 2_000_000;
+    private enum ImportMode { STRICT, INSTALLED_OBJECT, VEHICLE }
+
     private final BufferedReader reader;
-    private final boolean ignoreEditorTransforms;
+    private final ImportMode mode;
     private int lineNumber;
     private ModelBounds.Builder scannedBounds;
     private float scannedScale;
 
-    private MqoParser(Reader reader) {
-        this(reader, false);
-    }
-
-    private MqoParser(Reader reader, boolean ignoreEditorTransforms) {
+    private MqoParser(Reader reader, ImportMode mode) {
         this.reader = new BufferedReader(reader);
-        this.ignoreEditorTransforms = ignoreEditorTransforms;
+        this.mode = mode;
     }
 
     public static ModelData parse(InputStream input, Charset fallback) throws IOException {
@@ -43,13 +42,18 @@ public final class MqoParser {
 
     /** RTM installed-object loading uses authored vertices directly and ignores editor transform metadata. */
     public static ModelData parseInstalledObject(InputStream input, Charset fallback) throws IOException {
-        return parse(openReader(input, fallback), true);
+        return parse(openReader(input, fallback), ImportMode.INSTALLED_OBJECT);
     }
 
-    /** Scans all object vertices without retaining faces or constructing rendering geometry. */
-    public static ModelBounds scanBounds(InputStream input, Charset fallback, float scale) throws IOException {
+    /** RTM vehicles use authored vertices and bake separated X-axis mirrors into each object. */
+    public static ModelData parseVehicle(InputStream input, Charset fallback) throws IOException {
+        return parse(openReader(input, fallback), ImportMode.VEHICLE);
+    }
+
+    /** Scans vehicle bounds using the same mirror rules as mesh import, without retaining vertices or faces. */
+    public static ModelBounds scanVehicleBounds(InputStream input, Charset fallback, float scale) throws IOException {
         if (!Float.isFinite(scale) || scale <= 0) throw new IOException("Model scale must be positive");
-        var parser = new MqoParser(openReader(input, fallback));
+        var parser = new MqoParser(openReader(input, fallback), ImportMode.VEHICLE);
         parser.scannedScale = scale;
         parser.scannedBounds = new ModelBounds.Builder();
         try {
@@ -87,11 +91,11 @@ public final class MqoParser {
     }
 
     public static ModelData parse(Reader reader) throws IOException {
-        return parse(reader, false);
+        return parse(reader, ImportMode.STRICT);
     }
 
-    private static ModelData parse(Reader reader, boolean ignoreEditorTransforms) throws IOException {
-        MqoParser parser = new MqoParser(reader, ignoreEditorTransforms);
+    private static ModelData parse(Reader reader, ImportMode mode) throws IOException {
+        MqoParser parser = new MqoParser(reader, mode);
         try {
             return parser.readModel();
         } catch (IllegalArgumentException | IndexOutOfBoundsException e) {
@@ -164,6 +168,8 @@ public final class MqoParser {
         String name = value(header.get(1));
         boolean smooth = false;
         float facet = 59.5f;
+        boolean mirror = false;
+        int mirrorAxis = 0;
         List<ModelData.Position> vertices = new ArrayList<>();
         List<ModelData.Face> faces = new ArrayList<>();
         var partBounds = scannedBounds == null ? null : new ModelBounds.Builder();
@@ -171,12 +177,21 @@ public final class MqoParser {
             List<String> line = required();
             switch (key(line)) {
                 case "}" -> {
+                    if (mirror && mirrorAxis != 1) throw error("Only X-axis mirroring is supported in object " + name);
                     for (var face : faces) for (int index : face.indices()) {
                         if (index < 0 || index >= vertices.size()) throw error("Vertex index out of range in " + name);
                     }
-                    if (scannedBounds != null) {
+                    if (partBounds != null) {
                         var bounds = partBounds.build();
-                        if (bounds != null) scannedBounds.include(bounds);
+                        if (bounds != null) {
+                            scannedBounds.include(bounds);
+                            if (mirror) {
+                                scannedBounds.include(-bounds.maxX(), bounds.minY(), bounds.minZ());
+                                scannedBounds.include(-bounds.minX(), bounds.maxY(), bounds.maxZ());
+                            }
+                        }
+                    } else if (mirror) {
+                        appendMirroredX(vertices, faces);
                     }
                     return new ModelData.Part(name, true, smooth, facet, vertices, faces);
                 }
@@ -186,11 +201,19 @@ public final class MqoParser {
                 case "facet" -> facet = number(line.get(1));
                 case "scale", "rotation", "translation" -> {
                     float expected = key(line).equals("scale") ? 1 : 0;
-                    for (int i = 1; i <= 3; i++) if (number(line.get(i)) != expected && !ignoreEditorTransforms) {
+                    for (int i = 1; i <= 3; i++) if (number(line.get(i)) != expected && mode == ImportMode.STRICT) {
                         throw error("Non-identity object transform in " + name + "; freeze transforms before importing");
                     }
                 }
-                case "mirror", "patch", "lathe" -> {
+                case "mirror" -> {
+                    String type = line.get(1);
+                    mirror = mode == ImportMode.VEHICLE && type.equals("1");
+                    if (!type.equals("0") && !mirror) throw error("Freeze mirror in object " + name);
+                }
+                case "mirror_axis" -> {
+                    if (mode == ImportMode.VEHICLE) mirrorAxis = Integer.parseInt(line.get(1));
+                }
+                case "patch", "lathe" -> {
                     if (!line.get(1).equals("0")) throw error("Freeze " + line.getFirst() + " in object " + name);
                 }
                 case "bvertex" -> throw error("Binary BVertex is not supported; save text vertices in Metasequoia");
@@ -215,6 +238,31 @@ public final class MqoParser {
                 }
                 default -> skipBlock(line);
             }
+        }
+    }
+
+    private static void appendMirroredX(List<ModelData.Position> vertices, List<ModelData.Face> faces) {
+        int vertexCount = vertices.size();
+        int faceCount = faces.size();
+        for (int i = 0; i < vertexCount; i++) {
+            var vertex = vertices.get(i);
+            vertices.add(new ModelData.Position(-vertex.x(), vertex.y(), vertex.z()));
+        }
+        for (int i = 0; i < faceCount; i++) {
+            var face = faces.get(i);
+            int corners = face.indices().length;
+            var indices = new int[corners];
+            var uv = new float[corners * 2];
+            var colors = new int[corners];
+            // Reflection reverses the winding. Keep every UV and color with its reflected corner.
+            for (int corner = 0; corner < corners; corner++) {
+                int source = corners - 1 - corner;
+                indices[corner] = vertexCount + face.indices()[source];
+                uv[corner * 2] = face.uv()[source * 2];
+                uv[corner * 2 + 1] = face.uv()[source * 2 + 1];
+                colors[corner] = face.colors()[source];
+            }
+            faces.add(new ModelData.Face(indices, uv, colors, face.material()));
         }
     }
 
