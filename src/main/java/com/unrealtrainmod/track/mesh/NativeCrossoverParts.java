@@ -4,6 +4,7 @@ package com.unrealtrainmod.track.mesh;
 import com.unrealtrainmod.track.assembly.TrackAssemblyDefinition;
 import com.unrealtrainmod.track.geometry.TrackGeometry;
 import com.unrealtrainmod.track.geometry.TrackVector;
+import com.unrealtrainmod.track.mesh.NativeTurnoutConnections.Policy;
 import java.util.*;
 import static com.unrealtrainmod.track.mesh.NativeRailCurve.*;
 
@@ -15,6 +16,11 @@ final class NativeCrossoverParts {
     private record Section(NativeDiamondLayout.RailEnd start, NativeDiamondLayout.RailEnd end) {}
     static Solution build(NativeCrossoverLayout.Kind kind, TrackAssemblyDefinition.Geometry geometry,
             List<NativeCrossoverLayout.Path> paths, TrackVector origin, double gauge, boolean complete) {
+        return build(kind, geometry, paths, origin, gauge, complete, complete ? Policy.CROSSOVER_CORE : Policy.REFERENCE);
+    }
+
+    private static Solution build(NativeCrossoverLayout.Kind kind, TrackAssemblyDefinition.Geometry geometry,
+            List<NativeCrossoverLayout.Path> paths, TrackVector origin, double gauge, boolean complete, Policy policy) {
         double scale = gauge/1.435; var parts = new ArrayList<NativeDiamondLayout.Part>();
         var rails = new ArrayList<NativeTurnoutLayout.Part>(); var switches = new LinkedHashMap<String,NativeTurnoutLayout>();
         var hardwareOwners = new IdentityHashMap<NativeDiamondLayout.Part,Integer>();
@@ -30,7 +36,8 @@ final class NativeCrossoverParts {
             try (var stage = NativeLayoutProfile.stage(kind.label()+"/core/"+kind.controls.get(control))) {
                 if (stage != null) { stage.value("mainPath", paths.get(owners[0]).name()); stage.value("branchPath", paths.get(owners[1]).name()); stage.value("reversed", reversed); }
                 int firstPart = parts.size();
-                var core = NativeTurnoutLayout.core(main,branch,gauge); var moving = new ArrayList<NativeTurnoutLayout.Part>();
+                var core = NativeTurnoutLayout.core(main, branch, gauge, policy);
+                var moving = new ArrayList<NativeTurnoutLayout.Part>();
                 var mainZone = core.blades().getFirst();
                 var frogFrame = main.sample(mainZone.frog());
                 var frogLocal = add(frogFrame.position(),origin,-1);
@@ -126,7 +133,14 @@ final class NativeCrossoverParts {
         }
         try (var stage = NativeLayoutProfile.stage(kind.label()+"/motionEnvelopes")) {
             if (complete) {
-                NativeCrossoverGeometry.validateMotion(switches,parts,origin,scale,hardwareOwners);
+                try {
+                    NativeCrossoverGeometry.validateMotion(switches, parts, origin, scale, hardwareOwners);
+                } catch (NativeCrossoverLayout.InvalidLayout interference) {
+                    if (policy == Policy.REFERENCE) throw interference;
+                    if (stage != null) stage.value("referenceRetry", interference.diagnostic());
+                    // Recheck the entire assembly with the reference motion before rejecting the layout.
+                    return build(kind, geometry, paths, origin, gauge, true, Policy.REFERENCE);
+                }
                 if (kind == NativeCrossoverLayout.Kind.SINGLE)
                     NativeCrossoverGeometry.validateHardware(parts,scale,hardwareOwners,kind.controls);
             }

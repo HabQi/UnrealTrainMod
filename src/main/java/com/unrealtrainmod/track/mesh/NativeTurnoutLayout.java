@@ -8,13 +8,17 @@ import com.unrealtrainmod.track.geometry.TrackGeometry;
 import com.unrealtrainmod.track.geometry.TrackPoint;
 import com.unrealtrainmod.track.geometry.TrackPose;
 import com.unrealtrainmod.track.geometry.TrackVector;
+import com.unrealtrainmod.track.mesh.NativeTurnoutBladeChain.Node;
+import com.unrealtrainmod.track.mesh.NativeTurnoutBladeChain.Stroke;
+import com.unrealtrainmod.track.mesh.NativeTurnoutConnections.Policy;
 import java.util.ArrayList;
-import java.util.BitSet;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import org.joml.Matrix4f;
+
+import static com.unrealtrainmod.track.mesh.NativeTurnoutBladeChain.CONNECTION_STEP;
 
 /** A resource-independent, immutable assembly of rigid r11 parts. Sampling ends when build returns. */
 public record NativeTurnoutLayout(TrackVector origin, double scale, List<Part> parts, int samples) {
@@ -26,13 +30,9 @@ public record NativeTurnoutLayout(TrackVector origin, double scale, List<Part> p
     /** Inner head face of the authored ordinary rail, relative to its track centreline. */
     public static final double RAIL_WORK_X = RAIL_X - HEAD_HALF;
     private static final double BLADE_TIP = -1.572079, BLADE_JOIN = 0.65;
-    private static final double BLADE_OPENING = 0.12;
     private static final double WING_X = 0.0311652, WING_REAR = -1.000215, NOSE_END = 1.999626;
     private static final double RAIL_STEP = 1.45;
-    private static final double CONNECTION_STEP = 0.5;
-    private static final double SHORT_CONNECTION_LENGTH = 0.10;
-    private static final double MOTION_JOINT_ANGLE = Math.toRadians(0.1);
-    private static final double SOLVE_TOLERANCE = 0.00001;
+    static final double SOLVE_TOLERANCE = 0.00001;
 
     public enum Problem { FROG, SPACE, ANGLE }
     public static final class InvalidLayout extends IllegalArgumentException {
@@ -119,8 +119,8 @@ public record NativeTurnoutLayout(TrackVector origin, double scale, List<Part> p
         Path(TrackGeometry geometry) { this.geometry = geometry; }
         double length() { return geometry.getLength(); }
         TrackPose at(double s) { return poses.computeIfAbsent(Math.clamp(s, 0, length()), geometry::sample); }
-        TrackVector edge(double s, double offset) {
-            var p = at(s);
+        TrackVector edge(double s, double offset) { return edge(at(s), offset); }
+        static TrackVector edge(TrackPose p, double offset) {
             return new TrackVector(p.position().x() + p.lateral().x() * offset, p.position().y(),
                     p.position().z() + p.lateral().z() * offset);
         }
@@ -148,23 +148,26 @@ public record NativeTurnoutLayout(TrackVector origin, double scale, List<Part> p
                            TrackVector main, TrackVector branch, double yaw) {}
     private record Edge(double distance, TrackVector point) {}
     private record Crossing(double main, double branch, TrackVector point) {}
-    private record Frame(TrackVector start, TrackVector end, double yaw, double pitch, double length, boolean longSection) {
-        Frame(TrackVector start,TrackVector end,double yaw,double pitch,double length) { this(start,end,yaw,pitch,length,false); }
-    }
-    private record Transition(List<Frame> frames, List<Double> tangents, List<Double> weights, double travel, List<CurvePoint> nodes) {}
-    private record CurvePoint(double distance, TrackVector position, double tangent) {}
-    private record ConnectionSpan(int from, int to, Frame frame, double weight) {}
-    private record ConnectionPath(ConnectionSpan span, ConnectionPath previous, int count) {}
-    private record ConnectionFit(ConnectionSpan span, ConnectionFit previous, int shortSections, double motionError) {
-        boolean hasHigherCost(int otherShortSections, double otherMotionError) {
-            return shortSections > otherShortSections || shortSections == otherShortSections && motionError > otherMotionError;
+    record Frame(TrackVector start, TrackVector end, double yaw, double pitch, double length, boolean longSection) {
+        Frame(TrackVector start, TrackVector end, double yaw, double pitch, double length) {
+            this(start, end, yaw, pitch, length, false);
+        }
+
+        static Frame between(TrackVector a, TrackVector b) {
+            return between(a, b, false);
+        }
+
+        static Frame between(TrackVector a, TrackVector b, boolean longSection) {
+            double dx = b.x() - a.x(), dy = b.y() - a.y(), dz = b.z() - a.z();
+            double horizontal = Math.hypot(dx, dz);
+            return new Frame(a, b, Math.atan2(dx, dz), Math.atan2(dy, horizontal), Math.hypot(horizontal, dy), longSection);
         }
     }
     private record Frog(TrackVector incoming, TrackVector outgoing) {}
     private record Wings(TrackVector mainIncoming, TrackVector branchIncoming) {}
     private record TipSample(double distance, double offset, TrackVector point, double stockDistance) {}
-    private record BladeSolution(double tipStation, double heelStation, double connectorStation, double root,
-                                 TrackVector anchor, Transition transition, List<Double> boundaries,
+    private record BladeSolution(double tipStation, double heelStation, double root,
+                                 TrackVector anchor, NativeTurnoutBladeChain chain, List<Double> boundaries,
                                  NativeRailCurve spine, NativeRailCurve bladeCurve, BladeContact contact) {}
 
     public static NativeTurnoutLayout build(TrackAssemblyDefinition.Geometry geometry, double gauge) {
@@ -192,10 +195,14 @@ public record NativeTurnoutLayout(TrackVector origin, double scale, List<Part> p
     public record Core(NativeTurnoutLayout layout, List<Exit> main, List<Exit> branch, List<SleeperGroup> sleepers,
                        List<BladeZone> blades) {}
     public static Core core(TrackGeometry main, TrackGeometry branch, double gauge) {
+        return core(main, branch, gauge, Policy.CROSSOVER_CORE);
+    }
+
+    static Core core(TrackGeometry main, TrackGeometry branch, double gauge, Policy connectionPolicy) {
         var exits = new ArrayList<List<Exit>>();
         var sleepers = new ArrayList<SleeperGroup>();
         var blades = new ArrayList<BladeZone>();
-        var layout = build(main, branch, gauge, exits, sleepers, blades);
+        var layout = build(main, branch, gauge, connectionPolicy, exits, sleepers, blades);
         return new Core(layout, exits.get(0), exits.get(1), List.copyOf(sleepers), List.copyOf(blades));
     }
     public static Core core(TrackGeometry main, TrackGeometry branch, double gauge, NativeLayoutProfile profile) {
@@ -205,11 +212,12 @@ public record NativeTurnoutLayout(TrackVector origin, double scale, List<Part> p
         }
     }
     private static NativeTurnoutLayout build(TrackGeometry mainGeometry, TrackGeometry branchGeometry, double gauge) {
-        return build(mainGeometry, branchGeometry, gauge, null, null, null);
+        return build(mainGeometry, branchGeometry, gauge, Policy.STANDALONE, null, null, null);
     }
     private static NativeTurnoutLayout build(TrackGeometry mainGeometry, TrackGeometry branchGeometry, double gauge,
-                                            List<List<Exit>> exits, List<SleeperGroup> sleepers, List<BladeZone> bladeZones) {
-        var main = new Path(mainGeometry); var branch = new Path(branchGeometry);
+                                            Policy connectionPolicy, List<List<Exit>> exits, List<SleeperGroup> sleepers, List<BladeZone> bladeZones) {
+        var main = new Path(mainGeometry);
+        var branch = new Path(branchGeometry);
         double scale = gauge / 1.435;
         var end = main.at(main.length()); var branchEnd = branch.at(branch.length()).position();
         double separation = (branchEnd.x() - end.position().x()) * end.lateral().x()
@@ -250,9 +258,9 @@ public record NativeTurnoutLayout(TrackVector origin, double scale, List<Part> p
         var mainTip = edgeOnRow(branch, bladeRow, side*RAIL_WORK_X*scale, scale);
         var branchTip = edgeOnRow(main, bladeRow, -side*RAIL_WORK_X*scale, scale);
         var mainBlade = solveBlade(main, branch, crossing.main(), toe, side, mainFrog,
-                branch.edge(branchToe, side*STOCK_WORK_X*scale), mainTip.point(), scale, "main");
+                branch.edge(branchToe, side*STOCK_WORK_X*scale), mainTip.point(), scale, "main", connectionPolicy);
         var branchBlade = solveBlade(branch, main, crossing.branch(), branchToe, -side, branchFrog,
-                main.edge(toe, -side*STOCK_WORK_X*scale), branchTip.point(), scale, "branch");
+                main.edge(toe, -side*STOCK_WORK_X*scale), branchTip.point(), scale, "branch", connectionPolicy);
         if (bladeZones != null) {
             bladeZones.add(new BladeZone(false, (int)side, mainBlade.tipStation(), mainBlade.heelStation(), crossing.main()));
             bladeZones.add(new BladeZone(true, (int)-side, branchBlade.tipStation(), branchBlade.heelStation(), crossing.main()));
@@ -406,7 +414,7 @@ public record NativeTurnoutLayout(TrackVector origin, double scale, List<Part> p
 
     private static BladeSolution solveBlade(Path path, Path stock, double frog, double toe, double inner,
                                             Frog ports, TrackVector oldTip, TrackVector referenceTip,
-                                            double scale, String label) {
+                                            double scale, String label, Policy connectionPolicy) {
         try (var stage = NativeLayoutProfile.stage("turnout/solveBlade/"+label)) {
             if (stage != null) {
                 stage.value("path", label); stage.value("side", inner); stage.value("toe", toe); stage.value("scale", scale);
@@ -415,10 +423,10 @@ public record NativeTurnoutLayout(TrackVector origin, double scale, List<Part> p
                 stage.value("positionRefinements", 0L); stage.value("motionRefinements", 0L);
             }
             try {
-                var result = solveBladeInternal(path, stock, frog, toe, inner, ports, oldTip, referenceTip, scale, label);
+                var result = solveBladeInternal(path, stock, frog, toe, inner, ports, oldTip, referenceTip, scale, label, connectionPolicy);
                 if (stage != null) {
                     stage.value("tip", result.tipStation()); stage.value("heel", result.heelStation());
-                    stage.value("root", result.root()); stage.value("links", result.transition().frames().size());
+                    stage.value("root", result.root()); stage.value("links", result.chain().frames().size());
                 }
                 return result;
             } catch (RuntimeException | Error failure) { if (stage != null) stage.failure(failure); throw failure; }
@@ -426,7 +434,7 @@ public record NativeTurnoutLayout(TrackVector origin, double scale, List<Part> p
     }
     private static BladeSolution solveBladeInternal(Path path, Path stock, double frog, double toe, double inner,
                                              Frog ports, TrackVector oldTip, TrackVector referenceTip,
-                                             double scale, String label) {
+                                             double scale, String label, Policy connectionPolicy) {
         var profile = NativeLayoutProfile.current();
         double incoming = station(path, ports.incoming(), path.at(frog).tangent());
         double offset = inner*RAIL_X*scale, tolerance = SOLVE_TOLERANCE*scale;
@@ -477,7 +485,7 @@ public record NativeTurnoutLayout(TrackVector origin, double scale, List<Part> p
         for (var tip : candidates) {
             if (profile != null) profile.count("candidateAttempts");
             BladeSolution result;
-            try { result = bladeCandidate(path, stock, tip, length, preferredRoot, incoming, inner, scale, label); }
+            try { result = bladeCandidate(path, stock, tip, length, preferredRoot, incoming, inner, scale, label, connectionPolicy); }
             catch (InvalidLayout failure) {
                 if (profile != null) profile.count("candidateFailures");
                 failures.add(tip); if (closestFailure == null) closestFailure = failure; continue;
@@ -491,7 +499,7 @@ public record NativeTurnoutLayout(TrackVector origin, double scale, List<Part> p
                     double distance = (valid+invalid)/2;
                     try {
                         var middle = tipSample(path, stock, distance, inner, scale);
-                        var candidate = bladeCandidate(path, stock, middle, length, preferredRoot, incoming, inner, scale, label);
+                        var candidate = bladeCandidate(path, stock, middle, length, preferredRoot, incoming, inner, scale, label, connectionPolicy);
                         if (Math.abs(middle.distance()-preferredTip) < Math.abs(best.distance()-preferredTip)) { valid = middle.distance(); best = middle; result = candidate; }
                         else invalid = middle.distance();
                     } catch (InvalidLayout failure) { if (profile != null) profile.count("candidateFailures"); invalid = distance; }
@@ -516,7 +524,7 @@ public record NativeTurnoutLayout(TrackVector origin, double scale, List<Part> p
 
     private static BladeSolution bladeCandidate(Path path, Path stock, TipSample tip, double length,
                                                 double preferredRoot, double incoming, double inner,
-                                                double scale, String label) {
+                                                double scale, String label, Policy connectionPolicy) {
         double offset = inner*RAIL_X*scale, tolerance = SOLVE_TOLERANCE*scale;
         if (Math.abs(tip.offset()) >= HEAD_HALF) throw new InvalidLayout(Problem.SPACE,
                 NativeLayoutDiagnostic.at("blade_tip_width", label, (int)inner, 0, Math.abs(tip.offset()), HEAD_HALF));
@@ -534,14 +542,23 @@ public record NativeTurnoutLayout(TrackVector origin, double scale, List<Part> p
                 NativeLayoutDiagnostic.at("blade_root_space", label, (int)inner, connectorStation, incoming, CONNECTION_STEP*scale));
         double root = Math.clamp(preferredRoot, low, high); var anchor = path.edge(root, offset);
         var tipOffset = NativeRailCurve.add(tip.point(), spineTip, -1);
-        Transition curve;
-        try { curve = transition(path, tipStation, heelStation, connectorStation, root, path.at(tipStation).lateral(), tipOffset, inner, scale); }
-        catch (InvalidLayout failure) { throw new InvalidLayout(failure.problem(),
-                NativeLayoutDiagnostic.at("blade_motion", label, (int)inner, tipStation, root, BLADE_OPENING*scale)); }
-        for (int i = 1; i < curve.frames().size(); i++) if (curve.frames().get(i).length() > 1.58*scale)
-            throw new InvalidLayout(Problem.SPACE, NativeLayoutDiagnostic.at("blade_source_coverage", label, (int)inner, 0, curve.frames().get(i).length(), 1.58*scale));
+        var stroke = new Stroke(path.at(tipStation).lateral(), tipOffset, inner, scale);
+        NativeTurnoutBladeChain reference;
+        try {
+            reference = NativeTurnoutBladeChain.reference(tipStation, heelStation, connectorStation, root,
+                    station -> bladeNode(path, offset, station), stroke);
+        } catch (InvalidLayout failure) {
+            throw new InvalidLayout(failure.problem(),
+                    NativeLayoutDiagnostic.at("blade_motion", label, (int)inner, tipStation, root, stroke.targetOpening()));
+        }
+        for (int i = 1; i < reference.frames().size(); i++) {
+            double segmentLength = reference.frames().get(i).length();
+            if (segmentLength > 1.58 * scale)
+                throw new InvalidLayout(Problem.SPACE,
+                        NativeLayoutDiagnostic.at("blade_source_coverage", label, (int)inner, 0, segmentLength, 1.58 * scale));
+        }
         var boundaries = new ArrayList<Double>(); boundaries.add(tipStation); boundaries.add(heelStation);
-        for (var node : curve.nodes()) boundaries.add(node.distance());
+        for (var node : reference.nodes()) boundaries.add(node.distance());
         var fitting = new ArrayList<Double>(); fitting.add(tipStation);
         for (int i = 1; i < boundaries.size(); i++) {
             double a = boundaries.get(i-1), b = boundaries.get(i);
@@ -554,13 +571,12 @@ public record NativeTurnoutLayout(TrackVector origin, double scale, List<Part> p
                     NativeLayoutDiagnostic.at("blade_offset_curve", label, (int)inner, s, s, 0));
             return spineKnot(path, offset, s, scale);
         }, fitting, tolerance);
-        var selected = longerConnections(curve,spine,path.at(tipStation).lateral(),tipOffset,inner,scale);
-        if (selected != curve) {
-            curve = selected;
+        var chain = NativeTurnoutConnections.merge(reference, spine, stroke, connectionPolicy);
+        if (chain != reference) {
             boundaries.subList(2,boundaries.size()).clear();
-            for (var node : curve.nodes()) boundaries.add(node.distance());
+            for (var node : chain.nodes()) boundaries.add(node.distance());
         }
-        var frame = curve.frames().getFirst();
+        var frame = chain.frames().getFirst();
         var bladeCurve = spine.local(tipStation, heelStation, spineTip, frame.yaw(), frame.pitch(), scale, frame.length()/scale);
         var edges = new ArrayList<BladeEdge>(); double search = Math.max(0, tip.stockDistance()-tolerance);
         int count = Math.max(2, (int)Math.ceil(length/(0.1*scale)));
@@ -581,7 +597,7 @@ public record NativeTurnoutLayout(TrackVector origin, double scale, List<Part> p
                 NativeLayoutDiagnostic.at("blade_heel_width", label, (int)inner, 0, inner*edges.getLast().offset(), 1.2*HEAD_HALF));
         var normal = NativeRailCurve.cross(spine.at(tipStation).first(), path.at(tipStation).lateral());
         double height = NativeRailCurve.dot(tipOffset, normal)/Math.sqrt(NativeRailCurve.dot(normal, normal))/scale;
-        return new BladeSolution(tipStation, heelStation, connectorStation, root, anchor, curve, List.copyOf(boundaries),
+        return new BladeSolution(tipStation, heelStation, root, anchor, chain, List.copyOf(boundaries),
                 spine, bladeCurve, new BladeContact(edges, bladeCurve, inner, height));
     }
 
@@ -591,22 +607,22 @@ public record NativeTurnoutLayout(TrackVector origin, double scale, List<Part> p
         double incoming = station(path, ports.incoming(), path.at(frog).tangent());
         double outgoing = station(path, ports.outgoing(), path.at(frog).tangent());
         double root = blade.root(); var anchor = blade.anchor(); double fixedYaw = yaw(path.at(root));
-        var curve = blade.transition(); var spine = blade.spine(); var bladeCurve = blade.bladeCurve();
+        var chain = blade.chain(); var spine = blade.spine(); var bladeCurve = blade.bladeCurve();
         var boundaries = blade.boundaries(); var bladeContact = blade.contact();
         Motion next = null;
         var chainParts = new ArrayList<Part>();
-        for (int i = curve.frames().size() - 1; i >= 0; i--) {
-            var frame = curve.frames().get(i);
+        for (int i = chain.frames().size() - 1; i >= 0; i--) {
+            var frame = chain.frames().get(i);
             float derivedLength = i == 0 ? (float)(frame.length() / scale) : 0;
             double localZ = i == 0 ? BLADE_JOIN - derivedLength : -frame.length() / (2 * scale);
-            double travel = curve.travel() * curve.weights().get(i);
+            double travel = chain.travel() * chain.weights().get(i);
             Motion motion = null;
             // A zero-rotation suffix is fixed; the remaining chain anchors to its start.
             if (next != null || travel != 0) {
                 next = new Motion(next, frame.end(), frame.length(), frame.yaw(), frame.pitch(), travel, reverse, inner * RAIL_X, localZ);
                 motion = next;
             }
-            double startYaw = curve.tangents().get(i), endYaw = curve.tangents().get(i + 1);
+            double startYaw = chain.tangents().get(i), endYaw = chain.tangents().get(i + 1);
             double from = boundaries.get(i), to = boundaries.get(i + 1);
             var localCurve = i == 0 ? bladeCurve : spine.local(from, to, frame.start(), frame.yaw(), frame.pitch(), scale, frame.length() / scale);
             chainParts.add(new Part(i == 0 ? (inner > 0 ? "L1" : "R1") : (inner > 0 ? "railL" : "railR"),
@@ -709,310 +725,9 @@ public record NativeTurnoutLayout(TrackVector origin, double scale, List<Part> p
         return new NativeRailCurve.Knot(s, path.edge(s, offset), first, second);
     }
 
-    private static Transition transition(Path path, double tipStation, double heelStation, double startDistance, double root,
-                                         TrackVector lateral, TrackVector tipOffset, double inner, double scale) {
-        var profile = NativeLayoutProfile.current();
-        double length = root - startDistance, offset = inner * RAIL_X * scale;
-        int count = Math.max(3, (int)Math.ceil(length / (CONNECTION_STEP * scale)));
-        var nodes = new ArrayList<CurvePoint>(count + 1);
-        for (int i = 0; i <= count; i++) nodes.add(curvePoint(path, offset,
-                i == count ? root : startDistance + length * i / count));
-        var tip = path.edge(tipStation, offset); var rear = path.edge(heelStation, offset);
-        var frames = new ArrayList<Frame>(count + 2);
-        frames.add(frame(tip, rear));
-        frames.add(frame(rear, nodes.getFirst().position()));
-        for (int i = 0; i < count; i++) frames.add(frame(nodes.get(i).position(), nodes.get(i + 1).position()));
-        while (true) {
-            var weights = motionWeights(frames);
-            double travel = solveTravel(frames, weights, lateral, tipOffset, inner, scale);
-            var split = new BitSet(nodes.size() - 1);
-            // Closed-pose end tangents match. Their full-stroke rotation difference bounds
-            // the tangent discontinuity at every intermediate pose, in both switch directions.
-            for (int i = 3; i < frames.size(); i++) {
-                if (Math.abs(travel * (weights.get(i) - weights.get(i - 1))) <= MOTION_JOINT_ANGLE) continue;
-                int link = frames.get(i - 1).length() >= frames.get(i).length() ? i - 1 : i;
-                split.set(link - 2);
-            }
-            if (split.isEmpty()) {
-                var tangents = new ArrayList<Double>(nodes.size() + 2);
-                tangents.add(yaw(path.at(tipStation))); tangents.add(yaw(path.at(heelStation)));
-                for (var node : nodes) tangents.add(node.tangent());
-                return new Transition(frames, tangents, weights, travel, nodes);
-            }
-            if (profile != null) profile.count("motionRefinements");
-            var nextNodes = new ArrayList<CurvePoint>(nodes.size() + split.cardinality());
-            var nextFrames = new ArrayList<Frame>(frames.size() + split.cardinality());
-            nextNodes.add(nodes.getFirst());
-            nextFrames.add(frames.get(0)); nextFrames.add(frames.get(1));
-            for (int i = 0; i + 1 < nodes.size(); i++) {
-                var start = nodes.get(i); var end = nodes.get(i + 1);
-                if (split.get(i)) {
-                    var mid = curvePoint(path, offset, (start.distance() + end.distance()) / 2);
-                    nextNodes.add(mid);
-                    nextFrames.add(frame(start.position(), mid.position()));
-                    nextFrames.add(frame(mid.position(), end.position()));
-                } else nextFrames.add(frames.get(i + 2));
-                nextNodes.add(end);
-            }
-            nodes = nextNodes; frames = nextFrames;
-        }
-    }
-
-    private static CurvePoint curvePoint(Path path, double offset, double distance) {
-        var pose = path.at(distance); var point = pose.position(); var lateral = pose.lateral();
-        var position = new TrackVector(point.x() + lateral.x() * offset, point.y(), point.z() + lateral.z() * offset);
-        return new CurvePoint(distance, position, yaw(pose));
-    }
-
-    private static Transition longerConnections(Transition reference, NativeRailCurve spine, TrackVector lateral,
-                                                TrackVector tipOffset, double inner, double scale) {
-        var nodes = reference.nodes();
-        // Preserve the tapered blade, the first 1.45 m rail, and the fixed last link.
-        int end = nodes.size()-2;
-        var open = connectionPositions(reference.frames(),reference.weights(),reference.travel(),1);
-        var choices = new ArrayList<List<ConnectionSpan>>(end);
-        for (int from = 0; from < end; from++) {
-            var spans = new ArrayList<ConnectionSpan>();
-            choices.add(spans);
-            var start = nodes.get(from);
-            for (int to = from+1; to <= end; to++) {
-                var finish = nodes.get(to);
-                if (finish.distance()-start.distance() > NativeFixedRails.MAX_LENGTH*scale) break;
-                if (to == from+1) {
-                    spans.add(new ConnectionSpan(from,to,reference.frames().get(from+2),reference.weights().get(from+2)));
-                    continue;
-                }
-                if (!NativeFixedRails.fitsStrip(spine,start.distance(),finish.distance(),scale)) continue;
-                var chord = frame(start.position(),finish.position());
-                var frame = new Frame(chord.start(),chord.end(),chord.yaw(),chord.pitch(),chord.length(),true);
-                double turn = wrap(direction(open[from+2],open[to+2])-frame.yaw());
-                spans.add(new ConnectionSpan(from,to,frame,Math.clamp(turn/reference.travel(),0,1)));
-            }
-        }
-        double budgetTravel = Math.abs(reference.travel());
-        Transition selected = reference;
-        for (int pass = 0; pass < 3; pass++) {
-            var spans = selectConnections(choices,end,budgetTravel);
-            if (spans.isEmpty() || spans.size() >= end) break;
-            var candidate = connectionTransition(reference, spans, lateral, tipOffset, inner, scale);
-            if (candidate == null) break;
-            if (!connectionJointsFit(candidate.weights(), candidate.travel())) {
-                // Refit with the recalibrated travel when it makes a joint exceed its original limit.
-                budgetTravel = Math.max(budgetTravel,Math.abs(candidate.travel()));
-                continue;
-            }
-            if (followsConnectionMotion(reference, spans, candidate.frames(), candidate.weights(), candidate.travel(), scale))
-                selected = candidate;
-            break;
-        }
-        int retainedCount = selected.frames().size() - 3;
-        int shortSections = shortConnections(selected, scale);
-        if (shortSections == 0) return selected;
-        // The reference falloff concentrates rotation into the shortest links. In a tight
-        // connection, spread that rotation over longer sections and recheck the reference motion.
-        // The chain cannot move farther than total link length times the rotation amplitude.
-        double maxLever = Math.hypot(tipOffset.x(), tipOffset.z());
-        for (var frame : reference.frames()) maxLever += frame.length();
-        int firstCount = Math.max(1, (int)Math.ceil(BLADE_OPENING * scale / (maxLever * MOTION_JOINT_ANGLE)) - 1);
-        for (int count = firstCount; count <= retainedCount; count++) {
-            var spans = fitEvenConnectionTurns(choices,end,count,scale);
-            if (spans.isEmpty()) continue;
-            var candidate = connectionTransition(reference,spans,lateral,tipOffset,inner,scale);
-            if (candidate == null || !connectionJointsFit(candidate.weights(), candidate.travel())
-                    || !followsConnectionMotion(reference, spans, candidate.frames(), candidate.weights(), candidate.travel(), scale)) continue;
-            int candidateShortSections = shortConnections(candidate,scale);
-            if (candidateShortSections >= shortSections) continue;
-            selected = candidate;
-            shortSections = candidateShortSections;
-            if (shortSections == 0) break;
-        }
-        return selected;
-    }
-
-    private static int shortConnections(Transition transition, double scale) {
-        int count = 0;
-        for (int i = 2; i < transition.frames().size()-1; i++)
-            if (transition.frames().get(i).length() < SHORT_CONNECTION_LENGTH * scale) count++;
-        return count;
-    }
-
-    private static List<ConnectionSpan> fitEvenConnectionTurns(List<List<ConnectionSpan>> choices, int end, int count, double scale) {
-        // For each link count and station, prefer fewer short sections and then the
-        // smallest length-weighted change from the reference chord rotations.
-        var paths = new ConnectionFit[end + 1];
-        paths[0] = new ConnectionFit(null, null, 0, 0);
-        for (int link = 0; link < count; link++) {
-            double weight = (double)(count - link) / (count + 1);
-            var next = new ConnectionFit[end + 1];
-            for (int from = 0; from < end; from++) {
-                var previous = paths[from];
-                if (previous == null) continue;
-                for (var span : choices.get(from)) {
-                    int to = span.to();
-                    if (end - to < count - link - 1) continue;
-                    double length = span.frame().length();
-                    int shortSections = previous.shortSections() + (length < SHORT_CONNECTION_LENGTH * scale ? 1 : 0);
-                    double error = previous.motionError() + length * Math.abs(span.weight() - weight);
-                    if (next[to] == null || next[to].hasHigherCost(shortSections, error))
-                        next[to] = new ConnectionFit(new ConnectionSpan(from, to, span.frame(), weight), previous, shortSections, error);
-                }
-            }
-            paths = next;
-        }
-        var result = new ArrayList<ConnectionSpan>();
-        for (var path = paths[end]; path != null && path.span() != null; path = path.previous()) result.add(path.span());
-        return result.reversed();
-    }
-
-    private static Transition connectionTransition(Transition reference, List<ConnectionSpan> spans, TrackVector lateral,
-                                                   TrackVector tipOffset, double inner, double scale) {
-        var nodes = reference.nodes();
-        var frames = new ArrayList<>(reference.frames().subList(0,2));
-        var weights = new ArrayList<>(reference.weights().subList(0,2));
-        var retained = new ArrayList<CurvePoint>();
-        retained.add(nodes.getFirst());
-        for (var span : spans) {
-            frames.add(span.frame());
-            weights.add(span.weight());
-            retained.add(nodes.get(span.to()));
-        }
-        frames.add(reference.frames().getLast());
-        weights.add(0.0);
-        retained.add(nodes.getLast());
-        double travel;
-        try { travel = solveTravel(frames,weights,lateral,tipOffset,inner,scale); }
-        catch (InvalidLayout failure) { return null; }
-        var tangents = new ArrayList<>(reference.tangents().subList(0,2));
-        for (var node : retained) tangents.add(node.tangent());
-        return new Transition(frames,tangents,weights,travel,retained);
-    }
-
-    private static List<ConnectionSpan> selectConnections(List<List<ConnectionSpan>> choices, int end, double travel) {
-        var endingAt = new ArrayList<List<ConnectionPath>>(end+1);
-        for (int i = 0; i <= end; i++) endingAt.add(new ArrayList<>());
-        for (int i = 0; i < end; i++) {
-            for (var span : choices.get(i)) {
-                if (span.to() == end && span.weight()*travel > MOTION_JOINT_ANGLE) continue;
-                if (i == 0) {
-                    if ((1-span.weight())*travel <= MOTION_JOINT_ANGLE)
-                        endingAt.get(span.to()).add(new ConnectionPath(span,null,1));
-                    continue;
-                }
-                ConnectionPath best = null;
-                for (var previous : endingAt.get(i)) {
-                    double angle = Math.abs(previous.span().weight()-span.weight())*travel;
-                    if (angle <= MOTION_JOINT_ANGLE && (best == null || previous.count() < best.count()))
-                        best = previous;
-                }
-                if (best != null) endingAt.get(span.to()).add(new ConnectionPath(span,best,best.count()+1));
-            }
-        }
-        var best = endingAt.getLast().stream().min(java.util.Comparator.comparingInt(ConnectionPath::count)).orElse(null);
-        var result = new ArrayList<ConnectionSpan>();
-        for (var path = best; path != null; path = path.previous()) result.add(path.span());
-        return result.reversed();
-    }
-
-    private static boolean connectionJointsFit(List<Double> weights,double travel) {
-        for (int i = 2; i < weights.size(); i++)
-            if (Math.abs(travel*(weights.get(i)-weights.get(i-1))) > MOTION_JOINT_ANGLE) return false;
-        return true;
-    }
-
-    private static TrackVector[] connectionPositions(List<Frame> frames, List<Double> weights, double travel, double phase) {
-        var positions = new TrackVector[frames.size()+1];
-        positions[frames.size()] = frames.getLast().end();
-        for (int i = frames.size()-1; i >= 0; i--) {
-            var frame = frames.get(i);
-            double yaw = frame.yaw()+travel*weights.get(i)*phase;
-            double horizontal = frame.length()*Math.cos(frame.pitch());
-            var end = positions[i+1];
-            positions[i] = new TrackVector(end.x()-horizontal*Math.sin(yaw),end.y()-frame.length()*Math.sin(frame.pitch()),
-                    end.z()-horizontal*Math.cos(yaw));
-        }
-        return positions;
-    }
-
-    private static boolean followsConnectionMotion(Transition reference,List<ConnectionSpan> spans,List<Frame> frames,
-                                                    List<Double> weights,double travel,double scale) {
-        var nodes = reference.nodes();
-        double limit = NativeFixedRails.ERROR*scale;
-        for (int sample = 1; sample <= 4; sample++) {
-            double phase = sample/4.0;
-            var fine = connectionPositions(reference.frames(),reference.weights(),reference.travel(),phase);
-            var coarse = connectionPositions(frames,weights,travel,phase);
-            for (int i = 0; i < 2; i++) if (distance(fine[i],coarse[i]) > limit) return false;
-            for (int i = 0; i < spans.size(); i++) {
-                var span = spans.get(i);
-                double from = nodes.get(span.from()).distance(), to = nodes.get(span.to()).distance();
-                var start = coarse[i+2];
-                var delta = NativeRailCurve.add(coarse[i+3],start,-1);
-                for (int j = span.from(); j <= span.to(); j++) {
-                    var node = nodes.get(j);
-                    var point = NativeRailCurve.add(start,delta,(node.distance()-from)/(to-from));
-                    if (distance(point,fine[j+2]) > limit) return false;
-                }
-            }
-        }
-        return true;
-    }
-
-    private static List<Double> motionWeights(List<Frame> frames) {
-        // The blade and added ordinary rail precede the deforming connection curve.
-        double length = 0;
-        for (int i = 2; i < frames.size(); i++) length += frames.get(i).length();
-        double first = frames.get(2).length() / 2, last = length - frames.getLast().length() / 2;
-        double inverseRange = 1 / (last - first);
-        var weights = new ArrayList<Double>(frames.size()); weights.add(1.0); weights.add(1.0);
-        double along = 0;
-        for (int i = 2; i < frames.size(); i++) {
-            var frame = frames.get(i);
-            double t = Math.clamp((along + frame.length() / 2 - first) * inverseRange, 0, 1);
-            // Quintic falloff has zero first and second derivatives at both ends. Using
-            // link centers distributes rotation along the chain without a forced last-link jump.
-            weights.add(i == 2 ? 1.0 : i == frames.size() - 1 ? 0.0 : 1 - t*t*t*(10 + t*(-15 + 6*t)));
-            along += frame.length();
-        }
-        return weights;
-    }
-
-    private static double solveTravel(List<Frame> frames, List<Double> weights, TrackVector lateral, TrackVector tipOffset, double inner, double scale) {
-        // Per link: closed projection, its yaw derivative, and signed rotation weight.
-        var coefficients = new double[(frames.size() + 1) * 3];
-        double derivativeBound = 0, lateralLength = Math.hypot(lateral.x(), lateral.z());
-        for (int i = 0; i < frames.size(); i++) {
-            var frame = frames.get(i);
-            double horizontal = frame.length() * Math.cos(frame.pitch());
-            double sine = Math.sin(frame.yaw()), cosine = Math.cos(frame.yaw()), weight = weights.get(i);
-            coefficients[i * 3] = horizontal * (lateral.x() * sine + lateral.z() * cosine);
-            coefficients[i * 3 + 1] = horizontal * (lateral.x() * cosine - lateral.z() * sine);
-            coefficients[i * 3 + 2] = inner * weight;
-            derivativeBound += horizontal * lateralLength * weight;
-        }
-        // Chain displacement is minus the rotated links, plus the rotated contact-tip offset.
-        int tipIndex = frames.size() * 3;
-        coefficients[tipIndex] = -NativeRailCurve.dot(tipOffset, lateral);
-        coefficients[tipIndex + 1] = -(lateral.x()*tipOffset.z() - lateral.z()*tipOffset.x());
-        coefficients[tipIndex + 2] = inner;
-        derivativeBound += Math.hypot(tipOffset.x(), tipOffset.z()) * lateralLength;
-        double low = 0, high = 0.15, target = BLADE_OPENING * scale;
-        if (opening(high, coefficients, inner) < target) throw new InvalidLayout(Problem.SPACE);
-        while ((high - low) * derivativeBound > SOLVE_TOLERANCE * scale) {
-            double mid = (low + high) / 2;
-            if (opening(mid, coefficients, inner) < target) low = mid; else high = mid;
-        }
-        return inner * (low + high) / 2;
-    }
-
-    /** Project the change from the closed pose directly; no world positions or temporary nodes. */
-    private static double opening(double angle, double[] coefficients, double inner) {
-        double displacement = 0;
-        for (int i = 0; i < coefficients.length; i += 3) {
-            double rotation = angle * coefficients[i + 2];
-            if (rotation == 0) continue;
-            displacement += coefficients[i] * (Math.cos(rotation) - 1) + coefficients[i + 1] * Math.sin(rotation);
-        }
-        return inner * displacement;
+    private static Node bladeNode(Path path, double offset, double station) {
+        var pose = path.at(station);
+        return new Node(station, Path.edge(pose, offset), yaw(pose));
     }
 
     private static void railRun(LinkedHashSet<Part> parts, Path path, double a, double b,
@@ -1041,13 +756,8 @@ public record NativeTurnoutLayout(TrackVector origin, double scale, List<Part> p
         }
     }
 
-    private static Frame frame(TrackVector a, TrackVector b) {
-        double dx = b.x() - a.x(), dy = b.y() - a.y(), dz = b.z() - a.z();
-        double horizontal = Math.hypot(dx, dz);
-        return new Frame(a, b, Math.atan2(dx, dz), Math.atan2(dy, horizontal), Math.hypot(horizontal, dy));
-    }
     private static Frame centerFrame(Path path, double s, double scale) {
-        return frame(path.at(s - 0.75 * scale).position(), path.at(s + 0.75 * scale).position());
+        return Frame.between(path.at(s - 0.75 * scale).position(), path.at(s + 0.75 * scale).position());
     }
     private static TrackVector localPoint(Frame f, double x, double z) {
         var center = new TrackVector((f.start().x() + f.end().x()) / 2,
@@ -1060,13 +770,13 @@ public record NativeTurnoutLayout(TrackVector origin, double scale, List<Part> p
         var f = centerFrame(path, s, scale);
         parts.add(new Part("sleeper_support", localPoint(f, 0, 0), f.yaw(), f.pitch(), 0, 0, 0, 0, null, null, null, null));
     }
-    private static double distance(TrackVector a, TrackVector b) {
+    static double distance(TrackVector a, TrackVector b) {
         return Math.hypot(Math.hypot(b.x() - a.x(), b.z() - a.z()), b.y() - a.y());
     }
     private static double direction(Path path, double a, double b) {
         return direction(path.at(a).position(), path.at(b).position());
     }
-    private static double direction(TrackVector a, TrackVector b) {
+    static double direction(TrackVector a, TrackVector b) {
         return Math.atan2(b.x() - a.x(), b.z() - a.z());
     }
     static String sleeperKind(double row, double frog, double station, double tip, double heel, double scale) {
@@ -1083,7 +793,7 @@ public record NativeTurnoutLayout(TrackVector origin, double scale, List<Part> p
         parts.add(new Part(name, p, yaw, 0, 0, 0, 0, 0, null, null, null, null));
     }
     private static double yaw(TrackPose p) { return Math.atan2(p.tangent().x(), p.tangent().z()); }
-    private static double wrap(double value) { return Math.atan2(Math.sin(value), Math.cos(value)); }
+    static double wrap(double value) { return Math.atan2(Math.sin(value), Math.cos(value)); }
     private static TrackVector shifted(TrackVector p, double yaw, double x, double z) {
         return new TrackVector(p.x() + Math.cos(yaw) * x + Math.sin(yaw) * z, p.y(),
                 p.z() - Math.sin(yaw) * x + Math.cos(yaw) * z);

@@ -199,7 +199,7 @@ public final class ClientThumbnailManager extends SimplePreparableReloadListener
                             : com.unrealtrainmod.track.model.NativeTurnoutCatalog.SINGLE_CROSSOVER_R11.equals(id)
                             ? com.unrealtrainmod.client.track.NativeCrossoverModels.SINGLE_RECIPE : com.unrealtrainmod.track.model.NativeTurnoutCatalog.SCISSORS_R11.equals(id)
                             ? com.unrealtrainmod.client.track.NativeCrossoverModels.RECIPE : com.unrealtrainmod.track.model.NativeTurnoutCatalog.DIAMOND_R11.equals(id)
-                            ? com.unrealtrainmod.client.track.NativeDiamondModels.RECIPE : "native-turnout-long-switch-links-2";
+                            ? com.unrealtrainmod.client.track.NativeDiamondModels.RECIPE : "native-turnout-balanced-switch-links-3";
                     String digest = ResourceIds.hash(RECIPE + RAIL_CAPTURE_RECIPE + "\n" + id + "\n" + layout + "\n" + source);
                     var entry = new Entry(ResourceLocation.fromNamespaceAndPath(UnrealTrainMod.MODID, "thumbnail/" + digest),
                             directory.resolve(digest + ".png"));
