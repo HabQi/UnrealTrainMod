@@ -3,24 +3,30 @@ package com.unrealtrainmod.blueprint;
 
 import com.unrealtrainmod.track.TrackConnection;
 import com.unrealtrainmod.track.TrackGraph;
+import com.unrealtrainmod.track.TrackSegment;
 import com.unrealtrainmod.track.assembly.TrackTransitionResolver;
 import com.unrealtrainmod.track.geometry.TrackPose;
+import com.unrealtrainmod.track.geometry.TrackProjection;
+import com.unrealtrainmod.track.geometry.TrackVector;
 import com.unrealtrainmod.track.path.TrackPathSampler;
 import com.unrealtrainmod.track.path.TrackRoute;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.UUID;
 import net.minecraft.world.phys.Vec3;
 
 /** Unique-continuation traversal. A clicked branch segment is an explicit waypoint. */
 public final class BlueprintPaths {
+    public record Anchor(UUID segment, double distance) {}
+
     public interface Path {
         double length(); TrackPose sample(double distance);
         default java.util.Set<java.util.UUID> segments() { return java.util.Set.of(); }
     }
     private BlueprintPaths() {}
 
-    public static Path resolve(TrackGraph graph, List<BlueprintPlacementRequest.Anchor> supplied, boolean reverse) {
+    public static Path resolve(TrackGraph graph, List<Anchor> supplied, boolean reverse) {
         var anchors = new ArrayList<>(supplied);
         if (reverse) java.util.Collections.reverse(anchors);
         if (anchors.size() < 2) throw new IllegalArgumentException("binding");
@@ -47,7 +53,7 @@ public final class BlueprintPaths {
             }
         };
     }
-    private static Path between(TrackGraph graph, BlueprintPlacementRequest.Anchor from, BlueprintPlacementRequest.Anchor to) {
+    private static Path between(TrackGraph graph, Anchor from, Anchor to) {
         var start = graph.segment(from.segment()); var end = graph.segment(to.segment());
         if (from.distance() > start.geometry().getLength() || to.distance() > end.geometry().getLength()) throw new IllegalArgumentException("path");
         var candidates = new ArrayList<List<TrackConnection>>();
@@ -86,27 +92,20 @@ public final class BlueprintPaths {
         return null;
     }
 
-    public static BlueprintPlacementRequest.Anchor pick(TrackGraph graph, Vec3 hit) {
-        BlueprintPlacementRequest.Anchor best = null; double score = 4;
-        for (var segment : graph.segmentsInChunk(net.minecraft.util.Mth.floor(hit.x) >> 4, net.minecraft.util.Mth.floor(hit.z) >> 4)) {
-            var geometry = segment.geometry(); double length = geometry.getLength(), distance = 0, nearest = Double.POSITIVE_INFINITY;
-            int count = Math.max(1, (int)Math.ceil(length));
-            for (int i = 0; i <= count; i++) {
-                double s = length * i / count; double d = squared(geometry.sample(s), hit);
-                if (d < nearest) { distance = s; nearest = d; }
+    public static Anchor pick(List<TrackSegment> segments, Vec3 hit) {
+        var point = new TrackVector(hit.x, hit.y, hit.z);
+        Anchor best = null;
+        double score = Double.POSITIVE_INFINITY;
+        for (var segment : segments) {
+            var geometry = segment.geometry();
+            double distance = TrackProjection.closestDistance(geometry, point);
+            double error = TrackProjection.squaredDistance(geometry.sample(distance).position(), point);
+            if (error < score) {
+                score = error;
+                best = new Anchor(segment.id(), distance);
             }
-            double lo = Math.max(0, distance - 1), hi = Math.min(length, distance + 1);
-            for (int i = 0; i < 24; i++) {
-                double l = (2 * lo + hi) / 3, r = (lo + 2 * hi) / 3;
-                if (squared(geometry.sample(l), hit) < squared(geometry.sample(r), hit)) hi = r; else lo = l;
-            }
-            distance = (lo + hi) / 2; double d = squared(geometry.sample(distance), hit);
-            if (d < score) { score = d; best = new BlueprintPlacementRequest.Anchor(segment.id(), distance); }
         }
         if (best == null) throw new IllegalArgumentException("no_track");
         return best;
-    }
-    private static double squared(TrackPose pose, Vec3 hit) {
-        var p = pose.position(); return hit.distanceToSqr(p.x(), p.y(), p.z());
     }
 }

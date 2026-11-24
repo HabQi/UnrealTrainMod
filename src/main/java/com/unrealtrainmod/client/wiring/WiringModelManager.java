@@ -34,8 +34,10 @@ public final class WiringModelManager extends SimplePreparableReloadListener<Wir
     private record MeshKey(PackageAsset model, boolean smoothing) {}
     private final Map<ResourceLocation, Model> models = new HashMap<>();
     private final java.util.Set<ResourceLocation> textures = new java.util.HashSet<>();
+    private long generation;
     private WiringModelManager() {}
     public Model model(ResourceLocation id) { return models.get(id); }
+    public long generation() { return generation; }
 
     @Override protected Prepared prepare(ResourceManager resources, ProfilerFiller profiler) {
         var result = new HashMap<ResourceLocation, Model>(); var images = new HashMap<ResourceLocation, NativeImage>();
@@ -105,6 +107,7 @@ public final class WiringModelManager extends SimplePreparableReloadListener<Wir
         finally { pending.values().forEach(NativeImage::close); }
     }
     public void close() {
+        generation++;
         WiringClient.clearRuntimes();
         WiringRenderCache.clear();
         com.unrealtrainmod.wiring.WiringScriptPolicy.clear();

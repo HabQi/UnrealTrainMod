@@ -12,8 +12,9 @@ import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.network.registration.PayloadRegistrar;
 
 public final class BlueprintPayloads {
+    public static final int PLAN_BATCH = 64;
     public enum Action { SAVE, STATUS, SELECT_LINE, UNDO_POINT, CLEAR_LINE, OPTIONS, PREVIEW, BUILD, CANCEL }
-    public enum View { RESULT, STATE, PLAN, PROGRESS }
+    public enum View { RESULT, STATE, PLAN }
     private BlueprintPayloads() {}
     private static ResourceLocation id(String path) { return ResourceLocation.fromNamespaceAndPath(UnrealTrainMod.MODID, path); }
     private static CompoundTag read(RegistryFriendlyByteBuf b) {

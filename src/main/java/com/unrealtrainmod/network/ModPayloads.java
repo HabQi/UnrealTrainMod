@@ -43,7 +43,7 @@ public final class ModPayloads {
     private ModPayloads() {}
 
     public static void register(RegisterPayloadHandlersEvent event) {
-        var registrar = event.registrar("49");
+        var registrar = event.registrar("50");
         com.unrealtrainmod.wiring.WiringPayloads.register(registrar);
         com.unrealtrainmod.blueprint.BlueprintPayloads.register(registrar);
         registrar.playToServer(TrainControlInputPayload.TYPE, TrainControlInputPayload.STREAM_CODEC,

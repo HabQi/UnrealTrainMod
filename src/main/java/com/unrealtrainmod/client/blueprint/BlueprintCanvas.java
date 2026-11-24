@@ -33,7 +33,8 @@ import net.minecraft.world.phys.Vec3;
 
 /** Grid and pointer use the exact same orthographic mapping as the model preview. */
 final class BlueprintCanvas extends AbstractWidget implements AutoCloseable {
-    private record Pick(UUID local, boolean next, ConnectorData node) {}
+    private static final double PICK_RADIUS_SQUARED = 100;
+    private record Pick(UUID local, boolean next, int number, ConnectorData node) {}
     private final BlueprintEditorScreen editor;
     private final PreviewRenderer renderer = new PreviewRenderer();
     private final PreviewCamera camera = new PreviewCamera();
@@ -72,7 +73,9 @@ final class BlueprintCanvas extends AbstractWidget implements AutoCloseable {
                 if (!both && station.index() > 0) break;
                 ns.addAll(station.nodes()); ws.addAll(station.wires());
                 var section = definition.section(editor.variant + station.index());
-                for (int i = 0; i < section.nodes().size(); i++) picks.add(new Pick(section.nodes().get(i).id(), station.index() > 0, station.nodes().get(i)));
+                for (int i = 0; i < section.nodes().size(); i++) {
+                    picks.add(new Pick(section.nodes().get(i).id(), station.index() > 0, i + 1, station.nodes().get(i)));
+                }
             }
         } catch (IllegalArgumentException e) {
             // Incomplete editing drafts still show their existing nodes and resolvable connections.
@@ -80,10 +83,11 @@ final class BlueprintCanvas extends AbstractWidget implements AutoCloseable {
             var maps = new ArrayList<HashMap<UUID, ConnectorData>>();
             for (int station = 0; station < (both ? 2 : 1); station++) {
                 var section = definition.section(editor.variant + station); var map = new HashMap<UUID, ConnectorData>();
+                int number = 1;
                 for (var n : section.nodes()) {
                     var ref = definition.tracks().get(n.track()); var position = n.position().add(ref.x(), trackY(ref), station * 32);
                     var node = new ConnectorData(id(station + ":" + n.id()), n.model(), position, n.face(), Vec3.ZERO, n.angles(), 0);
-                    ns.add(node); map.put(n.id(), node); picks.add(new Pick(n.id(), station > 0, node));
+                    ns.add(node); map.put(n.id(), node); picks.add(new Pick(n.id(), station > 0, number++, node));
                 }
                 maps.add(map);
             }
@@ -153,7 +157,7 @@ final class BlueprintCanvas extends AbstractWidget implements AutoCloseable {
                 if (!pick.next && pick.local.equals(editor.firstEndpoint)) color = 0xFF88FF66;
                 int radius = pick.next ? 5 : 3;
                 g.renderOutline(x - radius, y - radius, radius * 2 + 1, radius * 2 + 1, color);
-                g.drawString(font, (pick.next ? "+1:" : "0:") + number(pick), x + 7, y + (pick.next ? 3 : -10), color);
+                g.drawString(font, (pick.next ? "+1:" : "0:") + pick.number, x + 7, y + (pick.next ? 3 : -10), color);
                 if (!pick.next && pick.local.equals(editor.selected)) {
                     var p = pick.node.origin(); g.renderOutline((int)screenX(p.x) - 5, (int)screenY(p.y) - 5, 11, 11, 0xFFFFFF66);
                 }
@@ -166,38 +170,46 @@ final class BlueprintCanvas extends AbstractWidget implements AutoCloseable {
         g.disableScissor();
         g.renderOutline(getX(), getY(), width, height, 0xFF527089);
     }
-    private int number(Pick pick) {
-        var list = pick.next ? editor.next().nodes() : editor.section().nodes();
-        for (int i = 0; i < list.size(); i++) if (list.get(i).id().equals(pick.local)) return i + 1;
-        return 0;
-    }
     @Override public void onClick(double x, double y) {
         dragging = false; if (editor.threeD || Screen.hasShiftDown()) return;
-        Pick best = null; double distance = 100;
+        if (editor.wireTool) {
+            pickEndpoint(x, y);
+            return;
+        }
+        Pick best = null; double distance = PICK_RADIUS_SQUARED;
         for (var pick : picks) {
-            if (!editor.wireTool && pick.next) continue;
-            // Coincident projected endpoints remain selectable without moving their displayed positions.
-            // A cross-span connection always starts here and then selects the next section.
-            if (editor.wireTool && editor.cross && pick.next != (editor.firstEndpoint != null)) continue;
-            var point = editor.wireTool ? pick.node.wirePoint() : pick.node.origin();
-            double dx = screenX(point.x) - x, dy = screenY(point.y) - y;
-            double d = dx * dx + dy * dy;
+            if (pick.next) continue;
+            double d = pickDistance(pick.node.origin(), x, y);
             if (d < distance) { best = pick; distance = d; }
         }
-        if (best == null && !editor.wireTool) {
+        if (best == null) {
             // Large models can be selected away from their authored origin.
+            double wx = worldX(x), wy = worldY(y);
             for (var pick : picks) if (!pick.next) {
-                var b = pick.node.bounds(); double wx = worldX(x), wy = worldY(y);
+                var b = pick.node.bounds();
                 if (wx >= b.minX && wx <= b.maxX && wy >= b.minY && wy <= b.maxY) { best = pick; break; }
             }
         }
         if (best != null) {
-            if (editor.wireTool) editor.endpoint(best.local, best.next);
-            else {
-                var point = best.node.origin(); dragX = worldX(x) - point.x; dragY = worldY(y) - point.y;
-                editor.select(best.local); dragging = true;
-            }
-        } else if (!editor.wireTool) editor.place(worldX(x), worldY(y));
+            var point = best.node.origin(); dragX = worldX(x) - point.x; dragY = worldY(y) - point.y;
+            editor.select(best.local); dragging = true;
+        } else editor.place(worldX(x), worldY(y));
+    }
+    private void pickEndpoint(double x, double y) {
+        boolean next = editor.cross && editor.firstEndpoint != null;
+        var candidates = new ArrayList<UUID>();
+        boolean hitSource = false;
+        for (var pick : picks) {
+            if (pick.next != next || pickDistance(pick.node.wirePoint(), x, y) >= PICK_RADIUS_SQUARED) continue;
+            if (!editor.cross && pick.local.equals(editor.firstEndpoint)) hitSource = true;
+            else candidates.add(pick.local);
+        }
+        if (candidates.size() == 1 && !hitSource) editor.endpoint(candidates.getFirst(), next);
+        else if (!candidates.isEmpty()) editor.chooseEndpoint(candidates, next);
+    }
+    private double pickDistance(Vec3 point, double x, double y) {
+        double dx = screenX(point.x) - x, dy = screenY(point.y) - y;
+        return dx * dx + dy * dy;
     }
     @Override protected void onDrag(double x, double y, double dx, double dy) {
         if (editor.threeD) { if (Screen.hasShiftDown()) camera.pan((float)(dx / width), (float)(-dy / height)); else camera.rotate(dx * .6, dy * .6); }

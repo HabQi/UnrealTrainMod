@@ -14,6 +14,7 @@ import com.unrealtrainmod.train.TrainDiagnostics;
 import com.unrealtrainmod.train.map.TrainMapService;
 import com.unrealtrainmod.entity.PlacedModelEntity;
 import com.unrealtrainmod.entity.TrainEntity;
+import com.unrealtrainmod.item.BlueprintPlacerItem;
 import com.unrealtrainmod.item.ModelPlacerItem;
 import com.unrealtrainmod.item.HacksawItem;
 import com.unrealtrainmod.item.CrowbarItem;
@@ -94,6 +95,8 @@ public class UnrealTrainMod {
             "wire", p -> new com.unrealtrainmod.item.WiringItem(true, p), new Item.Properties().stacksTo(1));
     public static final DeferredItem<com.unrealtrainmod.item.BlueprintItem> BLUEPRINT = ITEMS.registerItem(
             "blueprint", com.unrealtrainmod.item.BlueprintItem::new, new Item.Properties().stacksTo(1));
+    public static final DeferredItem<BlueprintPlacerItem> BLUEPRINT_PLACER = ITEMS.registerItem(
+            "blueprint_placer", BlueprintPlacerItem::new, new Item.Properties().stacksTo(1));
     public static final DeferredItem<TurnoutBuilderItem> TURNOUT_BUILDER = ITEMS.registerItem(
             "turnout_builder", TurnoutBuilderItem::new, new Item.Properties().stacksTo(1));
     public static final DeferredItem<HacksawItem> HACKSAW = ITEMS.registerItem(
@@ -119,6 +122,7 @@ public class UnrealTrainMod {
                 output.accept(INSULATOR.get());
                 output.accept(WIRE.get());
                 output.accept(BLUEPRINT.get());
+                output.accept(BLUEPRINT_PLACER.get());
                 output.accept(TURNOUT_BUILDER.get());
                 output.accept(HACKSAW.get());
                 output.accept(CROWBAR.get());

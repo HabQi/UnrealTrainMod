@@ -12,13 +12,17 @@ import com.unrealtrainmod.wiring.WiringCatalog;
 import com.unrealtrainmod.wiring.WiringDefinition;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import java.util.function.DoubleConsumer;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.ComponentPath;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.components.Tooltip;
+import net.minecraft.client.gui.navigation.FocusNavigationEvent;
+import net.minecraft.client.gui.navigation.ScreenDirection;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.core.Direction;
 import net.minecraft.nbt.CompoundTag;
@@ -26,6 +30,7 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.Vec3;
+import org.lwjgl.glfw.GLFW;
 
 /** A/B front-elevation recipe editor. The item is changed only by an acknowledged save. */
 final class BlueprintEditorScreen extends Screen implements BlueprintClient.ResponseScreen {
@@ -44,6 +49,9 @@ final class BlueprintEditorScreen extends Screen implements BlueprintClient.Resp
     private EditBox name, search;
     private TrainListWidget<WiringDefinition> resources;
     private BlueprintCanvas canvas;
+    private record EndpointChoices(Set<UUID> candidates, boolean next) {}
+    private EndpointChoices endpointChoices;
+    private BlueprintPartList endpointList;
     private Component feedback = Component.empty();
     private final java.util.Set<EditBox> invalidFields = new java.util.HashSet<>();
 
@@ -105,7 +113,9 @@ final class BlueprintEditorScreen extends Screen implements BlueprintClient.Resp
         button(right, 36, 66, "blueprint.parts", () -> selectTool(false)).active = property != 0;
         button(right + 70, 36, 66, "blueprint.tracks", () -> { property = 1; rebuild(); }).active = property != 1;
         button(right + 140, 36, 66, "blueprint.links", () -> selectTool(true)).active = property != 2;
-        if (property == 0) properties(); else if (property == 1) tracks(); else links();
+        endpointList = null;
+        if (endpointChoices != null) showEndpointChoices();
+        else if (property == 0) properties(); else if (property == 1) tracks(); else links();
         button(layoutWidth - 212, layoutHeight - 27, 96, "blueprint.save", this::save);
         button(layoutWidth - 110, layoutHeight - 27, 100, "blueprint.close", this::onClose);
     }
@@ -227,17 +237,47 @@ final class BlueprintEditorScreen extends Screen implements BlueprintClient.Resp
         propertyLabels.add(new PropertyLabel(Component.literal(firstEndpoint == null ? "—" : endpointLabel(firstEndpoint, false)), right, 183));
         button(right, 203, 206, "blueprint.target_endpoint", () -> { if (!target.isEmpty()) targetCursor = (targetCursor + 1) % target.size(); rebuild(); });
         propertyLabels.add(new PropertyLabel(Component.literal(target.isEmpty() ? "—" : endpointLabel(target.get(targetCursor % target.size()).id(), cross)), right, 228));
-        button(right, 249, 206, "blueprint.add_connection", () -> connect(target.get(targetCursor % target.size()).id(), cross))
+        button(right, 249, 206, "blueprint.add_connection", () -> endpoint(target.get(targetCursor % target.size()).id(), cross))
                 .active = resource != null && resource.wire() && firstEndpoint != null && !target.isEmpty()
                 && (cross || !target.get(targetCursor % target.size()).id().equals(firstEndpoint));
         propertyLabels.add(new PropertyLabel(Component.translatable(cross ? "blueprint.connection_hint" : "blueprint.section_connection_hint"), right, 281));
     }
+    void chooseEndpoint(List<UUID> candidates, boolean next) {
+        if (pending != null) return;
+        endpointChoices = new EndpointChoices(Set.copyOf(candidates), next);
+        rebuild();
+    }
+    private void showEndpointChoices() {
+        var choices = endpointChoices;
+        boolean choosingSource = firstEndpoint == null;
+        propertyLabels.add(new PropertyLabel(Component.translatable(choosingSource ? "blueprint.choose_source" : "blueprint.choose_target"), right, 66));
+        if (!choosingSource) propertyLabels.add(new PropertyLabel(Component.literal(endpointLabel(firstEndpoint, false)), right, 80));
+        endpointList = new BlueprintPartList(right, 96, 206, layoutHeight - 158, id -> endpoint(id, choices.next()));
+        var nodes = (choices.next() ? next() : section()).nodes();
+        for (int i = 0; i < nodes.size(); i++) {
+            var node = nodes.get(i);
+            if (choices.candidates().contains(node.id())) {
+                String label = endpointLabel(i + 1, choices.next()) + " · Z " + format(node.position().z) + " · ";
+                endpointList.addPart(node, label);
+            }
+        }
+        addRenderableWidget(endpointList);
+        button(right, layoutHeight - 58, 206, "blueprint.cancel_endpoint_choice", this::dismissEndpointChoices);
+        setInitialFocus(endpointList);
+    }
+    private void dismissEndpointChoices() {
+        endpointChoices = null;
+        rebuild();
+    }
     private String endpointLabel(UUID id, boolean next) {
         var nodes = next ? next().nodes() : section().nodes();
-        String section = (next && draft.alternating() ? variant == 0 : variant == 1) ? "B" : "A";
         for (int i = 0; i < nodes.size(); i++) if (nodes.get(i).id().equals(id))
-            return Component.translatable(next ? "blueprint.endpoint_next" : "blueprint.endpoint_current", section, i + 1).getString();
+            return endpointLabel(i + 1, next);
         return "?";
+    }
+    private String endpointLabel(int number, boolean next) {
+        String section = (next && draft.alternating() ? variant == 0 : variant == 1) ? "B" : "A";
+        return Component.translatable(next ? "blueprint.endpoint_next" : "blueprint.endpoint_current", section, number).getString();
     }
     void select(UUID id) { selected = id; property = 0; rebuild(); }
     void place(double x, double y) {
@@ -256,19 +296,22 @@ final class BlueprintEditorScreen extends Screen implements BlueprintClient.Resp
         section(new BlueprintDefinition.Section(section().nodes().stream().map(n -> n.id().equals(node.id()) ? node : n).toList(), section().edges(), section().outgoing()));
     }
     void endpoint(UUID id, boolean next) {
+        if (pending != null) return;
+        endpointChoices = null;
         if (firstEndpoint == null) {
-            if (next) return; firstEndpoint = id; rebuild();
+            if (!next) firstEndpoint = id;
         } else connect(id, next);
+        rebuild();
     }
     private void connect(UUID target, boolean next) {
-        if (pending != null || resource == null || !resource.wire() || firstEndpoint == null || next != cross || !cross && target.equals(firstEndpoint)) return;
+        if (resource == null || !resource.wire() || next != cross || !cross && target.equals(firstEndpoint)) return;
         var list = new ArrayList<>(cross ? section().outgoing() : section().edges());
         var edge = new BlueprintDefinition.Edge(firstEndpoint, target, resource.id());
         if (list.stream().anyMatch(e -> e.model().equals(edge.model()) && (e.first().equals(edge.first()) && e.second().equals(edge.second())
                 || !cross && e.first().equals(edge.second()) && e.second().equals(edge.first())))) { feedback = BlueprintClient.feedback("duplicate"); return; }
         if (section().edges().size() + section().outgoing().size() >= BlueprintDefinition.MAX_EDGES) return;
         list.add(edge); section(new BlueprintDefinition.Section(section().nodes(), cross ? section().edges() : list, cross ? list : section().outgoing()));
-        firstEndpoint = null; edgeCursor = list.size() - 1; feedback = Component.translatable("blueprint.connection_added"); rebuild();
+        firstEndpoint = null; edgeCursor = list.size() - 1; feedback = Component.translatable("blueprint.connection_added");
     }
     private void delete() {
         if (selected == null) return; UUID id = selected;
@@ -322,10 +365,36 @@ final class BlueprintEditorScreen extends Screen implements BlueprintClient.Resp
         }
         @Override public boolean containsPointInScissor(int x, int y) { return super.containsPointInScissor((int)(x * scale), (int)(y * scale)); }
     }
-    @Override public boolean mouseClicked(double x, double y, int b) { return super.mouseClicked(x / uiScale, y / uiScale, b); }
+    @Override public boolean mouseClicked(double x, double y, int b) {
+        double px = x / uiScale, py = y / uiScale;
+        boolean choosing = endpointChoices != null;
+        if (choosing && (px < right || px >= right + 206 || py < 62 || py >= layoutHeight - 32)) {
+            dismissEndpointChoices();
+            return true;
+        }
+        boolean handled = super.mouseClicked(px, py, b);
+        if (!choosing && endpointList != null) setInitialFocus(endpointList);
+        return handled;
+    }
+    @Override public boolean keyPressed(int key, int scanCode, int modifiers) {
+        if (endpointList == null) return super.keyPressed(key, scanCode, modifiers);
+        if (key == GLFW.GLFW_KEY_ESCAPE) {
+            dismissEndpointChoices();
+        } else if (key == GLFW.GLFW_KEY_UP || key == GLFW.GLFW_KEY_DOWN) {
+            var direction = key == GLFW.GLFW_KEY_UP ? ScreenDirection.UP : ScreenDirection.DOWN;
+            var path = endpointList.nextFocusPath(new FocusNavigationEvent.ArrowNavigation(direction));
+            if (path != null) changeFocus(ComponentPath.path(this, path));
+        } else {
+            endpointList.keyPressed(key, scanCode, modifiers);
+        }
+        return true;
+    }
     @Override public boolean mouseReleased(double x, double y, int b) { return super.mouseReleased(x / uiScale, y / uiScale, b); }
     @Override public boolean mouseDragged(double x, double y, int b, double dx, double dy) { return super.mouseDragged(x / uiScale, y / uiScale, b, dx / uiScale, dy / uiScale); }
-    @Override public boolean mouseScrolled(double x, double y, double sx, double sy) { return super.mouseScrolled(x / uiScale, y / uiScale, sx, sy); }
+    @Override public boolean mouseScrolled(double x, double y, double sx, double sy) {
+        if (endpointList != null) return endpointList.mouseScrolled(x / uiScale, y / uiScale, sx, sy);
+        return super.mouseScrolled(x / uiScale, y / uiScale, sx, sy);
+    }
     @Override public void mouseMoved(double x, double y) { super.mouseMoved(x / uiScale, y / uiScale); }
     @Override public void tick() {
         if (minecraft.player == null || minecraft.level == null || !minecraft.level.dimension().equals(dimension) || !minecraft.player.isAlive()

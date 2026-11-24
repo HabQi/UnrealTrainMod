@@ -12,7 +12,7 @@ public final class WiringRenderStats {
     private static final Map<String, Long> FALLBACKS = new HashMap<>();
     private static long last = System.nanoTime();
     private WiringRenderStats() {}
-    static void fallback(String reason) { FALLBACKS.merge(reason, 1L, Long::sum); }
+    public static void fallback(String reason) { FALLBACKS.merge(reason, 1L, Long::sum); }
     static void log() {
         long now = System.nanoTime(); if (now - last < 5_000_000_000L) return; last = now;
         if (ClientConfig.LOG_TRACK_RENDER_STATS.getAsBoolean()) LoggerFactory.getLogger("UnrealTrainMod/Wiring").info(
