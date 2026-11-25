@@ -14,6 +14,7 @@ import com.mojang.blaze3d.vertex.VertexFormat;
 import com.unrealtrainmod.client.compat.iris.IrisCompat;
 import com.unrealtrainmod.client.compat.iris.IrisDrawScope;
 import com.unrealtrainmod.client.compat.iris.IrisEmissivePass;
+import com.unrealtrainmod.client.texture.MaterialTexture;
 import com.unrealtrainmod.compat.ir.IrLightingDefinition;
 import java.util.ArrayList;
 import java.util.List;
@@ -51,6 +52,7 @@ public final class IrFlareRenderer extends RenderStateShard {
         var direction = view.transformDirection(new Vector3f(0, 0, flare.direction())).normalize();
         float facing = -new Vector3f(center).normalize().dot(direction);
         if (facing <= 0) return;
+        if (!MaterialTexture.ready(texture)) return;
         float scale = Math.max(view.transformDirection(new Vector3f(1, 0, 0)).length(),
                 view.transformDirection(new Vector3f(0, 1, 0)).length());
         // Move toward the viewer slightly, retaining depth occlusion by other surfaces.

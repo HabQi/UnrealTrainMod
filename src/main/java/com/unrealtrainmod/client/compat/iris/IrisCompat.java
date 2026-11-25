@@ -208,6 +208,7 @@ public final class IrisCompat {
         if (active && Minecraft.getInstance().level != null) IrisGeometryCache.endFrame();
         com.unrealtrainmod.client.wiring.WiringRenderCache.endFrame();
         com.unrealtrainmod.client.GpuResidency.endFrame();
+        com.unrealtrainmod.client.texture.TexturePixelCache.endFrame();
         com.unrealtrainmod.client.texture.PbrStats.logIfDue();
     }
 

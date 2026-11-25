@@ -12,6 +12,8 @@ import com.unrealtrainmod.client.RenderCategory;
 import com.unrealtrainmod.client.ClientConfig;
 import com.unrealtrainmod.client.renderer.RenderBatch;
 import com.unrealtrainmod.client.texture.PbrSource;
+import com.unrealtrainmod.client.texture.PreparedTexture;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
@@ -41,6 +43,7 @@ final class TextureAtlas {
 
     private record Tile(ResourceLocation texture, NativeImage image, UvBounds uniformUvs) {}
     private record Placement(Tile tile, int x, int y) {}
+    private record SourceTile(PreparedTexture.Source source, int x, int y) {}
 
     /** One affine UV transform per shared image preserves triangle UV directions across every source. */
     private static final class UvBounds {
@@ -126,6 +129,33 @@ final class TextureAtlas {
         return true;
     }
 
+    private static void copyTile(NativeImage atlas, NativeImage image, int x, int y) {
+        int w = image.getWidth(), h = image.getHeight();
+        // Repeat, rather than clamp, so UV=1 samples the authored first texel too.
+        for (int row = -1; row <= h; row++) {
+            int sourceY = (row + h) % h;
+            for (int column = -1; column <= w; column++) {
+                int sourceX = (column + w) % w;
+                atlas.setPixelRGBA(x + column + 1, y + row + 1, image.getPixelRGBA(sourceX, sourceY));
+            }
+        }
+    }
+
+    private static NativeImage rebuild(int width, int height, List<SourceTile> tiles) throws IOException {
+        var atlas = new NativeImage(width, height, true);
+        try {
+            for (var tile : tiles) {
+                try (var image = tile.source().read()) {
+                    copyTile(atlas, image, tile.x(), tile.y());
+                }
+            }
+            return atlas;
+        } catch (IOException | RuntimeException | Error exception) {
+            atlas.close();
+            throw exception;
+        }
+    }
+
     private static final class Page {
         private final List<Placement> placements = new ArrayList<>();
         private final int maximum;
@@ -155,25 +185,20 @@ final class TextureAtlas {
             var atlas = new NativeImage(width, height, true);
             boolean transferred = false;
             try {
-                for (var placement : placements) {
-                    var image = placement.tile().image();
-                    int w = image.getWidth(), h = image.getHeight();
-                    // Repeat, rather than clamp, so UV=1 samples the authored first texel too.
-                    for (int row = -1; row <= h; row++) {
-                        int sourceY = (row + h) % h;
-                        for (int column = -1; column <= w; column++) {
-                            int sourceX = (column + w) % w;
-                            atlas.setPixelRGBA(placement.x() + column + 1, placement.y() + row + 1,
-                                    image.getPixelRGBA(sourceX, sourceY));
-                        }
-                    }
-                }
+                var sourceTiles = new ArrayList<SourceTile>(placements.size());
                 var auxiliary = new ArrayList<PbrSource.Tile>();
                 for (var placement : placements) {
-                    var source = textures.pbr(placement.tile().texture());
+                    var tile = placement.tile();
+                    copyTile(atlas, tile.image(), placement.x(), placement.y());
+                    sourceTiles.add(new SourceTile(textures.source(tile.texture()), placement.x(), placement.y()));
+                    var source = textures.pbr(tile.texture());
                     if (source != null) auxiliary.add(new PbrSource.Tile(source, placement.x() + 1, placement.y() + 1));
                 }
-                var id = textures.addAtlas(atlas, auxiliary.isEmpty() ? null : new PbrSource.Atlas(width, height, auxiliary));
+                // Capture page dimensions and recipes only, so the original tile pixels can be freed.
+                int pageWidth = width, pageHeight = height;
+                var tiles = List.copyOf(sourceTiles);
+                var id = textures.addAtlas(atlas, auxiliary.isEmpty() ? null : new PbrSource.Atlas(width, height, auxiliary),
+                        () -> rebuild(pageWidth, pageHeight, tiles));
                 transferred = true;
                 for (var placement : placements) {
                     var tile = placement.tile();

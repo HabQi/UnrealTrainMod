@@ -8,50 +8,134 @@ import com.mojang.blaze3d.platform.NativeImage;
 import com.mojang.blaze3d.platform.TextureUtil;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.unrealtrainmod.client.GpuResidency;
+import com.unrealtrainmod.client.ModelPreparation;
 import com.unrealtrainmod.client.ModelUploads;
-import net.minecraft.client.Minecraft;
-import net.minecraft.resources.ResourceLocation;
 import com.unrealtrainmod.client.compat.iris.IrisPbrBridge;
+import com.unrealtrainmod.client.model.TextureLoader;
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.Set;
+import java.util.function.Supplier;
+import java.util.function.UnaryOperator;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.texture.AbstractTexture;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.packs.resources.ResourceManager;
 import org.lwjgl.opengl.GL11;
+import org.slf4j.LoggerFactory;
 
-/** CPU pixels survive GPU eviction; base and alpha-derived textures share auxiliary channels. */
+/** Owns a GPU texture independently of its decoded pixels. Alpha variants share auxiliary channels. */
 public final class MaterialTexture extends AbstractTexture {
     private static final Set<MaterialTexture> OWNED = Collections.newSetFromMap(new IdentityHashMap<>());
     private final PbrMaterial material;
-    private final NativeImage pixels;
+    private final PreparedTexture.Source source;
+    private NativeImage pixels;
+    private ModelPreparation.Ticket<NativeImage> decode;
+    private long pixelsUsedFrame = Long.MIN_VALUE;
     private boolean uploaded;
     private boolean pending, uploadFailed;
     private int uploadRow, generation;
     private int readers;
-    private boolean pixelsClosed;
 
     public MaterialTexture(PreparedTexture prepared) {
-        this(prepared.image(), prepared.pbr() == null ? null : new PbrMaterial(prepared.pbr()));
+        this(prepared.image(), prepared.pbr() == null ? null : new PbrMaterial(prepared.pbr()), prepared.source());
     }
 
-    public MaterialTexture(NativeImage pixels) { this(pixels, null); }
+    public MaterialTexture(NativeImage pixels) { this(pixels, null, null); }
 
-    private MaterialTexture(NativeImage pixels, PbrMaterial material) {
-        this.pixels = pixels;
+    private MaterialTexture(NativeImage pixels, PbrMaterial material, PreparedTexture.Source source) {
         this.material = material;
+        this.source = source;
         OWNED.add(this);
         if (material != null) material.retain();
+        installPixels(pixels);
     }
 
-    public NativeImage getPixels() { return pixels; }
     public final class Pixels implements AutoCloseable {
         public NativeImage image() { return pixels; }
         @Override public void close() {
             readers--;
-            if (readers == 0 && pixelsClosed) pixels.close();
+            if (readers == 0 && !OWNED.contains(MaterialTexture.this)) releasePixels();
         }
     }
-    public Pixels retainPixels() { readers++; return new Pixels(); }
+    public Pixels retainPixels() {
+        if (!requestPixels()) return null;
+        readers++;
+        return new Pixels();
+    }
+
+    long pixelBytes() { return PreparedTexture.bytes(pixels); }
+    boolean pixelsIdle() { return readers == 0 && !pending && pixelsUsedFrame < ModelUploads.frame() - 1; }
+
+    void discardPixels() {
+        pixels.close();
+        pixels = null;
+    }
+
+    private void releasePixels() {
+        if (pixels == null) return;
+        TexturePixelCache.released(this);
+        discardPixels();
+    }
+
+    private void installPixels(NativeImage image) {
+        pixels = image;
+        if (source != null) TexturePixelCache.loaded(this, pixelBytes());
+    }
+
+    private void usePixels() {
+        if (source == null) return;
+        if (pixelsUsedFrame != ModelUploads.frame()) {
+            pixelsUsedFrame = ModelUploads.frame();
+            TexturePixelCache.used(this);
+        }
+    }
+
+    private boolean requestPixels() {
+        if (pixels != null) {
+            usePixels();
+            return true;
+        }
+        if (decode == null) {
+            decode = ModelPreparation.geometry(() -> readPixels(source), PreparedTexture::bytes, NativeImage::close);
+            if (decode != null) decode.whenReady(this::publishPixels);
+        }
+        return false;
+    }
+
+    private static NativeImage readPixels(PreparedTexture.Source source) {
+        try { return source.read(); }
+        catch (IOException exception) { throw new UncheckedIOException(exception); }
+    }
+
+    private void restorePixels(Supplier<NativeImage> read) {
+        NativeImage image;
+        try {
+            image = read.get();
+            TexturePixelCache.restored(PreparedTexture.bytes(image));
+        } catch (RuntimeException exception) {
+            TexturePixelCache.failed();
+            LoggerFactory.getLogger(MaterialTexture.class).warn("Cannot restore decoded vehicle texture; using missing texture", exception);
+            image = readPixels(TextureLoader::readMissing);
+        }
+        installPixels(image);
+        usePixels();
+    }
+
+    private void publishPixels() {
+        var ticket = decode;
+        decode = null;
+        try { restorePixels(ticket::take); }
+        finally { ticket.close(); }
+    }
+
+    private void cancelDecode() {
+        if (decode == null) return;
+        decode.close();
+        decode = null;
+    }
 
     @Override public void load(ResourceManager resources) {}
 
@@ -66,6 +150,7 @@ public final class MaterialTexture extends AbstractTexture {
         if (material != null) material.used();
         if (uploaded || uploadFailed) return true;
         if (!pending) {
+            if (!requestPixels()) return false;
             pending = true;
             int version = generation;
             ModelUploads.enqueue(() -> {
@@ -104,8 +189,13 @@ public final class MaterialTexture extends AbstractTexture {
     }
 
     @Override public int getId() {
+        if (!uploaded && !pending && pixels == null) {
+            cancelDecode();
+            restorePixels(() -> readPixels(source));
+        }
         int texture = super.getId();
         if (!uploaded && !pending) {
+            usePixels();
             int previous = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
             try {
                 TextureUtil.prepareImage(texture, pixels.getWidth(), pixels.getHeight());
@@ -139,7 +229,13 @@ public final class MaterialTexture extends AbstractTexture {
         super.releaseId();
     }
 
-    public MaterialTexture derived(NativeImage pixels) { return new MaterialTexture(pixels, material); }
+    public MaterialTexture derived(NativeImage pixels, UnaryOperator<NativeImage> transform) {
+        var base = source;
+        PreparedTexture.Source recipe = base == null ? null : () -> {
+            try (var image = base.read()) { return transform.apply(image); }
+        };
+        return new MaterialTexture(pixels, material, recipe);
+    }
 
     public AbstractTexture auxiliary(PbrSource.Channel channel, int defaultPixel) {
         return material == null ? null : material.acquire(channel, defaultPixel, blur);
@@ -156,7 +252,10 @@ public final class MaterialTexture extends AbstractTexture {
         materials.forEach(PbrMaterial::clear);
     }
     public static void cancelPending() {
-        for (var texture : OWNED) if (texture.pending) texture.releaseId();
+        for (var texture : OWNED) {
+            texture.cancelDecode();
+            if (texture.pending) texture.releaseId();
+        }
     }
 
     static void invalidatePbr(PbrMaterial material) {
@@ -165,10 +264,11 @@ public final class MaterialTexture extends AbstractTexture {
 
     @Override public void close() {
         if (!OWNED.remove(this)) return;
+        cancelDecode();
         try { releaseId(); }
         finally {
             try { if (material != null) material.release(); }
-            finally { pixelsClosed = true; if (readers == 0) pixels.close(); }
+            finally { if (readers == 0) releasePixels(); }
         }
     }
 }

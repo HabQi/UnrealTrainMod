@@ -21,11 +21,25 @@ import net.minecraft.resources.ResourceLocation;
 public final class TextureLoader {
     public static final ResourceLocation WHITE = ResourceLocation.fromNamespaceAndPath(
             UnrealTrainMod.MODID, "textures/model/white.png");
+    static final ResourceLocation MISSING = ResourceLocation.fromNamespaceAndPath(
+            UnrealTrainMod.MODID, "textures/model/missing.png");
 
     private TextureLoader() {}
 
     public static NativeImage readBase(PackageAsset asset) throws IOException {
-        return TextureSizing.limit(read(asset), ClientConfig.MAX_PACKAGE_TEXTURE_SIZE.get());
+        return readBase(asset, ClientConfig.MAX_PACKAGE_TEXTURE_SIZE.get());
+    }
+
+    static NativeImage readBase(PackageAsset asset, int maximum) throws IOException {
+        return TextureSizing.limit(read(asset), maximum);
+    }
+
+    public static NativeImage readMissing() throws IOException {
+        String path = "/assets/" + MISSING.getNamespace() + "/" + MISSING.getPath();
+        try (var input = TextureLoader.class.getResourceAsStream(path)) {
+            if (input == null) throw new IOException("Missing built-in texture: " + MISSING);
+            return NativeImage.read(input);
+        }
     }
 
     public static NativeImage read(PackageAsset asset) throws IOException {

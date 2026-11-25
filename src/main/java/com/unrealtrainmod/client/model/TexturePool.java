@@ -9,6 +9,7 @@ import org.slf4j.LoggerFactory;
 
 import com.mojang.blaze3d.platform.NativeImage;
 import com.unrealtrainmod.UnrealTrainMod;
+import com.unrealtrainmod.client.ClientConfig;
 import com.unrealtrainmod.resource.PackageAsset;
 import com.unrealtrainmod.resource.ResourceIds;
 import com.unrealtrainmod.client.texture.PbrDiscovery;
@@ -20,6 +21,7 @@ import java.util.BitSet;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -28,18 +30,18 @@ import net.minecraft.resources.ResourceLocation;
 /** Reload-local pixel sharing. Only canonical images are owned and transferred for upload. */
 final class TexturePool implements AutoCloseable {
     private static final Logger LOGGER = LoggerFactory.getLogger(TexturePool.class);
-    private static final ResourceLocation MISSING_BASE = ResourceLocation.fromNamespaceAndPath(
-            UnrealTrainMod.MODID, "textures/model/missing.png");
     record Entry(ResourceLocation id, NativeImage image, TextureAlpha alpha, PbrSource pbr) {}
     private record PixelKey(int width, int height, long hash) {}
     private record LightPair(ResourceLocation head, ResourceLocation tail) {}
+    private record MergedLightPixels(NativeImage image, int constantMask) {}
 
     private final Map<PackageAsset, Entry> assets = new HashMap<>();
     private final Map<PixelKey, List<Entry>> pixels = new HashMap<>();
     private final Map<LightPair, Entry> lightPairs = new HashMap<>();
-    private final Map<ResourceLocation, PreparedTexture> images = new HashMap<>();
+    private final Map<ResourceLocation, PreparedTexture> images = new LinkedHashMap<>();
     private final Set<ResourceLocation> uniformTextures = new HashSet<>();
     private final PbrDiscovery pbr = new PbrDiscovery();
+    private final int maximumTextureSize = ClientConfig.MAX_PACKAGE_TEXTURE_SIZE.get();
     private int atlasPages;
     private final Set<ResourceLocation> flareTextures = new HashSet<>();
     private ResourceLocation defaultFlare;
@@ -47,20 +49,17 @@ final class TexturePool implements AutoCloseable {
     boolean isFullyOpaque(PackageAsset asset) throws IOException { return load(asset).alpha().isFullyOpaque(); }
 
     ResourceLocation missingBase() throws IOException {
-        if (!images.containsKey(MISSING_BASE)) {
-            String path = "/assets/" + MISSING_BASE.getNamespace() + "/" + MISSING_BASE.getPath();
-            try (var input = TexturePool.class.getResourceAsStream(path)) {
-                if (input == null) throw new IOException("Missing built-in texture: " + MISSING_BASE);
-                images.put(MISSING_BASE, new PreparedTexture(NativeImage.read(input), null));
-            }
+        if (!images.containsKey(TextureLoader.MISSING)) {
+            images.put(TextureLoader.MISSING, new PreparedTexture(TextureLoader.readMissing(), null, TextureLoader::readMissing));
         }
-        return MISSING_BASE;
+        return TextureLoader.MISSING;
     }
 
     Entry load(PackageAsset asset) throws IOException {
         var cached = assets.get(asset);
         if (cached != null) return cached;
-        var image = TextureLoader.readBase(asset);
+        int maximum = maximumTextureSize;
+        var image = TextureLoader.readBase(asset, maximum);
         boolean retained = false;
         try {
             var auxiliary = pbr.find(asset, image.getWidth(), image.getHeight());
@@ -86,7 +85,8 @@ final class TexturePool implements AutoCloseable {
                 }
             }
             var entry = new Entry(TextureLoader.textureId(asset), image, new TextureAlpha(image, constantMask), auxiliary);
-            images.put(entry.id(), new PreparedTexture(image, auxiliary));
+            images.put(entry.id(), new PreparedTexture(image, auxiliary,
+                    packageSource(asset, maximum, key.width(), key.height())));
             retained = true;
             if (uniform && auxiliary == null) uniformTextures.add(entry.id());
             candidates.add(entry);
@@ -97,25 +97,38 @@ final class TexturePool implements AutoCloseable {
         }
     }
 
+    private static PreparedTexture.Source packageSource(PackageAsset asset, int maximum, int width, int height) {
+        return () -> {
+            var image = TextureLoader.readBase(asset, maximum);
+            if (image.getWidth() == width && image.getHeight() == height) return image;
+            image.close();
+            throw new IOException("Texture dimensions changed during this resource generation: " + asset);
+        };
+    }
+
     ResourceLocation flare(PackageAsset asset) throws IOException {
         ResourceLocation id;
         if (asset != null) id = load(asset).id();
         else {
             if (defaultFlare == null) {
-                var image = new NativeImage(64, 64, false);
-                for (int y = 0; y < 64; y++) for (int x = 0; x < 64; x++) {
-                    double dx = (x + 0.5 - 32) / 32, dy = (y + 0.5 - 32) / 32;
-                    double radius = Math.sqrt(dx * dx + dy * dy);
-                    int alpha = (int)Math.round(255 * Math.pow(Math.max(0, 1 - radius), 3));
-                    image.setPixelRGBA(x, y, alpha << 24 | 0xffffff);
-                }
                 defaultFlare = ResourceLocation.fromNamespaceAndPath(UnrealTrainMod.MODID, "textures/ir/default_flare");
-                images.put(defaultFlare, new PreparedTexture(image, null));
+                images.put(defaultFlare, new PreparedTexture(defaultFlareImage(), null, TexturePool::defaultFlareImage));
             }
             id = defaultFlare;
         }
         flareTextures.add(id);
         return id;
+    }
+
+    private static NativeImage defaultFlareImage() {
+        var image = new NativeImage(64, 64, false);
+        for (int y = 0; y < 64; y++) for (int x = 0; x < 64; x++) {
+            double dx = (x + 0.5 - 32) / 32, dy = (y + 0.5 - 32) / 32;
+            double radius = Math.sqrt(dx * dx + dy * dy);
+            int alpha = (int)Math.round(255 * Math.pow(Math.max(0, 1 - radius), 3));
+            image.setPixelRGBA(x, y, alpha << 24 | 0xffffff);
+        }
+        return image;
     }
 
     /** Build the dual-light surface once; the selected RGBA pixel is never blended with the other source. */
@@ -128,12 +141,38 @@ final class TexturePool implements AutoCloseable {
         var front = head.image(); var back = tail.image();
         int width = Math.max(front.getWidth(), back.getWidth());
         int height = Math.max(front.getHeight(), back.getHeight());
-        var image = new NativeImage(width, height, false);
+        // Only the PBR description needs the one-bit source selection after base-image preparation.
+        var tailPixels = head.pbr() == null && tail.pbr() == null ? null
+                : new BitSet(Math.multiplyExact(width, height));
+        var merged = mergeLightPixels(front, back, tailPixels);
+        var image = merged.image();
         boolean retained = false;
         try {
-            // Only the PBR description needs the one-bit source selection after base-image preparation.
-            var tailPixels = head.pbr() == null && tail.pbr() == null ? null
-                    : new BitSet(Math.multiplyExact(width, height));
+            var auxiliary = tailPixels == null ? null
+                    : new PbrSource.LightMerge(width, height, head.pbr(), tail.pbr(), tailPixels);
+            var id = ResourceLocation.fromNamespaceAndPath(UnrealTrainMod.MODID, "textures/vehicle_lights/"
+                    + ResourceIds.hash("alpha_max_head_tie_v1\0" + head.id() + "\0" + tail.id()));
+            var entry = new Entry(id, image, new TextureAlpha(image, merged.constantMask()), auxiliary);
+            var frontSource = source(head.id());
+            var backSource = source(tail.id());
+            images.put(id, new PreparedTexture(image, auxiliary, () -> {
+                try (var frontImage = frontSource.read(); var backImage = backSource.read()) {
+                    return mergeLightPixels(frontImage, backImage, null).image();
+                }
+            }));
+            retained = true;
+            lightPairs.put(key, entry);
+            return entry;
+        } finally {
+            if (!retained) image.close();
+        }
+    }
+
+    private static MergedLightPixels mergeLightPixels(NativeImage front, NativeImage back, BitSet tailPixels) {
+        int width = Math.max(front.getWidth(), back.getWidth());
+        int height = Math.max(front.getHeight(), back.getHeight());
+        var image = new NativeImage(width, height, false);
+        try {
             int[] frontColumns = new int[width], backColumns = new int[width];
             for (int x = 0; x < width; x++) {
                 frontColumns[x] = (int)((x + 0.5) * front.getWidth() / width);
@@ -156,17 +195,10 @@ final class TexturePool implements AutoCloseable {
                     if (constantMask >= 0 && TextureAlpha.pixelMask(pixel >>> 24) != constantMask) constantMask = -1;
                 }
             }
-            var auxiliary = tailPixels == null ? null
-                    : new PbrSource.LightMerge(width, height, head.pbr(), tail.pbr(), tailPixels);
-            var id = ResourceLocation.fromNamespaceAndPath(UnrealTrainMod.MODID, "textures/vehicle_lights/"
-                    + ResourceIds.hash("alpha_max_head_tie_v1\0" + head.id() + "\0" + tail.id()));
-            var entry = new Entry(id, image, new TextureAlpha(image, constantMask), auxiliary);
-            images.put(id, new PreparedTexture(image, auxiliary));
-            retained = true;
-            lightPairs.put(key, entry);
-            return entry;
-        } finally {
-            if (!retained) image.close();
+            return new MergedLightPixels(image, constantMask);
+        } catch (RuntimeException | Error exception) {
+            image.close();
+            throw exception;
         }
     }
 
@@ -182,17 +214,19 @@ final class TexturePool implements AutoCloseable {
 
     NativeImage image(ResourceLocation id) { return images.get(id).image(); }
     PbrSource pbr(ResourceLocation id) { return images.get(id).pbr(); }
+    PreparedTexture.Source source(ResourceLocation id) { return images.get(id).source(); }
     boolean canNormalizeUvs(ResourceLocation id) { return uniformTextures.contains(id); }
 
     /** Takes ownership of a completed atlas page. */
-    ResourceLocation addAtlas(NativeImage image, PbrSource auxiliary) {
+    ResourceLocation addAtlas(NativeImage image, PbrSource auxiliary, PreparedTexture.Source source) {
         var id = ResourceLocation.fromNamespaceAndPath(UnrealTrainMod.MODID, "textures/vehicle_atlas/" + atlasPages++);
-        images.put(id, new PreparedTexture(image, auxiliary));
+        images.put(id, new PreparedTexture(image, auxiliary, source));
         return id;
     }
 
     Map<ResourceLocation, PreparedTexture> takeImages(Collection<PreparedModel> models) {
         int unique = pixels.values().stream().mapToInt(List::size).sum();
+        long preparationPeakBytes = decodedPixels() * Integer.BYTES;
         var used = new HashSet<ResourceLocation>(flareTextures);
         for (var model : models) for (var batch : model.batches()) used.add(batch.texture());
         var iterator = images.entrySet().iterator();
@@ -204,14 +238,19 @@ final class TexturePool implements AutoCloseable {
                 iterator.remove();
             }
         }
-        long pixelCount = images.values().stream().mapToLong(texture -> (long)texture.image().getWidth() * texture.image().getHeight()).sum();
+        long pixelCount = decodedPixels();
         pbr.log("vehicles");
         LOGGER.info("Prepared vehicle textures: {} assets -> {} unique source images; {} merged light textures; {} atlas pages; "
-                        + "{} retained for on-demand upload, {} pixels ({} RGBA bytes)",
-                assets.size(), unique, lightPairs.size(), atlasPages, images.size(), pixelCount, pixelCount * Integer.BYTES);
-        var transferred = new HashMap<>(images);
+                        + "{} ready for registration, {} pixels ({} RGBA bytes), preparationPoolPeak={}B",
+                assets.size(), unique, lightPairs.size(), atlasPages, images.size(), pixelCount, pixelCount * Integer.BYTES,
+                preparationPeakBytes);
+        var transferred = new LinkedHashMap<>(images);
         images.clear();
         return transferred;
+    }
+
+    private long decodedPixels() {
+        return images.values().stream().mapToLong(texture -> (long)texture.image().getWidth() * texture.image().getHeight()).sum();
     }
 
     @Override

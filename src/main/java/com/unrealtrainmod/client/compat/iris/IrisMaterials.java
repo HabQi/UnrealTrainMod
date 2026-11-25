@@ -31,6 +31,7 @@ public final class IrisMaterials {
             if (ticket == null) {
                 var base = (MaterialTexture)Minecraft.getInstance().getTextureManager().getTexture(original);
                 var lease = base.retainPixels();
+                if (lease == null) return false;
                 ticket = com.unrealtrainmod.client.ModelPreparation.geometry(() -> masked(lease.image(), mask),
                         image -> (long)image.getWidth() * image.getHeight() * 4, NativeImage::close);
                 if (ticket == null) { lease.close(); return false; }
@@ -49,7 +50,7 @@ public final class IrisMaterials {
             var base = (MaterialTexture)manager.getTexture(original);
             var id = ClientModelManager.id("textures/iris/" + mask.name().toLowerCase(java.util.Locale.ROOT)
                     + "/" + original.getNamespace() + "/" + original.getPath());
-            var texture = base.derived(pixels);
+            var texture = base.derived(pixels, image -> masked(image, mask));
             try { manager.register(id, texture); }
             catch (RuntimeException | Error exception) { texture.close(); throw exception; }
             TEXTURES.put(key, id);

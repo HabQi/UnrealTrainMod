@@ -52,6 +52,7 @@ public final class ModConfigScreen extends OptionsSubScreen {
                 ClientConfig.TURNOUT_ANIMATION_DURATION_SECONDS),
         PERFORMANCE("performance",
                 ClientConfig.MAX_PACKAGE_TEXTURE_SIZE,
+                ClientConfig.VEHICLE_TEXTURE_PIXELS_MIB,
                 ClientConfig.PBR_QUALITY,
                 ClientConfig.ELIMINATE_CONTACT_FACES,
                 ClientConfig.TRANSLUCENT_RENDER_MODE),

@@ -48,9 +48,16 @@ public final class ClientConfig {
             .translation("unrealtrainmod.configuration.eliminateContactFaces")
             .define("eliminateContactFaces", true);
 
+    public static final ModConfigSpec.IntValue VEHICLE_TEXTURE_PIXELS_MIB = BUILDER
+            .comment("Soft CPU memory budget in MiB for decoded vehicle textures and Iris alpha variants. Default 256.",
+                    "Idle pixels can be discarded and restored from the source. Active decodes and uploads may exceed the budget.",
+                    "Applies without a resource reload.")
+            .translation("unrealtrainmod.configuration.vehicleTexturePixelsMiB")
+            .defineInRange("vehicleTexturePixelsMiB", 256, 16, 4096);
+
     public static final ModConfigSpec.IntValue BASE_TEXTURE_CACHE_MIB = BUILDER
             .comment("Soft GPU budget in MiB for package base textures and Iris alpha-derived textures. Allocated on first use.",
-                    "CPU pixels remain available for alpha masks and re-upload. Does not include vanilla textures, GUI icons or PBR.")
+                    "Decoded vehicle pixels have a separate CPU budget. Does not include vanilla textures, GUI icons or PBR.")
             .translation("unrealtrainmod.configuration.baseTextureCacheMiB")
             .defineInRange("baseTextureCacheMiB", 512, 64, 4096);
 
